@@ -1,0 +1,51 @@
+# Authentication security
+
+## Token and refresh lifecycle
+
+Access tokens are self-contained JWTs and are not revoked individually. Once
+issued, an access token remains usable until its ten-minute TTL expires, even
+when its refresh-token family is logged out or rotated. Administrative
+permission changes increment `users.perm_ver`; middleware rejects access tokens
+whose `perm_ver` no longer matches the current user row.
+
+Refresh tokens are opaque, stored only as SHA-256 digests, and rotate
+atomically. Presenting a rotated token triggers refresh-token reuse detection
+and revokes the complete family. Every family has a 90-day absolute cap
+(`family_not_after`); rotation is rejected after that cap, so a user must log
+in again. Ordinary refresh rows also expire after their 30-day TTL and are
+removed by the hourly reaper.
+
+Introspection deliberately has two branches. Access-token introspection
+validates the JWT and the current active user but does not consult a refresh
+session, so it follows the access-token contract above rather than refresh
+revocation state. Refresh-token introspection checks the stored session and its
+revocation/expiry state. This divergence preserves stateless access-token
+validation while retaining operational refresh-token status.
+
+## Trusted client address
+
+The service uses `X-Forwarded-For` only when the direct TCP peer is loopback.
+For any non-loopback peer, the direct `RemoteAddr` is authoritative and the
+forwarded header is ignored. A deployment that needs forwarded client
+addresses must terminate its trusted proxy on the local host; accepting
+forwarded headers from arbitrary peers would make IP rate limits and audit
+metadata attacker-controlled.
+
+## Signing keys
+
+All replicas must share the configured key directory. The directory contains
+the private Ed25519 keys, public JWKs, and an `ACTIVE` marker naming the key
+used for new tokens. If no key exists, the service auto-generates one and logs
+a warning; this is intentionally retained for supervision-friendly startup,
+but independent key directories cause replicas to reject one another's JWTs.
+Keep the directory on shared, protected storage and preserve its permissions.
+
+## Rate limits and password work
+
+Password login is limited by a five-per-minute bucket per IP and normalized
+username, plus a coarse 30-per-minute bucket per IP. Client-credentials
+requests share the coarse IP bucket. Refresh, logout, and introspection also
+use the coarse per-IP bucket. Limiter state is bounded at 10,000 keys, stale
+entries are swept lazily, and Argon2 verification has four concurrent slots;
+when all slots remain busy for two seconds the endpoint returns `429` with
+`application/problem+json`.
