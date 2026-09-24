@@ -1,1 +1,42 @@
+# Agent/tooling state
 .omp/deepwork/
+.orca/
+.codegraph/
+
+# Runtime data (signing keys, local state)
+data/
+
+# Built binaries and artifacts
+/teamusers
+*.exe
+*.test
+*.prof
+dist/
+tmp/
+
+# Test/coverage artifacts
+*.out
+coverage.html
+
+# Environment files (never commit secrets)
+.env
+*.env
+
+# Logs
+*.log
+logs/
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor directories and swap files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Vendored dependencies (not used, but keep out if generated)
+vendor/
