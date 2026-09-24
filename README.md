@@ -1,4 +1,4 @@
-# teamusers
+# Teamusers
 
 `teamusers` is a standalone Go identity and access microservice for the
 Nekostick service fleet. It owns users, teams, groups, roles, permissions,
@@ -47,9 +47,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 Register a `targetType=Microservice` service entity with `FileName`,
 `ArgumentList: ["run"]`, `WorkingDirectory`, and `Environment`. Nekostick
 injects `HOST=127.0.0.1` and the leased `PORT`, starts the child eagerly, and
-supervises `GET /healthz`. Use `ForwardingMode=Preserve` with the root-relative
-routes documented in [the Nekostick guide](docs/nekostick.md); do not strip an
-`/iam/` prefix.
+supervises `GET /healthz`. The API is root-relative inside the child, so
+publish it under a custom prefix such as `/iam/` and keep the default `Strip`
+forwarding mode: Nekostick removes the prefix before the request reaches the
+child. The exact registration is in [the Nekostick guide](docs/nekostick.md).
 
 Keep real DSNs, webhook secrets, and signing keys in Nekostick's protected
 configuration. Its service environment is stored as plaintext in PostgreSQL,

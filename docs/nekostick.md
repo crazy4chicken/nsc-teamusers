@@ -81,11 +81,15 @@ reverse-proxy boundary.
 
 ## Routing and forwarding
 
-The API is root-relative and has no base-path or `X-Forwarded-Prefix` support.
-Use `targetType=Microservice` and `ForwardingMode=Preserve`, and register these
-root paths rather than mounting a stripped `/iam/` prefix:
+The API is root-relative inside the child: it has no base-path or
+`X-Forwarded-Prefix` support, and it does not need any. Nekostick's custom
+route prefixes do the mapping. Use `targetType=Microservice`, publish the API
+under a dedicated prefix such as `/iam/`, and keep the default
+`ForwardingMode=Strip`: Nekostick removes the prefix before forwarding, so
+`/iam/auth/login` reaches the child as `/auth/login`.
 
-- `GET /healthz` and `GET /readyz` for supervision and readiness.
+Routes to expose under that prefix:
+
 - `GET /.well-known/jwks.json` for public signing keys.
 - `/auth/*`: login, service credentials, refresh, logout, and introspection.
 - `/authz/*`: service-only remote authorization and effective permissions.
@@ -96,10 +100,12 @@ The complete method/path table and JSON contracts are in [api.md](api.md).
 `/healthz` and JWKS may be exposed only under the route policy intended for the
 host; admin routes must not be public.
 
-The default forwarding mode is `Strip`, which would remove a prefix and break
-these root-relative paths. Do not register this service as `/iam/` with Strip.
-If a public URL must have a prefix, use a Nekostick route configuration that
-preserves the upstream root path without asking this process to rewrite it.
+Health checks bypass the public route table: the supervisor probes the
+child's leased listener directly at `GET /healthz`, which stays root-relative
+regardless of the public prefix.
+
+`ForwardingMode=Preserve` is only appropriate when exposing the service at
+the site root with no prefix at all.
 
 ## Health checks and logs
 

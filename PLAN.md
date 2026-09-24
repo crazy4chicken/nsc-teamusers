@@ -286,9 +286,10 @@ owns the process lifecycle.
 - **Health**: Http check `GET /healthz` for startup + steady state.
 - **Config**: env vars + `--` flags, CLI overrides env (Nekostick convention).
 - Startup: advisory-lock migration → key load/generate → `/readyz` flips green
-  only after DB writable; routes: register `/.well-known/jwks.json`, `/auth/*`,
-  `/authz/*` and admin prefixes with `forwardingMode=Preserve` (this API is
-  root-relative; there is no base-path support).
+  only after DB writable; routes: publish `/.well-known/jwks.json`, `/auth/*`,
+  `/authz/*` and the admin plane under a public prefix such as `/iam/` with the
+  default `forwardingMode=Strip` (this API is root-relative; Nekostick strips
+  the prefix before forwarding).
 
 ## 13. Project Layout
 

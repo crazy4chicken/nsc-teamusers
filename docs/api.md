@@ -2,9 +2,9 @@
 
 The service listens on the address selected by `TEAMUSERS_LISTEN_ADDRESS` and
 `TEAMUSERS_LISTEN_PORT`. It serves JSON over plain HTTP; TLS termination belongs
-to the Nekostick/reverse-proxy boundary. If a proxy publishes the service under
-a prefix such as `/iam`, it must remove that prefix before forwarding (the
-service routes the paths below at the root).
+to the Nekostick/reverse-proxy boundary. The paths below are root-relative;
+publish the service under a custom prefix such as `/iam/` with Nekostick's
+default `Strip` forwarding mode, which removes the prefix before forwarding.
 
 ## Authentication classes
 
