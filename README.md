@@ -67,4 +67,7 @@ The binary supports `run`, `status`, and `doctor`. Configuration knobs and
 CLI flag names are documented in the operations runbook and implemented in
 `internal/config`.
 
-<!-- TODO: choose and add a project license before release; ask before creating LICENSE. -->
+## License
+
+Licensed under the GNU Affero General Public License, Version 3.0. See
+[LICENSE](LICENSE) or <https://www.gnu.org/licenses/agpl-3.0.html>.
