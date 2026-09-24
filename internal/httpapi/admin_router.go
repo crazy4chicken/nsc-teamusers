@@ -11,8 +11,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	auditlog "nsc-teamusers/internal/audit"
-	"nsc-teamusers/internal/store"
+	auditlog "teamusers/internal/audit"
+	"teamusers/internal/store"
 )
 
 type adminHandler struct {

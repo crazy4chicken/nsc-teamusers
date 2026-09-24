@@ -42,7 +42,7 @@ func VerifyPassword(encoded, password string) bool {
 }
 
 func newDummyPasswordHash() string {
-	salt := []byte("nsc-tu-dummy-001")
+	salt := []byte("teamusers-dummy-001")
 	return encodePasswordHash(salt, argon2.IDKey([]byte("invalid-password"), salt, argonIterations, argonMemory, argonParallel, argonKeyLength))
 }
 

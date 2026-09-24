@@ -16,7 +16,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwt"
 )
 
-const defaultIssuer = "nsc-teamusers"
+const defaultIssuer = "teamusers"
 
 // Option configures any SDK client. Options that do not apply to a specific
 // constructor are ignored by that constructor.
@@ -48,7 +48,7 @@ func WithHTTPClient(client *http.Client) Option {
 }
 
 // WithIssuer overrides the expected JWT issuer. The service default is
-// "nsc-teamusers"; the JWKS URL is independent from the issuer claim.
+// "teamusers"; the JWKS URL is independent from the issuer claim.
 func WithIssuer(issuer string) Option {
 	return func(target any) {
 		if value, ok := target.(*Verifier); ok {

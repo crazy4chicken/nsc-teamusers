@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 
-	"nsc-teamusers/internal/store"
+	"teamusers/internal/store"
 )
 
 // Entry describes one mutation for the append-only audit log.

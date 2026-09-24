@@ -1,6 +1,6 @@
-# nsc-teamusers
+# teamusers
 
-`nsc-teamusers` is a standalone Go identity and access microservice for the
+`teamusers` is a standalone Go identity and access microservice for the
 Nekostick service fleet. It owns users, teams, groups, roles, permissions,
 password/service credentials, JWT/JWKS authentication, authorization checks,
 and transactional audit/outbox events.
@@ -21,11 +21,11 @@ Start a local PostgreSQL 16 instance and create an empty database, then set a
 DSN and listener for the child process:
 
 ```sh
-export NSC_TU_CONNECTION_STRING='postgres://<user>:<password>@127.0.0.1:5432/nsc_teamusers?sslmode=disable'
-export NSC_TU_LISTEN_ADDRESS=127.0.0.1
-export NSC_TU_LISTEN_PORT=8080
-export NSC_TU_KEY_DIR="$PWD/data/keys"
-go run ./cmd/nsc-teamusers run
+export TEAMUSERS_CONNECTION_STRING='postgres://<user>:<password>@127.0.0.1:5432/teamusers?sslmode=disable'
+export TEAMUSERS_LISTEN_ADDRESS=127.0.0.1
+export TEAMUSERS_LISTEN_PORT=8080
+export TEAMUSERS_KEY_DIR="$PWD/data/keys"
+go run ./cmd/teamusers run
 ```
 
 Startup applies the embedded migrations and generates a signing key when the
@@ -41,7 +41,7 @@ deployment extension:
 
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -trimpath -ldflags '-s -w' -o nsc-teamusers ./cmd/nsc-teamusers
+  go build -trimpath -ldflags '-s -w' -o teamusers ./cmd/teamusers
 ```
 
 Register a `targetType=Microservice` service entity with `FileName`,

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"nsc-teamusers/internal/domain"
+	"teamusers/internal/domain"
 )
 
 func TestEvaluateSet(t *testing.T) {

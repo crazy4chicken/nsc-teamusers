@@ -10,8 +10,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"nsc-teamusers/internal/config"
-	"nsc-teamusers/internal/store"
+	"teamusers/internal/config"
+	"teamusers/internal/store"
 )
 
 const (
@@ -158,7 +158,7 @@ func (r *Relay) ensureJetStream(conn **nats.Conn, js *nats.JetStreamContext) err
 	}
 	connected, err := nats.Connect(
 		r.natsURL,
-		nats.Name("nsc-teamusers-outbox-relay"),
+		nats.Name("teamusers-outbox-relay"),
 		nats.Timeout(5*time.Second),
 	)
 	if err != nil {

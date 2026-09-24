@@ -17,7 +17,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 
-	"nsc-teamusers/internal/store"
+	"teamusers/internal/store"
 )
 
 type signingKey struct {

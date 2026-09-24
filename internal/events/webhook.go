@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"nsc-teamusers/internal/config"
-	"nsc-teamusers/internal/store"
+	"teamusers/internal/config"
+	"teamusers/internal/store"
 )
 
 const (
@@ -181,7 +181,7 @@ func (d *Dispatcher) post(ctx context.Context, endpoint string, body []byte, sig
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-NSC-Signature-256", signature)
+	request.Header.Set("X-Teamusers-Signature-256", signature)
 	response, err := d.client.Do(request)
 	if err != nil {
 		return err

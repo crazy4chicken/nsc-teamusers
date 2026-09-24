@@ -1,6 +1,6 @@
 # Nekostick deployment
 
-`nsc-teamusers` is a supervised Nekostick microservice, not a standalone
+`teamusers` is a supervised Nekostick microservice, not a standalone
 listener manager. Nekostick starts it as a child process, injects its leased
 listener environment, captures its logs, performs health checks, and owns
 supervision. The deployment extension installs a content-hashed static
@@ -12,7 +12,7 @@ Build the artifact that the deployment extension will install:
 
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -trimpath -ldflags '-s -w' -o nsc-teamusers ./cmd/nsc-teamusers
+  go build -trimpath -ldflags '-s -w' -o teamusers ./cmd/teamusers
 ```
 
 The extension should place that binary at the `FileName` in the service entity
@@ -27,19 +27,19 @@ following is a concrete service definition using the entity fields
 
 ```json
 {
-  "Name": "nsc-teamusers",
+  "Name": "teamusers",
   "TargetType": "Microservice",
-  "FileName": "/opt/nsc-teamusers/nsc-teamusers",
+  "FileName": "/opt/teamusers/teamusers",
   "ArgumentList": ["run"],
-  "WorkingDirectory": "/var/lib/nsc-teamusers",
+  "WorkingDirectory": "/var/lib/teamusers",
   "Environment": {
-    "NSC_TU_CONNECTION_STRING": "<postgres-dsn-secret>",
-    "NSC_TU_KEY_DIR": "/var/lib/nsc-teamusers/keys",
-    "NSC_TU_NODE_ID": "nsc-teamusers",
-    "NSC_TU_LOG_LEVEL": "info",
-    "NSC_TU_NATS_URL": "",
-    "NSC_TU_WEBHOOK_ENDPOINTS": "",
-    "NSC_TU_WEBHOOK_SECRET": "<webhook-secret>"
+    "TEAMUSERS_CONNECTION_STRING": "<postgres-dsn-secret>",
+    "TEAMUSERS_KEY_DIR": "/var/lib/teamusers/keys",
+    "TEAMUSERS_NODE_ID": "teamusers",
+    "TEAMUSERS_LOG_LEVEL": "info",
+    "TEAMUSERS_NATS_URL": "",
+    "TEAMUSERS_WEBHOOK_ENDPOINTS": "",
+    "TEAMUSERS_WEBHOOK_SECRET": "<webhook-secret>"
   },
   "StartMode": "Eager",
   "ForwardingMode": "Preserve"
@@ -50,9 +50,9 @@ The exact Nekostick administration wrapper may serialize the policy fields with
 its normal casing, but the service fields and values above are the contract.
 Do not persist `PORT` or `HOST` as application overrides: Nekostick always adds
 `PORT=<leased-port>` and `HOST=<loopback>` to every child environment. The
-child must bind those values. `nsc-teamusers` resolves listener configuration
-as **CLI flags > `NSC_TU_LISTEN_*` > supervisor `PORT`/`HOST` > defaults**, so
-leave `NSC_TU_LISTEN_ADDRESS` and `NSC_TU_LISTEN_PORT` unset for a leased
+child must bind those values. `teamusers` resolves listener configuration
+as **CLI flags > `TEAMUSERS_LISTEN_*` > supervisor `PORT`/`HOST` > defaults**, so
+leave `TEAMUSERS_LISTEN_ADDRESS` and `TEAMUSERS_LISTEN_PORT` unset for a leased
 listener. Set them only when deliberately overriding the lease.
 
 The connection string and webhook secret in `Environment` are placeholders
@@ -71,7 +71,7 @@ The supervisor supplies a loopback host and an allocated port before starting
 the child. The child logs a structured `HTTP server serving` record with the
 same effective address. Nekostick should associate the lease with that child,
 then run the HTTP health check before forwarding requests. A configured
-`NSC_TU_LISTEN_PORT=0` is useful for local standalone development, but a
+  `TEAMUSERS_LISTEN_PORT=0` is useful for local standalone development, but a
 supervised child should consume the injected `PORT` so the lease is
 unambiguous.
 

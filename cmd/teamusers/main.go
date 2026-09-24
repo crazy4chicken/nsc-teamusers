@@ -18,20 +18,20 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
-	"nsc-teamusers/internal/audit"
-	"nsc-teamusers/internal/authn"
-	"nsc-teamusers/internal/authz"
-	"nsc-teamusers/internal/config"
-	"nsc-teamusers/internal/events"
-	"nsc-teamusers/internal/httpapi"
-	"nsc-teamusers/internal/store"
-	"nsc-teamusers/migrations"
+	"teamusers/internal/audit"
+	"teamusers/internal/authn"
+	"teamusers/internal/authz"
+	"teamusers/internal/config"
+	"teamusers/internal/events"
+	"teamusers/internal/httpapi"
+	"teamusers/internal/store"
+	"teamusers/migrations"
 )
 
 const (
 	version = "dev"
 
-	migrationAdvisoryKey = "nsc-teamusers:migrations"
+	migrationAdvisoryKey = "teamusers:migrations"
 	migrationTimeout     = 2 * time.Minute
 	shutdownTimeout      = 10 * time.Second
 	doctorTimeout        = 15 * time.Second
@@ -61,7 +61,7 @@ type doctorOutput struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: nsc-teamusers <run|status|doctor> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: teamusers <run|status|doctor> [flags]")
 		os.Exit(2)
 	}
 
@@ -329,7 +329,7 @@ func checkKeyDir(keyDir string) checkOutput {
 	if err := os.MkdirAll(keyDir, 0o700); err != nil {
 		return checkOutput{Error: err.Error()}
 	}
-	file, err := os.CreateTemp(keyDir, ".nsc-teamusers-write-*")
+	file, err := os.CreateTemp(keyDir, ".teamusers-write-*")
 	if err != nil {
 		return checkOutput{Error: err.Error()}
 	}

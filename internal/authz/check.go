@@ -11,9 +11,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
-	"nsc-teamusers/internal/domain"
-	"nsc-teamusers/internal/httpapi"
-	"nsc-teamusers/internal/store"
+	"teamusers/internal/domain"
+	"teamusers/internal/httpapi"
+	"teamusers/internal/store"
 )
 
 type handler struct {

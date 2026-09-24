@@ -230,7 +230,7 @@ type decisionResponse struct {
 }
 
 func writeUnauthorized(w http.ResponseWriter, reason string) {
-	w.Header().Set("WWW-Authenticate", `Bearer realm="nsc-teamusers"`)
+	w.Header().Set("WWW-Authenticate", `Bearer realm="teamusers"`)
 	writeDecision(w, http.StatusUnauthorized, reason)
 }
 

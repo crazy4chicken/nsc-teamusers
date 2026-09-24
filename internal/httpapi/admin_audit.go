@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"nsc-teamusers/internal/store"
+	"teamusers/internal/store"
 )
 
 func (h *adminHandler) listAudit(w http.ResponseWriter, r *http.Request) {

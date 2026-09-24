@@ -11,8 +11,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
-	"nsc-teamusers/internal/domain"
-	"nsc-teamusers/internal/store"
+	"teamusers/internal/domain"
+	"teamusers/internal/store"
 )
 
 type roleCreateRequest struct {

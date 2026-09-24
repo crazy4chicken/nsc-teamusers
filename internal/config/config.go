@@ -12,15 +12,15 @@ import (
 )
 
 const (
-	envConnectionString = "NSC_TU_CONNECTION_STRING"
-	envListenAddress    = "NSC_TU_LISTEN_ADDRESS"
-	envListenPort       = "NSC_TU_LISTEN_PORT"
-	envNodeID           = "NSC_TU_NODE_ID"
-	envLogLevel         = "NSC_TU_LOG_LEVEL"
-	envKeyDir           = "NSC_TU_KEY_DIR"
-	envNATSURL          = "NSC_TU_NATS_URL"
-	envWebhookEndpoints = "NSC_TU_WEBHOOK_ENDPOINTS"
-	envWebhookSecret    = "NSC_TU_WEBHOOK_SECRET"
+	envConnectionString = "TEAMUSERS_CONNECTION_STRING"
+	envListenAddress    = "TEAMUSERS_LISTEN_ADDRESS"
+	envListenPort       = "TEAMUSERS_LISTEN_PORT"
+	envNodeID           = "TEAMUSERS_NODE_ID"
+	envLogLevel         = "TEAMUSERS_LOG_LEVEL"
+	envKeyDir           = "TEAMUSERS_KEY_DIR"
+	envNATSURL          = "TEAMUSERS_NATS_URL"
+	envWebhookEndpoints = "TEAMUSERS_WEBHOOK_ENDPOINTS"
+	envWebhookSecret    = "TEAMUSERS_WEBHOOK_SECRET"
 )
 
 // Config is the process configuration. Values are resolved in flag, env, and
@@ -42,11 +42,11 @@ type Config struct {
 // variadic form keeps the CLI thin while allowing callers and tests to supply
 // an explicit argument vector.
 func Load(args ...string) (Config, error) {
-	// Precedence: CLI flag > NSC_TU_* env > supervisor contract env (Nekostick
+	// Precedence: CLI flag > TEAMUSERS_* env > supervisor contract env (Nekostick
 	// child processes always receive PORT and HOST) > built-in default.
 	listenPort := envOrDefault(envListenPort, envOrDefault("PORT", "0"))
 
-	fs := flag.NewFlagSet("nsc-teamusers", flag.ContinueOnError)
+	fs := flag.NewFlagSet("teamusers", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	connectionString := envOrDefault(envConnectionString, "")
 	listenAddress := envOrDefault(envListenAddress, envOrDefault("HOST", "127.0.0.1"))

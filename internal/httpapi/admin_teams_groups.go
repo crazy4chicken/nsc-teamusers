@@ -10,7 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
-	"nsc-teamusers/internal/store"
+	"teamusers/internal/store"
 )
 
 type teamCreateRequest struct {

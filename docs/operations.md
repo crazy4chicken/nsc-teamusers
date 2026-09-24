@@ -11,15 +11,15 @@ default**. The supported environment variables are:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `NSC_TU_CONNECTION_STRING` | empty | PostgreSQL DSN; required by `run` and `doctor`. |
-| `NSC_TU_LISTEN_ADDRESS` | `127.0.0.1` | HTTP bind address. |
-| `NSC_TU_LISTEN_PORT` | `0` | HTTP port; `0` asks the OS for an ephemeral port. |
-| `NSC_TU_NODE_ID` | empty | Optional node label for deployment metadata. |
-| `NSC_TU_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
-| `NSC_TU_KEY_DIR` | `./data/keys` | Ed25519 private/public keys and the `ACTIVE` marker. |
-| `NSC_TU_NATS_URL` | empty | NATS URL for the JetStream outbox relay. |
-| `NSC_TU_WEBHOOK_ENDPOINTS` | empty | Comma-separated webhook URLs. |
-| `NSC_TU_WEBHOOK_SECRET` | empty | HMAC-SHA256 webhook secret. |
+| `TEAMUSERS_CONNECTION_STRING` | empty | PostgreSQL DSN; required by `run` and `doctor`. |
+| `TEAMUSERS_LISTEN_ADDRESS` | `127.0.0.1` | HTTP bind address. |
+| `TEAMUSERS_LISTEN_PORT` | `0` | HTTP port; `0` asks the OS for an ephemeral port. |
+| `TEAMUSERS_NODE_ID` | empty | Optional node label for deployment metadata. |
+| `TEAMUSERS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
+| `TEAMUSERS_KEY_DIR` | `./data/keys` | Ed25519 private/public keys and the `ACTIVE` marker. |
+| `TEAMUSERS_NATS_URL` | empty | NATS URL for the JetStream outbox relay. |
+| `TEAMUSERS_WEBHOOK_ENDPOINTS` | empty | Comma-separated webhook URLs. |
+| `TEAMUSERS_WEBHOOK_SECRET` | empty | HMAC-SHA256 webhook secret. |
 
 Do not put credentials in the repository. Use Nekostick's protected service
 configuration or another approved secret facility, and restrict read access.
@@ -28,7 +28,7 @@ configuration or another approved secret facility, and restrict read access.
 
 1. Create a PostgreSQL 16 database and a deployment role. The role needs the
    permissions required to run the embedded migrations. Keep the DSN in
-   `NSC_TU_CONNECTION_STRING`; do not put it on a command line that is visible
+   `TEAMUSERS_CONNECTION_STRING`; do not put it on a command line that is visible
    to other users.
 2. Create the key directory with owner and mode suitable for the service. On a
    fresh directory, startup generates an Ed25519 key, writes the public JWK and
@@ -36,7 +36,7 @@ configuration or another approved secret facility, and restrict read access.
    signing key`). Treat that warning as a bootstrap event: back up the key
    directory immediately and do not let independent replicas generate their own
    keys.
-3. Start `nsc-teamusers run`. It obtains the migration advisory lock, applies
+3. Start `teamusers run`. It obtains the migration advisory lock, applies
    embedded migrations, opens PostgreSQL, loads the signing keys, and starts the
    HTTP server. Migrations are safe to run concurrently because of the advisory
    lock. `GET /readyz` becomes `200 {"status":"ready"}` after the service has
@@ -44,13 +44,13 @@ configuration or another approved secret facility, and restrict read access.
    the database is unavailable. `GET /healthz` is a process liveness check and
    does not query PostgreSQL.
 4. Verify the process without exposing secrets. The examples below use an
-   explicitly configured local port; when `NSC_TU_LISTEN_PORT=0`, replace
+   explicitly configured local port; when `TEAMUSERS_LISTEN_PORT=0`, replace
    `127.0.0.1:8080` with the actual `address` from the `HTTP server serving`
    log record:
 
    ```sh
-   nsc-teamusers doctor
-   nsc-teamusers status
+   teamusers doctor
+   teamusers status
    curl -fsS http://127.0.0.1:8080/healthz
    curl -fsS http://127.0.0.1:8080/readyz
    ```
@@ -122,7 +122,7 @@ service account.
 
 ## Key rotation
 
-All replicas must read the same protected `NSC_TU_KEY_DIR`. The directory uses
+All replicas must read the same protected `TEAMUSERS_KEY_DIR`. The directory uses
 these files:
 
 - `ed25519-<kid>.pem`: PKCS#8 Ed25519 private key PEM, mode `0600`.
@@ -197,8 +197,8 @@ limits at the trusted proxy if fleet-wide limits are required.
 
 ## Webhooks
 
-Set `NSC_TU_WEBHOOK_ENDPOINTS` to a comma-separated list and
-`NSC_TU_WEBHOOK_SECRET` to a secret shared with every receiver. The dispatcher
+Set `TEAMUSERS_WEBHOOK_ENDPOINTS` to a comma-separated list and
+`TEAMUSERS_WEBHOOK_SECRET` to a secret shared with every receiver. The dispatcher
 polls the transactional outbox every two seconds. It sends the webhook topics
 currently emitted by the service (`user.created`, `user.disabled`, and
 `session.reuse_detected`) as JSON `POST` requests:
@@ -213,7 +213,7 @@ currently emitted by the service (`user.created`, `user.disabled`, and
 ```
 
 Headers are `Content-Type: application/json` and
-`X-NSC-Signature-256: sha256=<lowercase hex HMAC-SHA256>`. The HMAC input is
+`X-Teamusers-Signature-256: sha256=<lowercase hex HMAC-SHA256>`. The HMAC input is
 the exact raw request body, not re-serialized JSON. A receiver can verify it
 before parsing:
 
@@ -236,7 +236,7 @@ mode. Do not use an empty endpoint list as a production delivery guarantee.
 
 ## Outbox and NATS JetStream
 
-Set `NSC_TU_NATS_URL` to enable the relay. It publishes recognized non-webhook
+Set `TEAMUSERS_NATS_URL` to enable the relay. It publishes recognized non-webhook
 outbox topics to these subjects:
 
 | Outbox topic | JetStream subject |
@@ -281,7 +281,7 @@ its successful and failed counts are visible in structured logs.
 - Poll `GET /readyz`: `200 {"status":"ready"}` means the database `SELECT 1`
   check succeeds; `503 {"status":"not_ready"}` means it does not. Alert on a
   sustained not-ready state and on restart loops.
-- Run `nsc-teamusers doctor` during deployment and incident triage. Its JSON
+- Run `teamusers doctor` during deployment and incident triage. Its JSON
   report separates database, migration, and key-directory checks.
 - Alert on `reaped expired sessions` errors, `webhook delivery failed`,
   `webhook dispatcher poll failed`, `outbox relay poll failed`, and repeated

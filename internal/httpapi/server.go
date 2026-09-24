@@ -13,7 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"nsc-teamusers/internal/config"
+	"teamusers/internal/config"
 )
 
 // Server owns the HTTP lifecycle and the routes that are always available.

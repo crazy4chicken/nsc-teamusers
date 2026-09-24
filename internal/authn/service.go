@@ -22,14 +22,14 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jwt"
 
-	auditlog "nsc-teamusers/internal/audit"
-	"nsc-teamusers/internal/config"
-	"nsc-teamusers/internal/httpapi"
-	"nsc-teamusers/internal/store"
+	auditlog "teamusers/internal/audit"
+	"teamusers/internal/config"
+	"teamusers/internal/httpapi"
+	"teamusers/internal/store"
 )
 
 const (
-	issuer           = "nsc-teamusers"
+	issuer           = "teamusers"
 	AccessTokenTTL   = 10 * time.Minute
 	RefreshTokenTTL  = 30 * 24 * time.Hour
 	FamilyMaxTTL     = 90 * 24 * time.Hour

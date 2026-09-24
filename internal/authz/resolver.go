@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"nsc-teamusers/internal/domain"
-	"nsc-teamusers/internal/store"
+	"teamusers/internal/domain"
+	"teamusers/internal/store"
 )
 
 // ErrUserDisabled indicates that the requested user exists but cannot receive

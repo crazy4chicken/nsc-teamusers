@@ -1,4 +1,4 @@
-module nsc-teamusers
+module teamusers
 
 go 1.26.0
 

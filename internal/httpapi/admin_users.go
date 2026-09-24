@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/argon2"
 
-	"nsc-teamusers/internal/store"
+	"teamusers/internal/store"
 )
 
 type createUserRequest struct {

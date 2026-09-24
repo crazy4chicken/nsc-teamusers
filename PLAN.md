@@ -1,4 +1,4 @@
-# PLAN — nsc-teamusers: Identity & Access Component
+# PLAN — teamusers: Identity & Access Component
 
 A standalone Go microservice that is the **single source of truth** for users, teams,
 permission groups, and fully customizable permissions across the microservice fleet.
@@ -35,7 +35,7 @@ a local microservice behind **Nekostick** (dynamic routing host).
 graph LR
     Client --> RP[Reverse Proxy TLS]
     RP --> NS[Nekostick Host]
-    NS -->|route: /auth/* /iam/*| TU[nsc-teamusers]
+    NS -->|route: /auth/* /iam/*| TU[teamusers]
     NS -->|other routes| SVC[Peer Services]
     SVC -->|JWKS pull / authz check / events| TU
 ```
@@ -148,7 +148,7 @@ scope       = "own" | "team" | "any" | "*"
 
 ```json
 {
-  "iss": "nsc-teamusers",
+  "iss": "teamusers",
   "sub": "usr_01J…",
   "team": "team_01J…",
   "kind": "user|service",
@@ -273,10 +273,10 @@ nodes by a deployment extension. No Dockerfile/systemd unit: the supervisor
 owns the process lifecycle.
 
 - **Process contract**: Nekostick injects `PORT` + `HOST` env into the child;
-  the service binds exactly those (precedence: CLI > `NSC_TU_LISTEN_*` >
+  the service binds exactly those (precedence: CLI > `TEAMUSERS_LISTEN_*` >
   `PORT`/`HOST` > default). Upstream is `http://$HOST:$PORT`.
 - **Service definition**: `FileName=<binary>`, `ArgumentList=["run"]`,
-  `Environment` carries `NSC_TU_CONNECTION_STRING`/`NSC_TU_KEY_DIR`/NATS and
+  `Environment` carries `TEAMUSERS_CONNECTION_STRING`/`TEAMUSERS_KEY_DIR`/NATS and
   webhook knobs. Secrets in service Environment are stored plaintext in
   Nekostick's PG config — treat Host Config API read access as high-sensitivity.
 - **Lifecycle**: start mode Eager (auth is on every service's critical path;
@@ -293,7 +293,7 @@ owns the process lifecycle.
 ## 13. Project Layout
 
 ```text
-cmd/nsc-teamusers/      entrypoint (run/status/doctor)
+cmd/teamusers/          entrypoint (run/status/doctor)
 internal/
   config/               env+flag loading, redaction
   domain/               entities, permission grammar, evaluation engine

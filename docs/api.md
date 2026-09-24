@@ -1,7 +1,7 @@
 # HTTP API
 
-The service listens on the address selected by `NSC_TU_LISTEN_ADDRESS` and
-`NSC_TU_LISTEN_PORT`. It serves JSON over plain HTTP; TLS termination belongs
+The service listens on the address selected by `TEAMUSERS_LISTEN_ADDRESS` and
+`TEAMUSERS_LISTEN_PORT`. It serves JSON over plain HTTP; TLS termination belongs
 to the Nekostick/reverse-proxy boundary. If a proxy publishes the service under
 a prefix such as `/iam`, it must remove that prefix before forwarding (the
 service routes the paths below at the root).
@@ -15,7 +15,7 @@ service routes the paths below at the root).
 | Service-only | A valid active access token whose JWT `kind` claim is `service`. |
 | Admin-subject | A valid active bearer subject. The current admin router checks that a subject exists; it does not yet enforce an `iam:*` permission. |
 
-Access tokens are EdDSA JWTs. The issuer is `nsc-teamusers`; the claims include
+Access tokens are EdDSA JWTs. The issuer is `teamusers`; the claims include
 `iss`, `sub`, `kind` (`user` or `service`), `perm_ver`, `iat`, `exp`, `jti`, and
 `team` when the user has an active team. Access tokens expire after 10 minutes.
 
