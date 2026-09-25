@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/argon2"
 
+	"teamusers/internal/config"
 	"teamusers/internal/store"
 )
 
@@ -67,6 +68,10 @@ func (h *adminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 	password := request.Password
 	if password == "" {
 		password = request.InitialPassword
+	}
+	if password != "" && !config.ValidatePassword(password, h.cfg.PasswordMinLength) {
+		WriteProblem(w, r, http.StatusUnprocessableEntity, "weak_password", "weak_password")
+		return
 	}
 	var created store.User
 	err := h.withTx(r.Context(), func(ctx context.Context, tx store.Tx) error {
@@ -164,6 +169,11 @@ func (h *adminHandler) patchUser(w http.ResponseWriter, r *http.Request) {
 				if err := appendUserDisabledEvents(ctx, tx, id, nil); err != nil {
 					return err
 				}
+				if err := store.ResetFailedLogins(ctx, tx, id); err != nil {
+					return err
+				}
+				updated.FailedLogins = 0
+				updated.LockedUntil = nil
 			} else if err := appendPermissionChange(ctx, tx, []string{id}, nil); err != nil {
 				return err
 			}
@@ -215,6 +225,11 @@ func (h *adminHandler) disableUser(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		if err := store.ResetFailedLogins(ctx, tx, id); err != nil {
+			return err
+		}
+		updated.FailedLogins = 0
+		updated.LockedUntil = nil
 		version, err := store.BumpUserPermVer(ctx, tx, id)
 		if err != nil {
 			return err
@@ -331,6 +346,10 @@ func (h *adminHandler) createUserCredential(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	plaintext := request.Password
+	if request.Kind == "password" && !config.ValidatePassword(plaintext, h.cfg.PasswordMinLength) {
+		WriteProblem(w, r, http.StatusUnprocessableEntity, "weak_password", "weak_password")
+		return
+	}
 	if request.Kind == "service" {
 		plaintext = secret
 	}

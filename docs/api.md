@@ -11,7 +11,7 @@ default `Strip` forwarding mode, which removes the prefix before forwarding.
 | Class | Meaning |
 | --- | --- |
 | Public | No bearer token is required. |
-| User bearer | `Authorization: Bearer <access-token>` for an active user or service subject. The token's `perm_ver` must still match the user row. |
+| User bearer | `Authorization: Bearer <access-token>` for an active user or service subject. The token's `perm_ver` must still match the user row. `/me` requires a `kind=user` token and always acts on that token subject. |
 | Service-only | A valid active access token whose JWT `kind` claim is `service`. |
 | Admin-subject | A valid active bearer subject. The current admin router checks that a subject exists; it does not yet enforce an `iam:*` permission. |
 
@@ -95,9 +95,10 @@ Errors use `Content-Type: application/problem+json` and RFC 9457 fields:
 `detail` and `instance` may be omitted when empty. `instance` is the request ID
 created by the HTTP middleware. Common statuses are 400 (malformed or invalid
 request), 401 (missing/invalid/stale authentication), 404 (missing resource),
-409 (unique constraint conflict), 422 (invalid permission or condition), 429
-(authentication rate limit), and 500 (service/database failure). Error details
-are intentionally generic for authentication and database failures.
+409 (unique or TOTP enrollment conflict), 422 (invalid permission, condition,
+or password policy), 423 (account lockout), 429 (authentication rate limit),
+and 500 (service/database failure). Error details are intentionally generic for
+authentication and database failures.
 
 ## Runtime plane
 
@@ -128,7 +129,31 @@ On an active user with a valid password, `200` returns:
 ```
 
 Invalid credentials and malformed login bodies return `401` with a problem;
-rate-limit exhaustion returns `429`.
+rate-limit exhaustion returns `429`. An account whose `locked_until` is in the
+future returns `423` with problem detail `account_locked` before password work.
+
+When the active user has a confirmed TOTP credential, valid password login
+returns `200` with a short-lived challenge instead of tokens:
+
+```json
+{"mfa_required":true,"mfa_token":"<EdDSA JWT>"}
+```
+
+The MFA token expires after five minutes and is accepted only by the MFA login
+endpoint below.
+
+### `POST /auth/login/mfa` — Public MFA completion
+
+Submit the challenge token and either the current six-digit TOTP code or one of
+the one-time backup codes:
+
+```json
+{"mfa_token":"<JWT>","code":"123456"}
+```
+
+A valid code returns the normal access and refresh token pair. A backup code is
+deleted atomically when used; replaying it returns `401`. Invalid MFA codes
+count toward the account lockout threshold and requests are rate-limited per IP.
 
 ### `POST /auth/register` — Public self-registration
 
@@ -137,15 +162,46 @@ the endpoint returns `403` with a problem whose detail is
 `registration_closed`. In `approval` or `open` mode, submit:
 
 ```json
-{"username":"alice","email":"alice@example.test","password":"at-least-eight-characters","display_name":"Alice"}
+{"username":"alice","email":"alice@example.test","password":"at-least-twelve1","display_name":"Alice"}
 ```
 
 The username must be unique, the email must be a valid address, and the
-password must contain at least eight characters. A successful request returns
-`201` with `{"id":"01J...","status":"pending"}`. The password is stored
-only as an Argon2id credential. The service writes a transactional
-`notify.user.verification` event containing the plaintext verification token;
-the token is not returned by this endpoint.
+password must be at least 12 Unicode characters containing at least one letter
+and one digit. A successful request returns `201` with `{"id":"01J...","status":"pending"}`.
+The password is stored only as an Argon2id credential. The service writes a
+transactional `notify.user.verification` event containing the plaintext
+verification token; the token is not returned by this endpoint.
+
+### `POST /me/totp/enroll` — User bearer self-service
+
+The caller must send an active user access token. Enrollment creates a pending
+TOTP secret and returns it once:
+
+```json
+{"secret":"JBSWY3DPEHPK3PXP...","otpauth_url":"otpauth://totp/teamusers:alice?secret=...&issuer=teamusers"}
+```
+
+An active TOTP credential causes `409` with problem detail
+`totp_already_enabled`. The pending secret is stored in the credentials table
+until confirmation.
+
+### `POST /me/totp/confirm` — Confirm TOTP enrollment
+
+Submit the current code from the pending secret:
+
+```json
+{"code":"123456"}
+```
+
+On success the pending credential becomes active and ten 16-character lowercase
+alphanumeric backup codes are returned in `xxxx-xxxx-xxxx-xxxx` display form
+under `backup_codes`. Codes are returned only in this response; the canonical
+no-dash lowercase values are stored as SHA-256 digests in one JSON credential.
+
+### `DELETE /me/totp` — Disable TOTP
+
+Submit a valid TOTP or backup code. The active TOTP and all backup credentials
+are deleted, and the endpoint returns `204 No Content`.
 
 ### `POST /auth/verify-email` — Public email verification
 

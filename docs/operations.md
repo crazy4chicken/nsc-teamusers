@@ -21,6 +21,9 @@ default**. The supported environment variables are:
 | `TEAMUSERS_NOTIFICATION_ENDPOINTS` | empty | Comma-separated notification service endpoint URLs. |
 | `TEAMUSERS_NOTIFICATION_SECRET` | empty | HMAC-SHA256 signing secret for notification service calls. |
 | `TEAMUSERS_REGISTRATION_MODE` | `closed` | Public registration mode: `closed`, `approval`, or `open`. |
+| `TEAMUSERS_LOCKOUT_THRESHOLD` | `5` | Failed password or MFA attempts before lockout. |
+| `TEAMUSERS_LOCKOUT_DURATION` | `15m` | Duration of an account lockout; parsed by `time.ParseDuration`. |
+| `TEAMUSERS_PASSWORD_MIN_LENGTH` | `12` | Minimum Unicode password length; passwords also require a letter and digit. |
 
 Do not put credentials in the repository. Use Nekostick's protected service
 configuration or another approved secret facility, and restrict read access.
@@ -78,7 +81,7 @@ export ADMIN_ACCESS_TOKEN='use-a-secret-manager-value'
 curl --fail-with-body -sS -X POST "$IAM_BASE_URL/users" \
   -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data '{"username":"alice","email":"alice@example.test","display_name":"Alice","password":"replace-this-before-use"}'
+  --data '{"username":"alice","email":"alice@example.test","display_name":"Alice","password":"Replace-this-before-use1"}'
 ```
 
 The response is the created user and never includes a password hash. The admin
@@ -195,6 +198,18 @@ Argon2id verification has four concurrent slots. If all slots remain busy for
 two seconds, authentication returns `429 application/problem+json` rather than
 queueing unbounded password work. Rate-limit state is per process; coordinate
 limits at the trusted proxy if fleet-wide limits are required.
+
+Account lockout is stored on the user row. A failed password or MFA attempt
+increments `failed_logins`; reaching `TEAMUSERS_LOCKOUT_THRESHOLD` sets
+`locked_until`. While the deadline is in the future, login returns `423
+account_locked` before password verification. A successful password-only login
+or MFA completion resets both fields. Disabling a user through the admin API
+also resets the fields. After the duration elapses, the user can try again.
+
+TOTP enrollment is completed through `/me/totp/enroll` and
+`/me/totp/confirm`. The confirmation response contains ten one-time backup
+codes; operators must direct users to store them in an approved secrets
+facility because the service never displays them again.
 
 ## Notification service integration
 

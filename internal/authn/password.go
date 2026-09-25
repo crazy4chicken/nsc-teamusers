@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/argon2"
+
+	"teamusers/internal/config"
 )
 
 const (
@@ -84,6 +86,12 @@ func parsePasswordHash(encoded string) (salt, key []byte, memory, iterations, pa
 		return nil, nil, 0, 0, 0, errors.New("invalid Argon2id key")
 	}
 	return salt, key, memory, iterations, parallel, nil
+}
+
+// ValidatePassword applies the configured minimum length and alphanumeric
+// character-class requirements.
+func ValidatePassword(password string, minLength int) bool {
+	return config.ValidatePassword(password, minLength)
 }
 
 func passwordHashNeedsRehash(encoded string) bool {

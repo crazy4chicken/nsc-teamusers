@@ -9,6 +9,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
+	"unicode"
 )
 
 const (
@@ -22,21 +24,31 @@ const (
 	envNotificationEndpoints = "TEAMUSERS_NOTIFICATION_ENDPOINTS"
 	envNotificationSecret    = "TEAMUSERS_NOTIFICATION_SECRET"
 	envRegistrationMode      = "TEAMUSERS_REGISTRATION_MODE"
+	envLockoutThreshold      = "TEAMUSERS_LOCKOUT_THRESHOLD"
+	envLockoutDuration       = "TEAMUSERS_LOCKOUT_DURATION"
+	envPasswordMinLength     = "TEAMUSERS_PASSWORD_MIN_LENGTH"
+
+	DefaultLockoutThreshold  = 5
+	DefaultLockoutDuration   = 15 * time.Minute
+	DefaultPasswordMinLength = 12
 )
 
 // Config is the process configuration. Values are resolved in flag, env, and
 // default order, respectively.
 type Config struct {
-	ConnectionString      string   `json:"connection_string,omitempty"`
-	ListenAddress         string   `json:"listen_address"`
-	ListenPort            int      `json:"listen_port"`
-	NodeID                string   `json:"node_id,omitempty"`
-	LogLevel              string   `json:"log_level"`
-	KeyDir                string   `json:"key_dir"`
-	NATSURL               string   `json:"nats_url,omitempty"`
-	NotificationEndpoints []string `json:"notification_endpoints,omitempty"`
-	NotificationSecret    string   `json:"notification_secret,omitempty"`
-	RegistrationMode      string   `json:"registration_mode"`
+	ConnectionString      string        `json:"connection_string,omitempty"`
+	ListenAddress         string        `json:"listen_address"`
+	ListenPort            int           `json:"listen_port"`
+	NodeID                string        `json:"node_id,omitempty"`
+	LogLevel              string        `json:"log_level"`
+	KeyDir                string        `json:"key_dir"`
+	NATSURL               string        `json:"nats_url,omitempty"`
+	NotificationEndpoints []string      `json:"notification_endpoints,omitempty"`
+	NotificationSecret    string        `json:"notification_secret,omitempty"`
+	RegistrationMode      string        `json:"registration_mode"`
+	LockoutThreshold      int           `json:"lockout_threshold"`
+	LockoutDuration       time.Duration `json:"lockout_duration"`
+	PasswordMinLength     int           `json:"password_min_length"`
 }
 
 // Load reads configuration from the process environment and optional command
@@ -59,6 +71,9 @@ func Load(args ...string) (Config, error) {
 	notificationEndpoints := envOrDefault(envNotificationEndpoints, "")
 	notificationSecret := envOrDefault(envNotificationSecret, "")
 	registrationMode := envOrDefault(envRegistrationMode, "closed")
+	lockoutThreshold := envOrDefault(envLockoutThreshold, strconv.Itoa(DefaultLockoutThreshold))
+	lockoutDuration := envOrDefault(envLockoutDuration, DefaultLockoutDuration.String())
+	passwordMinLength := envOrDefault(envPasswordMinLength, strconv.Itoa(DefaultPasswordMinLength))
 
 	fs.StringVar(&connectionString, "connection-string", connectionString, "PostgreSQL connection string")
 	fs.StringVar(&listenAddress, "listen-address", listenAddress, "HTTP listen address")
@@ -70,6 +85,9 @@ func Load(args ...string) (Config, error) {
 	fs.StringVar(&notificationEndpoints, "notification-endpoints", notificationEndpoints, "comma-separated notification service endpoint URLs")
 	fs.StringVar(&notificationSecret, "notification-secret", notificationSecret, "notification service signing secret")
 	fs.StringVar(&registrationMode, "registration-mode", registrationMode, "registration mode (closed, approval, open)")
+	fs.StringVar(&lockoutThreshold, "lockout-threshold", lockoutThreshold, "failed login attempts before account lockout")
+	fs.StringVar(&lockoutDuration, "lockout-duration", lockoutDuration, "account lockout duration")
+	fs.StringVar(&passwordMinLength, "password-min-length", passwordMinLength, "minimum password length")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -77,6 +95,27 @@ func Load(args ...string) (Config, error) {
 	port, err := strconv.Atoi(strings.TrimSpace(listenPort))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid listen port %q: %w", listenPort, err)
+	}
+	threshold, err := strconv.Atoi(strings.TrimSpace(lockoutThreshold))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid lockout threshold %q: %w", lockoutThreshold, err)
+	}
+	duration, err := time.ParseDuration(strings.TrimSpace(lockoutDuration))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid lockout duration %q: %w", lockoutDuration, err)
+	}
+	minLength, err := strconv.Atoi(strings.TrimSpace(passwordMinLength))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid password minimum length %q: %w", passwordMinLength, err)
+	}
+	if threshold < 1 {
+		return Config{}, fmt.Errorf("lockout threshold must be positive, got %d", threshold)
+	}
+	if duration <= 0 {
+		return Config{}, fmt.Errorf("lockout duration must be positive, got %s", duration)
+	}
+	if minLength < 1 {
+		return Config{}, fmt.Errorf("password minimum length must be positive, got %d", minLength)
 	}
 
 	cfg := Config{
@@ -90,11 +129,29 @@ func Load(args ...string) (Config, error) {
 		NotificationEndpoints: parseNotificationEndpoints(notificationEndpoints),
 		NotificationSecret:    notificationSecret,
 		RegistrationMode:      strings.ToLower(strings.TrimSpace(registrationMode)),
+		LockoutThreshold:      threshold,
+		LockoutDuration:       duration,
+		PasswordMinLength:     minLength,
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// WithDefaults fills security settings omitted by programmatic Config literals.
+// Config.Load already resolves all defaults from environment and flags.
+func (c Config) WithDefaults() Config {
+	if c.LockoutThreshold == 0 {
+		c.LockoutThreshold = DefaultLockoutThreshold
+	}
+	if c.LockoutDuration == 0 {
+		c.LockoutDuration = DefaultLockoutDuration
+	}
+	if c.PasswordMinLength == 0 {
+		c.PasswordMinLength = DefaultPasswordMinLength
+	}
+	return c
 }
 
 // Validate checks settings that are meaningful for every command. Database
@@ -122,6 +179,15 @@ func (c Config) Validate() error {
 	case "closed", "approval", "open":
 	default:
 		return fmt.Errorf("registration mode must be one of closed, approval, open, got %q", c.RegistrationMode)
+	}
+	if c.LockoutThreshold < 0 {
+		return fmt.Errorf("lockout threshold must not be negative, got %d", c.LockoutThreshold)
+	}
+	if c.LockoutDuration < 0 {
+		return fmt.Errorf("lockout duration must not be negative, got %s", c.LockoutDuration)
+	}
+	if c.PasswordMinLength < 0 {
+		return fmt.Errorf("password minimum length must not be negative, got %d", c.PasswordMinLength)
 	}
 	return nil
 }
@@ -173,6 +239,24 @@ func (c Config) SlogLevel() slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+// ValidatePassword applies the shared password policy used by registration and
+// administrative password credential changes.
+func ValidatePassword(password string, minLength int) bool {
+	if minLength < 1 || len([]rune(password)) < minLength {
+		return false
+	}
+	var hasLetter, hasDigit bool
+	for _, runeValue := range password {
+		if unicode.IsLetter(runeValue) {
+			hasLetter = true
+		}
+		if unicode.IsDigit(runeValue) {
+			hasDigit = true
+		}
+	}
+	return hasLetter && hasDigit
 }
 
 func parseNotificationEndpoints(raw string) []string {

@@ -2,15 +2,76 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // GetUserByUsername loads the identity used by password and service logins.
 func GetUserByUsername(ctx context.Context, q Q, username string) (User, error) {
+	return GetUserForAuth(ctx, q, username)
+}
+
+// GetUserForAuth loads the identity and lockout state used by an authentication
+// attempt. Lockout columns are returned with the same user projection as the
+// regular user helpers.
+func GetUserForAuth(ctx context.Context, q Q, username string) (User, error) {
 	return scanUser(q.QueryRow(ctx, `
-        SELECT id, username, email, display_name, status, perm_ver, email_verified_at, approved_at, approved_by, created_at, updated_at
-        FROM users WHERE username = $1`, username))
+		SELECT id, username, email, display_name, status, perm_ver, failed_logins, locked_until, email_verified_at, approved_at, approved_by, created_at, updated_at
+		FROM users WHERE username = $1`, username))
+}
+
+// IncrementFailedLogins increments the counter and locks the account at the
+// configured threshold in one UPDATE. The duration is passed as a PostgreSQL
+// interval string so pgx does not need to infer a time.Duration OID.
+func IncrementFailedLogins(ctx context.Context, q Q, userID string, threshold int, duration time.Duration) (bool, error) {
+	if threshold < 1 {
+		threshold = 1
+	}
+	interval := fmt.Sprintf("%.9f seconds", duration.Seconds())
+	var failed int
+	var lockedUntil pgtype.Timestamptz
+	err := q.QueryRow(ctx, `
+		UPDATE users
+		SET failed_logins = failed_logins + 1,
+		    locked_until = CASE
+		        WHEN failed_logins + 1 >= $2 THEN now() + $3::interval
+		        ELSE locked_until
+		    END,
+		    updated_at = now()
+		WHERE id = $1
+		RETURNING failed_logins, locked_until`, userID, threshold, interval).Scan(&failed, &lockedUntil)
+	if err != nil {
+		return false, err
+	}
+	return failed >= threshold && lockedUntil.Valid, nil
+}
+
+// ResetFailedLogins clears the lockout state after a successful login or an
+// administrative disable operation.
+func ResetFailedLogins(ctx context.Context, q Q, userID string) error {
+	_, err := q.Exec(ctx, `
+		UPDATE users
+		SET failed_logins = 0, locked_until = NULL, updated_at = now()
+		WHERE id = $1`, userID)
+	return err
+}
+
+// GetLockState returns the current failure counter and lock deadline.
+func GetLockState(ctx context.Context, q Q, userID string) (int, *time.Time, error) {
+	var failed int
+	var lockedUntil pgtype.Timestamptz
+	err := q.QueryRow(ctx, `SELECT failed_logins, locked_until FROM users WHERE id = $1`, userID).Scan(&failed, &lockedUntil)
+	if err != nil {
+		return 0, nil, err
+	}
+	if !lockedUntil.Valid {
+		return failed, nil, nil
+	}
+	value := lockedUntil.Time
+	return failed, &value, nil
 }
 
 // GetUserTeamID returns a stable active team for token issuance. Users may be

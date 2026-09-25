@@ -99,6 +99,10 @@ func newIntegrationStack(t *testing.T) *integrationStack {
 }
 
 func newIntegrationStackWithMode(t *testing.T, registrationMode string) *integrationStack {
+	return newIntegrationStackWithModeAndConfig(t, registrationMode, nil)
+}
+
+func newIntegrationStackWithModeAndConfig(t *testing.T, registrationMode string, configure func(*config.Config)) *integrationStack {
 	t.Helper()
 	database := newIntegrationDatabase(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -110,6 +114,9 @@ func newIntegrationStackWithMode(t *testing.T, registrationMode string) *integra
 		LogLevel:         "error",
 		KeyDir:           t.TempDir(),
 		RegistrationMode: registrationMode,
+	}
+	if configure != nil {
+		configure(&cfg)
 	}
 	server := httpapi.NewServer(cfg, database.pool)
 	if err := server.Listen(); err != nil {
@@ -131,6 +138,7 @@ func newIntegrationStackWithMode(t *testing.T, registrationMode string) *integra
 		t.Fatalf("initialize integration authentication: %v", err)
 	}
 	authRoutes := authService.Routes()
+	meRoutes := authService.MeRoutes()
 	authzRoutes := authz.NewRouter(database.pool, authService.Middleware())
 	adminRoutes := httpapi.NewAdminRouter(database.pool, auditWriter, authService.Middleware(), cfg)
 	server.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +148,10 @@ func newIntegrationStackWithMode(t *testing.T, registrationMode string) *integra
 		}
 		if strings.HasPrefix(r.URL.Path, "/auth/") || r.URL.Path == "/.well-known/jwks.json" {
 			authRoutes.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/me/") || r.URL.Path == "/me" {
+			meRoutes.ServeHTTP(w, r)
 			return
 		}
 		adminRoutes.ServeHTTP(w, r)

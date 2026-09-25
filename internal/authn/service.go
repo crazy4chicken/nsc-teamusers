@@ -72,6 +72,7 @@ type Service struct {
 }
 
 func New(deps Deps) (*Service, error) {
+	deps.Config = deps.Config.WithDefaults()
 	if deps.Q == nil && deps.Pool == nil {
 		return nil, errors.New("authn query handle must not be nil")
 	}
@@ -119,6 +120,7 @@ func (s *Service) Routes() chi.Router {
 	router.Post("/auth/register", s.register)
 	router.Post("/auth/verify-email", s.verifyEmail)
 	router.Post("/auth/client-credentials", s.clientCredentials)
+	router.Post("/auth/login/mfa", s.loginMFA)
 	router.Post("/auth/refresh", s.refresh)
 	router.Post("/auth/logout", s.logout)
 	router.Post("/auth/introspect", s.introspect)
@@ -204,8 +206,8 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "email must be a valid address")
 		return
 	}
-	if len([]rune(request.Password)) < 8 {
-		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "password must be at least 8 characters")
+	if !ValidatePassword(request.Password, s.cfg.PasswordMinLength) {
+		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
 		return
 	}
 	passwordHash, err := HashPassword(request.Password)
@@ -361,11 +363,16 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w, r)
 		return
 	}
+	user, credential, userErr, credentialErr := s.lookupCredential(r.Context(), request.Username, "password")
+	if userErr == nil && user.LockedUntil != nil && user.LockedUntil.After(s.now()) {
+		s.auditAuth(r.Context(), s.q, "auth.login.locked", user, request.Username)
+		writeAuthProblem(w, r, http.StatusLocked, "account_locked")
+		return
+	}
 	if !s.limiter.allow(requestIP(r), request.Username, s.now()) {
 		writeRateLimited(w, r)
 		return
 	}
-	user, credential, userErr, credentialErr := s.lookupCredential(r.Context(), request.Username, "password")
 	valid, acquired := s.verifyPassword(r.Context(), credential.Hash, request.Password)
 	if !acquired {
 		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
@@ -383,6 +390,12 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if userErr != nil || credentialErr != nil || !valid {
+		if userErr == nil && user.ID != "" {
+			if err := s.recordLoginFailure(r.Context(), user); err != nil {
+				writeInternal(w, r)
+				return
+			}
+		}
 		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
 		writeUnauthorized(w, r)
 		return
@@ -395,6 +408,20 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	if user.Status != "active" {
 		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
 		writeUnauthorized(w, r)
+		return
+	}
+	_, err := store.GetCredential(r.Context(), s.q, user.ID, "totp")
+	if err == nil {
+		mfaToken, err := s.signMFAToken(user.ID)
+		if err != nil {
+			writeInternal(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"mfa_required": true, "mfa_token": mfaToken})
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		writeInternal(w, r)
 		return
 	}
 	response, err := s.completeLogin(r.Context(), user, credential, request.Password, "user", sessionMetadataFor(r, "user"))
@@ -411,11 +438,16 @@ func (s *Service) clientCredentials(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w, r)
 		return
 	}
+	user, credential, userErr, credentialErr := s.lookupCredential(r.Context(), request.ClientID, "service")
+	if userErr == nil && user.LockedUntil != nil && user.LockedUntil.After(s.now()) {
+		s.auditAuth(r.Context(), s.q, "auth.login.locked", user, request.ClientID)
+		writeAuthProblem(w, r, http.StatusLocked, "account_locked")
+		return
+	}
 	if !s.limiter.allow(requestIP(r), request.ClientID, s.now()) {
 		writeRateLimited(w, r)
 		return
 	}
-	user, credential, userErr, credentialErr := s.lookupCredential(r.Context(), request.ClientID, "service")
 	valid, acquired := s.verifyPassword(r.Context(), credential.Hash, request.ClientSecret)
 	if !acquired {
 		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.ClientID)
@@ -432,7 +464,18 @@ func (s *Service) clientCredentials(w http.ResponseWriter, r *http.Request) {
 		writeInternal(w, r)
 		return
 	}
-	if userErr != nil || credentialErr != nil || !valid || user.Status != "active" {
+	if userErr != nil || credentialErr != nil || !valid {
+		if userErr == nil && user.ID != "" {
+			if err := s.recordLoginFailure(r.Context(), user); err != nil {
+				writeInternal(w, r)
+				return
+			}
+		}
+		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.ClientID)
+		writeUnauthorized(w, r)
+		return
+	}
+	if user.Status != "active" {
 		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.ClientID)
 		writeUnauthorized(w, r)
 		return
@@ -487,6 +530,9 @@ func (s *Service) completeLogin(ctx context.Context, user store.User, credential
 			if _, err := store.UpdateCredential(txctx, q, credential); err != nil {
 				return err
 			}
+		}
+		if err := store.ResetFailedLogins(txctx, q, user.ID); err != nil {
+			return err
 		}
 		var err error
 		response, err = s.issuePair(txctx, q, user, kind, "", time.Time{}, metadata)

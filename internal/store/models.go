@@ -13,6 +13,8 @@ type User struct {
 	DisplayName     string     `json:"display_name"`
 	Status          string     `json:"status"`
 	PermVer         int64      `json:"perm_ver"`
+	FailedLogins    int        `json:"failed_logins"`
+	LockedUntil     *time.Time `json:"locked_until,omitempty"`
 	EmailVerifiedAt *time.Time `json:"email_verified_at,omitempty"`
 	ApprovedAt      *time.Time `json:"approved_at,omitempty"`
 	ApprovedBy      *string    `json:"approved_by,omitempty"`

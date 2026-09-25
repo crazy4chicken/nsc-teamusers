@@ -18,7 +18,7 @@ func TestAdminUsersEndpoints(t *testing.T) {
 		"username":     "alice",
 		"email":        "alice@example.test",
 		"display_name": "Alice",
-		"password":     "alice-password",
+		"password":     "alice-password1",
 	}, adminToken)
 	if status != http.StatusCreated {
 		t.Fatalf("create user status = %d, want %d: %s", status, http.StatusCreated, body)

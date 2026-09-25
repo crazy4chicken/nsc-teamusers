@@ -2,6 +2,10 @@ package store
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -15,14 +19,14 @@ func CreateUser(ctx context.Context, q Q, user User) (User, error) {
 	return scanUser(q.QueryRow(ctx, `
 		INSERT INTO users (id, username, email, display_name, status)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, username, email, display_name, status, perm_ver, email_verified_at, approved_at, approved_by, created_at, updated_at`,
+		RETURNING id, username, email, display_name, status, perm_ver, failed_logins, locked_until, email_verified_at, approved_at, approved_by, created_at, updated_at`,
 		user.ID, user.Username, user.Email, user.DisplayName, user.Status))
 }
 
 func GetUser(ctx context.Context, q Q, id string) (User, error) {
 	return scanUser(q.QueryRow(ctx, `
-        SELECT id, username, email, display_name, status, perm_ver, email_verified_at, approved_at, approved_by, created_at, updated_at
-        FROM users WHERE id = $1`, id))
+		SELECT id, username, email, display_name, status, perm_ver, failed_logins, locked_until, email_verified_at, approved_at, approved_by, created_at, updated_at
+		FROM users WHERE id = $1`, id))
 }
 
 func ListUsers(ctx context.Context, q Q, cursor string, limit int) ([]User, string, error) {
@@ -31,12 +35,12 @@ func ListUsers(ctx context.Context, q Q, cursor string, limit int) ([]User, stri
 	var err error
 	if cursor == "" {
 		rows, err = q.Query(ctx, `
-            SELECT id, username, email, display_name, status, perm_ver, email_verified_at, approved_at, approved_by, created_at, updated_at
-            FROM users ORDER BY id LIMIT $1`, limit)
+			SELECT id, username, email, display_name, status, perm_ver, failed_logins, locked_until, email_verified_at, approved_at, approved_by, created_at, updated_at
+			FROM users ORDER BY id LIMIT $1`, limit)
 	} else {
 		rows, err = q.Query(ctx, `
-            SELECT id, username, email, display_name, status, perm_ver, email_verified_at, approved_at, approved_by, created_at, updated_at
-            FROM users WHERE id > $1 ORDER BY id LIMIT $2`, cursor, limit)
+			SELECT id, username, email, display_name, status, perm_ver, failed_logins, locked_until, email_verified_at, approved_at, approved_by, created_at, updated_at
+			FROM users WHERE id > $1 ORDER BY id LIMIT $2`, cursor, limit)
 	}
 	if err != nil {
 		return nil, "", err
@@ -58,10 +62,10 @@ func ListUsers(ctx context.Context, q Q, cursor string, limit int) ([]User, stri
 
 func UpdateUser(ctx context.Context, q Q, user User) (User, error) {
 	return scanUser(q.QueryRow(ctx, `
-        UPDATE users
-        SET username = $2, email = $3, display_name = $4, status = $5, updated_at = now()
-        WHERE id = $1
-        RETURNING id, username, email, display_name, status, perm_ver, email_verified_at, approved_at, approved_by, created_at, updated_at`,
+		UPDATE users
+		SET username = $2, email = $3, display_name = $4, status = $5, updated_at = now()
+		WHERE id = $1
+		RETURNING id, username, email, display_name, status, perm_ver, failed_logins, locked_until, email_verified_at, approved_at, approved_by, created_at, updated_at`,
 		user.ID, user.Username, user.Email, user.DisplayName, user.Status))
 }
 
@@ -81,7 +85,8 @@ func CreateCredential(ctx context.Context, q Q, credential Credential) (Credenti
 func GetCredential(ctx context.Context, q Q, userID, kind string) (Credential, error) {
 	return scanCredential(q.QueryRow(ctx, `
 		SELECT user_id, kind, hash, created_at, rotated_at
-		FROM credentials WHERE user_id = $1 AND kind = $2`, userID, kind))
+		FROM credentials WHERE user_id = $1 AND kind = $2
+		ORDER BY created_at DESC, hash LIMIT 1`, userID, kind))
 }
 
 func ListCredentials(ctx context.Context, q Q, userID, cursor string, limit int) ([]Credential, string, error) {
@@ -91,11 +96,11 @@ func ListCredentials(ctx context.Context, q Q, userID, cursor string, limit int)
 	if cursor == "" {
 		rows, err = q.Query(ctx, `
 			SELECT user_id, kind, hash, created_at, rotated_at
-			FROM credentials WHERE user_id = $1 ORDER BY kind LIMIT $2`, userID, limit)
+			FROM credentials WHERE user_id = $1 ORDER BY kind, hash LIMIT $2`, userID, limit)
 	} else {
 		rows, err = q.Query(ctx, `
 			SELECT user_id, kind, hash, created_at, rotated_at
-			FROM credentials WHERE user_id = $1 AND kind > $2 ORDER BY kind LIMIT $3`, userID, cursor, limit)
+			FROM credentials WHERE user_id = $1 AND (kind, hash) > ($2, '') ORDER BY kind, hash LIMIT $3`, userID, cursor, limit)
 	}
 	if err != nil {
 		return nil, "", err
@@ -115,12 +120,69 @@ func ListCredentials(ctx context.Context, q Q, userID, cursor string, limit int)
 	return credentials, nextCursor(len(credentials), limit, func(i int) string { return credentials[i].Kind }), nil
 }
 
+// ConsumeBackupCredential atomically removes one matching SHA-256 backup-code
+// digest from the user's JSON credential row. The row lock prevents replay
+// under concurrent MFA requests, while constant-time comparison avoids making
+// the stored digest position observable.
+func ConsumeBackupCredential(ctx context.Context, q Q, userID, digest string) (bool, error) {
+	var credential Credential
+	err := q.QueryRow(ctx, `
+		SELECT user_id, kind, hash, created_at, rotated_at
+		FROM credentials
+		WHERE user_id = $1 AND kind = 'backup_codes'
+		FOR UPDATE`, userID).Scan(
+		&credential.UserID, &credential.Kind, &credential.Hash,
+		&credential.CreatedAt, &credential.RotatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var digests []string
+	if err := json.Unmarshal([]byte(credential.Hash), &digests); err != nil {
+		return false, fmt.Errorf("decode backup-code digests: %w", err)
+	}
+	needle := []byte(digest)
+	matched := -1
+	for index, stored := range digests {
+		if subtle.ConstantTimeCompare([]byte(stored), needle) == 1 && matched < 0 {
+			matched = index
+		}
+	}
+	if matched < 0 {
+		return false, nil
+	}
+	digests = append(digests[:matched], digests[matched+1:]...)
+	if len(digests) == 0 {
+		_, err = q.Exec(ctx, `DELETE FROM credentials WHERE user_id = $1 AND kind = 'backup_codes'`, userID)
+		return true, err
+	}
+	encoded, err := json.Marshal(digests)
+	if err != nil {
+		return false, fmt.Errorf("encode backup-code digests: %w", err)
+	}
+	_, err = q.Exec(ctx, `
+		UPDATE credentials SET hash = $3, rotated_at = now()
+		WHERE user_id = $1 AND kind = $2`, userID, "backup_codes", string(encoded))
+	return true, err
+}
+
 func UpdateCredential(ctx context.Context, q Q, credential Credential) (Credential, error) {
 	return scanCredential(q.QueryRow(ctx, `
 		UPDATE credentials SET hash = $3, rotated_at = $4
 		WHERE user_id = $1 AND kind = $2
 		RETURNING user_id, kind, hash, created_at, rotated_at`,
 		credential.UserID, credential.Kind, credential.Hash, credential.RotatedAt))
+}
+
+// ActivateTOTPCredential atomically promotes one pending TOTP credential.
+func ActivateTOTPCredential(ctx context.Context, q Q, userID string) (Credential, error) {
+	return scanCredential(q.QueryRow(ctx, `
+		UPDATE credentials SET kind = 'totp', rotated_at = now()
+		WHERE user_id = $1 AND kind = 'totp_pending'
+		RETURNING user_id, kind, hash, created_at, rotated_at`, userID))
 }
 
 func DeleteCredential(ctx context.Context, q Q, userID, kind string) error {
@@ -131,15 +193,16 @@ func DeleteCredential(ctx context.Context, q Q, userID, kind string) error {
 func scanUser(row pgx.Row) (User, error) {
 	var user User
 	var email, approvedBy pgtype.Text
-	var emailVerifiedAt, approvedAt pgtype.Timestamptz
+	var lockedUntil, emailVerifiedAt, approvedAt pgtype.Timestamptz
 	if err := row.Scan(
 		&user.ID, &user.Username, &email, &user.DisplayName, &user.Status,
-		&user.PermVer, &emailVerifiedAt, &approvedAt, &approvedBy,
+		&user.PermVer, &user.FailedLogins, &lockedUntil, &emailVerifiedAt, &approvedAt, &approvedBy,
 		&user.CreatedAt, &user.UpdatedAt,
 	); err != nil {
 		return User{}, err
 	}
 	user.Email = textPointer(email)
+	user.LockedUntil = timePointer(lockedUntil)
 	user.EmailVerifiedAt = timePointer(emailVerifiedAt)
 	user.ApprovedAt = timePointer(approvedAt)
 	user.ApprovedBy = textPointer(approvedBy)

@@ -15,7 +15,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 
 	status, body := stack.jsonRequest(t, http.MethodPost, "/users", map[string]string{
 		"username": "alice",
-		"password": "alice-password",
+		"password": "alice-password1",
 	}, adminToken)
 	if status != http.StatusCreated {
 		t.Fatalf("target user creation status = %d, want %d: %s", status, http.StatusCreated, body)
@@ -235,7 +235,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 
 	status, _ = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
 		"username": "alice",
-		"password": "alice-password",
+		"password": "alice-password1",
 	}, "")
 	if status != http.StatusUnauthorized {
 		t.Fatalf("disabled user login status = %d, want %d", status, http.StatusUnauthorized)

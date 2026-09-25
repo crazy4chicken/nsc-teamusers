@@ -50,6 +50,7 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 	if audit == nil {
 		audit = auditlog.NewWriter()
 	}
+	cfg = cfg.WithDefaults()
 	h := &adminHandler{q: q, audit: audit, cfg: cfg}
 	router := chi.NewRouter()
 	if authMW != nil {

@@ -18,7 +18,7 @@ func TestRegistrationClosed(t *testing.T) {
 	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/register", map[string]string{
 		"username": "closed-user",
 		"email":    "closed-user@example.test",
-		"password": "correct-password",
+		"password": "correct-password1",
 	}, "")
 	if status != http.StatusForbidden {
 		t.Fatalf("closed registration status = %d, want %d: %s", status, http.StatusForbidden, body)
@@ -47,7 +47,7 @@ func TestRegistrationDuplicateGenericFailure(t *testing.T) {
 	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/register", map[string]string{
 		"username": "duplicate-user",
 		"email":    "first@example.test",
-		"password": "correct-password",
+		"password": "correct-password1",
 	}, "")
 	if status != http.StatusCreated {
 		t.Fatalf("initial registration status = %d, want %d: %s", status, http.StatusCreated, body)
@@ -55,7 +55,7 @@ func TestRegistrationDuplicateGenericFailure(t *testing.T) {
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/register", map[string]string{
 		"username": "duplicate-user",
 		"email":    "second@example.test",
-		"password": "correct-password",
+		"password": "correct-password1",
 	}, "")
 	if status != http.StatusUnprocessableEntity {
 		t.Fatalf("duplicate registration status = %d, want %d: %s", status, http.StatusUnprocessableEntity, body)
@@ -72,7 +72,7 @@ func TestRegistrationApprovalLifecycle(t *testing.T) {
 	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/register", map[string]string{
 		"username":     "approval-user",
 		"email":        "approval-user@example.test",
-		"password":     "correct-password",
+		"password":     "correct-password1",
 		"display_name": "Approval User",
 	}, "")
 	if status != http.StatusCreated {
@@ -86,7 +86,7 @@ func TestRegistrationApprovalLifecycle(t *testing.T) {
 
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
 		"username": "approval-user",
-		"password": "correct-password",
+		"password": "correct-password1",
 	}, "")
 	if status != http.StatusForbidden || !strings.Contains(string(body), "account_pending") {
 		t.Fatalf("pending login = %d %s, want account_pending 403", status, body)
@@ -107,7 +107,7 @@ func TestRegistrationApprovalLifecycle(t *testing.T) {
 
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
 		"username": "approval-user",
-		"password": "correct-password",
+		"password": "correct-password1",
 	}, "")
 	if status != http.StatusForbidden || !strings.Contains(string(body), "account_pending") {
 		t.Fatalf("verified pending login = %d %s, want account_pending 403", status, body)
@@ -125,7 +125,7 @@ func TestRegistrationApprovalLifecycle(t *testing.T) {
 
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
 		"username": "approval-user",
-		"password": "correct-password",
+		"password": "correct-password1",
 	}, "")
 	if status != http.StatusOK {
 		t.Fatalf("approved login status = %d, want %d: %s", status, http.StatusOK, body)
@@ -145,7 +145,7 @@ func TestRegistrationOpenLifecycle(t *testing.T) {
 	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/register", map[string]string{
 		"username": "open-user",
 		"email":    "open-user@example.test",
-		"password": "correct-password",
+		"password": "correct-password1",
 	}, "")
 	if status != http.StatusCreated {
 		t.Fatalf("open registration status = %d, want %d: %s", status, http.StatusCreated, body)
@@ -159,7 +159,7 @@ func TestRegistrationOpenLifecycle(t *testing.T) {
 	}
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
 		"username": "open-user",
-		"password": "correct-password",
+		"password": "correct-password1",
 	}, "")
 	if status != http.StatusOK {
 		t.Fatalf("open login status = %d, want %d: %s", status, http.StatusOK, body)

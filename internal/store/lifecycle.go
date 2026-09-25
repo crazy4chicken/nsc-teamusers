@@ -71,7 +71,7 @@ func ApproveUser(ctx context.Context, q Q, userID, approverID string, at time.Ti
 		UPDATE users
 		SET status = 'active', approved_at = $3, approved_by = $2, updated_at = now()
 		WHERE id = $1 AND email_verified_at IS NOT NULL
-		RETURNING id, username, email, display_name, status, perm_ver, email_verified_at, approved_at, approved_by, created_at, updated_at`,
+		RETURNING id, username, email, display_name, status, perm_ver, failed_logins, locked_until, email_verified_at, approved_at, approved_by, created_at, updated_at`,
 		userID, approverID, at))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound

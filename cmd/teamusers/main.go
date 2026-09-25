@@ -137,6 +137,7 @@ func run(cfg config.Config) error {
 		return fmt.Errorf("initialize authentication: %w", err)
 	}
 	authRoutes := authService.Routes()
+	meRoutes := authService.MeRoutes()
 	authzRoutes := authz.NewRouter(pool, authService.Middleware())
 	adminRoutes := httpapi.NewAdminRouter(pool, auditWriter, authService.Middleware(), cfg)
 	server.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -146,6 +147,10 @@ func run(cfg config.Config) error {
 		}
 		if strings.HasPrefix(r.URL.Path, "/auth/") || r.URL.Path == "/.well-known/jwks.json" {
 			authRoutes.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/me/") || r.URL.Path == "/me" {
+			meRoutes.ServeHTTP(w, r)
 			return
 		}
 		adminRoutes.ServeHTTP(w, r)

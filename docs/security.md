@@ -22,6 +22,35 @@ revocation state. Refresh-token introspection checks the stored session and its
 revocation/expiry state. This divergence preserves stateless access-token
 validation while retaining operational refresh-token status.
 
+## TOTP and recovery credentials
+
+TOTP uses RFC 6238 with SHA-1, six-digit codes, a 30-second step, and a
+one-step clock-skew window. The enrollment secret must be retained in plaintext
+in the `credentials.hash` column because the server must recompute future TOTP
+codes; unlike a password, it cannot be verified from a one-way hash. This is a
+deliberate at-rest tradeoff: protect database backups and deployment database
+credentials as sensitive MFA seed material, restrict credential-table access,
+and rotate/delete the seed when the user disables TOTP.
+The enrollment secret is returned only during pending enrollment. Backup codes
+are returned only once at confirmation. Each displayed
+`xxxx-xxxx-xxxx-xxxx` code has 16 lowercase alphanumeric characters; the
+canonical no-dash lowercase value is hashed with SHA-256, and all ten digests
+are stored in one `backup_codes` credential row as a JSON array. This gives
+about 81 bits of entropy per code without adding Argon2 work to every MFA
+attempt.
+
+Password and MFA failures increment the per-user lockout counter. At the
+configured threshold, the account is locked until the configured deadline;
+successful login resets the counter and deadline. An attacker who can submit
+enough failures can deliberately lock a victim out (a lockout DoS); the
+per-IP limiter is a partial mitigation, not a complete defense against
+distributed sources.
+
+Passwords must meet the configured minimum Unicode length and contain at least
+one letter and one digit. The policy is enforced at registration and when an
+administrator creates or rotates a password credential; weak values are
+rejected rather than silently modified.
+
 ## Trusted client address
 
 The service uses `X-Forwarded-For` only when the direct TCP peer is loopback.
