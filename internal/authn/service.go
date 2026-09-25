@@ -126,6 +126,8 @@ func (s *Service) Routes() chi.Router {
 	router.Post("/auth/login", s.login)
 	router.Post("/auth/register", s.register)
 	router.Post("/auth/verify-email", s.verifyEmail)
+	router.Post("/auth/password-reset/request", s.requestPasswordReset)
+	router.Post("/auth/password-reset/confirm", s.confirmPasswordReset)
 	router.Post("/auth/client-credentials", s.clientCredentials)
 	router.Post("/auth/login/mfa", s.loginMFA)
 	router.Post("/auth/passkey/login/begin", s.beginPasskeyLogin)
@@ -189,6 +191,17 @@ type registerRequest struct {
 type verifyEmailRequest struct {
 	Token string `json:"token"`
 }
+
+type passwordResetRequest struct {
+	Login string `json:"login"`
+}
+
+type passwordResetConfirmRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+var errWeakPasswordReset = errors.New("weak password")
 
 func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	if !s.limiter.allowIP(requestIP(r), s.now()) {
@@ -314,6 +327,146 @@ func (s *Service) verifyEmail(w http.ResponseWriter, r *http.Request) {
 	})
 	if errors.Is(err, store.ErrNotFound) {
 		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// requestPasswordReset deliberately returns the same empty 204 response for
+// every request. Identity lookup and token issuance are kept out of the
+// response path so callers cannot use the endpoint as an account oracle.
+func (s *Service) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	var request passwordResetRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	err := decoder.Decode(&request)
+	login := strings.TrimSpace(request.Login)
+	if err != nil || login == "" {
+		_ = s.limiter.allowIP(requestIP(r), s.now())
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if !s.limiter.allow(requestIP(r), login, s.now()) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	var user store.User
+	if strings.Contains(login, "@") {
+		user, err = store.GetUserByEmail(r.Context(), s.q, login)
+	} else {
+		user, err = store.GetUserByUsername(r.Context(), s.q, login)
+	}
+	if err != nil || user.Status != "active" {
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			slog.Error("password reset lookup failed", "error", err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	plaintext, tokenHash, err := newVerificationToken()
+	if err != nil {
+		slog.Error("password reset token generation failed", "error", err)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	email := ""
+	if user.Email != nil {
+		email = *user.Email
+	}
+	expiresAt := s.now().Add(time.Hour)
+	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		current, err := store.GetUser(ctx, tx, user.ID)
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && current.Status != "active") {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := store.CreateVerificationToken(ctx, tx, store.VerificationToken{
+			UserID: user.ID, Kind: "password_reset", TokenHash: tokenHash, ExpiresAt: expiresAt,
+		}); err != nil {
+			return err
+		}
+		if err := appendNotifyEvent(ctx, tx, "password.reset_requested", map[string]any{
+			"user_id": user.ID, "email": email, "token": plaintext,
+		}); err != nil {
+			return err
+		}
+		return s.appendAuthAudit(ctx, tx, "password.reset_requested", user.ID, user.ID)
+	})
+	if err != nil {
+		slog.Error("password reset request failed", "user_id", user.ID, "error", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// confirmPasswordReset consumes a password-reset token and performs every
+// credential/session mutation in one transaction.
+func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allowIP(requestIP(r), s.now()) {
+		writeRateLimited(w, r)
+		return
+	}
+	var request passwordResetConfirmRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	token := strings.TrimSpace(request.Token)
+	if token == "" {
+		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+
+	var userID string
+	err := store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		consumedUserID, kind, err := store.ConsumeVerificationToken(ctx, tx, hashVerificationToken(token))
+		if errors.Is(err, store.ErrNotFound) || (err == nil && kind != "password_reset") {
+			return store.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		userID = consumedUserID
+		if !ValidatePassword(request.NewPassword, s.cfg.PasswordMinLength) {
+			return errWeakPasswordReset
+		}
+		newHash, err := HashPassword(request.NewPassword)
+		if err != nil {
+			return err
+		}
+		rotatedAt := s.now()
+		credential, err := store.GetCredential(ctx, tx, userID, "password")
+		if errors.Is(err, pgx.ErrNoRows) {
+			_, err = store.CreateCredential(ctx, tx, store.Credential{
+				UserID: userID, Kind: "password", Hash: newHash, RotatedAt: &rotatedAt,
+			})
+		} else if err == nil {
+			credential.Hash = newHash
+			credential.RotatedAt = &rotatedAt
+			_, err = store.UpdateCredential(ctx, tx, credential)
+		}
+		if err != nil {
+			return err
+		}
+		if err := store.DeleteAllSessionsForUser(ctx, tx, userID); err != nil {
+			return err
+		}
+		if err := store.ResetFailedLogins(ctx, tx, userID); err != nil {
+			return err
+		}
+		return s.appendAuthAudit(ctx, tx, "password.reset_completed", userID, userID)
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	if errors.Is(err, errWeakPasswordReset) {
+		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
 		return
 	}
 	if err != nil {

@@ -155,6 +155,37 @@ A valid code returns the normal access and refresh token pair. A backup code is
 deleted atomically when used; replaying it returns `401`. Invalid MFA codes
 count toward the account lockout threshold and requests are rate-limited per IP.
 
+### `POST /auth/password-reset/request` — Public password-reset request
+
+Submit either a username or an email address:
+
+```json
+{"login":"alice@example.test"}
+```
+
+The endpoint always returns `204 No Content` with an empty body, whether the
+login exists, is inactive, or is unknown. This anti-enumeration behavior also
+applies when no reset token is issued. An active matching user receives a
+transactional `notify.password.reset_requested` outbox event containing the
+plaintext one-time token for delivery; the token itself is never returned by
+HTTP. Requests are rate-limited by client IP and normalized login string.
+
+### `POST /auth/password-reset/confirm` — Public password-reset confirmation
+
+Submit the token delivered by the notification service and a replacement
+password:
+
+```json
+{"token":"<one-time-token>","new_password":"new-password2"}
+```
+
+An unexpired, unused token is consumed atomically. The replacement must satisfy
+the configured password policy or the endpoint returns `422` with
+`weak_password`; unknown, expired, used, or wrong-kind tokens return `400` with
+`invalid_token`. Success returns `204`, replaces or creates the password
+credential, revokes every refresh session, clears lockout state, and appends a
+`password.reset_completed` audit record. Token guessing is rate-limited per IP.
+
 ### `POST /auth/register` — Public self-registration
 
 Registration is controlled by `TEAMUSERS_REGISTRATION_MODE`. In `closed` mode
@@ -217,6 +248,7 @@ SHA-256 refresh-token digests:
 [{"id":"<opaque-digest>","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-31T00:00:00Z"}]
 ```
 
+
 `DELETE /me/sessions/{id}` revokes one of the caller's sessions and returns
 `204`. An unknown, revoked, expired, or foreign session ID returns `404` without
 revealing whether another user's session exists.
@@ -246,6 +278,21 @@ On success the pending credential becomes active and ten 16-character lowercase
 alphanumeric backup codes are returned in `xxxx-xxxx-xxxx-xxxx` display form
 under `backup_codes`. Codes are returned only in this response; the canonical
 no-dash lowercase values are stored as SHA-256 digests in one JSON credential.
+
+### `POST /me/totp/backup-codes` — Regenerate backup codes
+
+The caller must send an active user bearer token and the current password:
+
+```json
+{"password":"current-password1"}
+```
+
+An active TOTP credential is required; otherwise the endpoint returns `404`
+with `mfa_not_enrolled`. A wrong password returns `401` with
+`invalid_credentials`. Success returns `200` with ten newly generated
+`xxxx-xxxx-xxxx-xxxx` codes. The old backup-code set is replaced atomically,
+and the plaintext codes are returned only in this response. The operation is
+audited as `mfa.backup_codes_regenerated`.
 
 ### `DELETE /me/totp` — Disable TOTP
 
@@ -483,6 +530,7 @@ Collection list and create methods are registered with both `/collection` and
 | `POST /users/batch` | `{"ids":["01J..."],"op":"disable"}` or `op` `enable`; up to 500 IDs. | `200` `{"results":[{"id":"01J...","ok":true},{"id":"missing","ok":false,"error":"not_found"}]}`. Each row is independent; unknown IDs are row errors. Disable rows use the same session revocation, lockout reset, permission invalidation, audit, and notification transition as the single-user operation. |
 | `POST /users/import` | `text/csv` with header `username,email,display_name,password`; up to 500 data rows. | `200` `{"results":[{"row":2,"username":"alice","ok":true,"id":"01J..."},{"row":3,"username":"bob","ok":false,"error":"weak_password"}]}`. Rows are numbered from the CSV file (the header is row 1). Users are active immediately and receive password credentials; malformed CSV or a missing/invalid header returns `422`. |
 | `POST /users/{id}/credentials` | `{"kind":"service"}` generates a service secret, or `{"kind":"password","password":"..."}` creates/rotates a password credential. | `201` `{"user_id":"01J...","username":"orders-service","kind":"password"}`; service credentials additionally return `client_id` (the username) and one-time `client_secret`. |
+| `DELETE /users/{id}/totp` | No body. | `204`; deletes active/pending TOTP and backup-code credentials and appends `admin.totp_reset`. Unknown users return `404`. |
 | `POST /users/{id}/approve` | No body. | `200` active `User`; emits `notify.user.approved`. |
 | `GET /users/{id}/sessions` | No body. | `200` active sessions as `[{"id":"<opaque-digest>","created_at":"...","expires_at":"..."}]`. |
 | `DELETE /users/{id}/sessions/{sid}` | No body. | `204`; only the session belonging to `{id}` is affected. |

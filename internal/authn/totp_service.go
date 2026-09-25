@@ -21,6 +21,7 @@ import (
 
 var errTOTPAlreadyEnabled = errors.New("TOTP is already enabled")
 var errBackupCodeInvalid = errors.New("backup code is invalid")
+var errMFANotEnrolled = errors.New("MFA is not enrolled")
 
 const backupCodeAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -34,6 +35,7 @@ func (s *Service) MeRoutes() chi.Router {
 		DeleteSession:             s.deleteOwnSession,
 		EnrollTOTP:                s.enrollTOTP,
 		ConfirmTOTP:               s.confirmTOTP,
+		RegenerateBackupCodes:     s.regenerateBackupCodes,
 		DeleteTOTP:                s.deleteTOTP,
 		BeginPasskeyRegistration:  s.beginPasskeyRegistration,
 		FinishPasskeyRegistration: s.finishPasskeyRegistration,
@@ -135,28 +137,7 @@ func (s *Service) confirmTOTP(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w, r)
 		return
 	}
-	codes := make([]string, 0, 10)
-	digests := make([]string, 0, 10)
-	seen := make(map[string]struct{}, 10)
-	for len(codes) < 10 {
-		displayCode, canonicalCode, err := newBackupCode()
-		if err != nil {
-			writeInternal(w, r)
-			return
-		}
-		if _, exists := seen[canonicalCode]; exists {
-			continue
-		}
-		seen[canonicalCode] = struct{}{}
-		digest, ok := backupCodeDigest(canonicalCode)
-		if !ok {
-			writeInternal(w, r)
-			return
-		}
-		codes = append(codes, displayCode)
-		digests = append(digests, digest)
-	}
-	encodedDigests, err := json.Marshal(digests)
+	codes, encodedDigests, err := generateBackupCodes()
 	if err != nil {
 		writeInternal(w, r)
 		return
@@ -181,6 +162,77 @@ func (s *Service) confirmTOTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if errors.Is(err, errTOTPAlreadyEnabled) {
 		writeAuthProblem(w, r, http.StatusConflict, "totp_already_enabled")
+		return
+	}
+	if err != nil {
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, backupCodesResponse{BackupCodes: codes})
+}
+
+type backupCodesRegenerateRequest struct {
+	Password string `json:"password"`
+}
+
+func (s *Service) regenerateBackupCodes(w http.ResponseWriter, r *http.Request) {
+	subject, ok := httpapi.SubjectFrom(r.Context())
+	if !ok || subject.UserID == "" {
+		writeUnauthorized(w, r)
+		return
+	}
+	var request backupCodesRegenerateRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if _, err := store.GetCredential(r.Context(), s.q, subject.UserID, "totp"); errors.Is(err, pgx.ErrNoRows) {
+		writeAuthProblem(w, r, http.StatusNotFound, "mfa_not_enrolled")
+		return
+	} else if err != nil {
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	if request.Password == "" {
+		writeAuthProblem(w, r, http.StatusUnauthorized, "invalid_credentials")
+		return
+	}
+	passwordCredential, err := store.GetCredential(r.Context(), s.q, subject.UserID, "password")
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeAuthProblem(w, r, http.StatusUnauthorized, "invalid_credentials")
+		return
+	}
+	if err != nil {
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	valid, acquired := s.verifyPassword(r.Context(), passwordCredential.Hash, request.Password)
+	if !acquired {
+		writeRateLimited(w, r)
+		return
+	}
+	if !valid {
+		writeAuthProblem(w, r, http.StatusUnauthorized, "invalid_credentials")
+		return
+	}
+
+	codes, encodedDigests, err := generateBackupCodes()
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		if _, err := store.GetCredential(ctx, tx, subject.UserID, "totp"); errors.Is(err, pgx.ErrNoRows) {
+			return errMFANotEnrolled
+		} else if err != nil {
+			return err
+		}
+		if _, err := store.ReplaceBackupCodes(ctx, tx, subject.UserID, encodedDigests); err != nil {
+			return err
+		}
+		return s.appendAuthAudit(ctx, tx, "mfa.backup_codes_regenerated", subject.UserID, subject.UserID)
+	})
+	if errors.Is(err, errMFANotEnrolled) {
+		writeAuthProblem(w, r, http.StatusNotFound, "mfa_not_enrolled")
 		return
 	}
 	if err != nil {
@@ -280,6 +332,33 @@ func newBackupCode() (display, canonical string, err error) {
 	canonical = string(code[:])
 	display = canonical[:4] + "-" + canonical[4:8] + "-" + canonical[8:12] + "-" + canonical[12:]
 	return display, canonical, nil
+}
+
+func generateBackupCodes() ([]string, string, error) {
+	codes := make([]string, 0, 10)
+	digests := make([]string, 0, 10)
+	seen := make(map[string]struct{}, 10)
+	for len(codes) < 10 {
+		displayCode, canonicalCode, err := newBackupCode()
+		if err != nil {
+			return nil, "", err
+		}
+		if _, exists := seen[canonicalCode]; exists {
+			continue
+		}
+		seen[canonicalCode] = struct{}{}
+		digest, ok := backupCodeDigest(canonicalCode)
+		if !ok {
+			return nil, "", errors.New("generated invalid backup code")
+		}
+		codes = append(codes, displayCode)
+		digests = append(digests, digest)
+	}
+	encoded, err := json.Marshal(digests)
+	if err != nil {
+		return nil, "", err
+	}
+	return codes, string(encoded), nil
 }
 
 func backupCodeDigest(code string) (string, bool) {

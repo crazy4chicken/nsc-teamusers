@@ -18,6 +18,7 @@ type MeHandlers struct {
 	DeleteSession             http.HandlerFunc
 	EnrollTOTP                http.HandlerFunc
 	ConfirmTOTP               http.HandlerFunc
+	RegenerateBackupCodes     http.HandlerFunc
 	DeleteTOTP                http.HandlerFunc
 	BeginPasskeyRegistration  http.HandlerFunc
 	FinishPasskeyRegistration http.HandlerFunc
@@ -48,6 +49,7 @@ func NewMeRouter(authMW func(http.Handler) http.Handler, handlers MeHandlers) ch
 	router.Delete("/me/sessions/{id}", handlers.DeleteSession)
 	router.Post("/me/totp/enroll", handlers.EnrollTOTP)
 	router.Post("/me/totp/confirm", handlers.ConfirmTOTP)
+	router.Post("/me/totp/backup-codes", handlers.RegenerateBackupCodes)
 	router.Delete("/me/totp", handlers.DeleteTOTP)
 	router.Post("/me/passkeys/register/begin", handlers.BeginPasskeyRegistration)
 	router.Post("/me/passkeys/register/finish", handlers.FinishPasskeyRegistration)

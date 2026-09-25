@@ -211,6 +211,25 @@ func (h *adminHandler) deleteUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *adminHandler) deleteUserTOTP(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	err := h.withTx(r.Context(), func(ctx context.Context, tx store.Tx) error {
+		if _, err := store.GetUser(ctx, tx, id); err != nil {
+			return err
+		}
+		if err := store.DeleteTOTPCredentials(ctx, tx, id); err != nil {
+			return err
+		}
+		_, err := h.audit.Append(ctx, tx, h.auditEntry(r, nil, "admin.totp_reset", id, nil, nil))
+		return err
+	})
+	if err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *adminHandler) disableUser(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var updated store.User

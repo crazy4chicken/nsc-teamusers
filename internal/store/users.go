@@ -177,6 +177,17 @@ func UpdateCredential(ctx context.Context, q Q, credential Credential) (Credenti
 		credential.UserID, credential.Kind, credential.Hash, credential.RotatedAt))
 }
 
+// ReplaceBackupCodes atomically replaces the single backup-code credential
+// row. It is intended to be called with a transaction query handle.
+func ReplaceBackupCodes(ctx context.Context, q Q, userID, encodedDigests string) (Credential, error) {
+	return scanCredential(q.QueryRow(ctx, `
+        INSERT INTO credentials (user_id, kind, hash, rotated_at)
+        VALUES ($1, 'backup_codes', $2, now())
+        ON CONFLICT (user_id, kind) DO UPDATE
+        SET hash = EXCLUDED.hash, rotated_at = now()
+        RETURNING user_id, kind, hash, created_at, rotated_at`, userID, encodedDigests))
+}
+
 // ActivateTOTPCredential atomically promotes one pending TOTP credential.
 func ActivateTOTPCredential(ctx context.Context, q Q, userID string) (Credential, error) {
 	return scanCredential(q.QueryRow(ctx, `
@@ -187,6 +198,15 @@ func ActivateTOTPCredential(ctx context.Context, q Q, userID string) (Credential
 
 func DeleteCredential(ctx context.Context, q Q, userID, kind string) error {
 	_, err := q.Exec(ctx, `DELETE FROM credentials WHERE user_id = $1 AND kind = $2`, userID, kind)
+	return err
+}
+
+// DeleteTOTPCredentials removes active, pending, and backup-code credentials
+// together for administrative lost-MFA recovery.
+func DeleteTOTPCredentials(ctx context.Context, q Q, userID string) error {
+	_, err := q.Exec(ctx, `
+        DELETE FROM credentials
+        WHERE user_id = $1 AND kind IN ('totp', 'totp_pending', 'backup_codes')`, userID)
 	return err
 }
 

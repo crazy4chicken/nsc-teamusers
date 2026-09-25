@@ -14,6 +14,13 @@ func GetUserByUsername(ctx context.Context, q Q, username string) (User, error) 
 	return GetUserForAuth(ctx, q, username)
 }
 
+// GetUserByEmail loads the identity used by password recovery requests.
+func GetUserByEmail(ctx context.Context, q Q, email string) (User, error) {
+	return scanUser(q.QueryRow(ctx, `
+        SELECT id, username, email, display_name, status, perm_ver, failed_logins, locked_until, email_verified_at, approved_at, approved_by, created_at, updated_at
+        FROM users WHERE email = $1`, email))
+}
+
 // GetUserForAuth loads the identity and lockout state used by an authentication
 // attempt. Lockout columns are returned with the same user projection as the
 // regular user helpers.

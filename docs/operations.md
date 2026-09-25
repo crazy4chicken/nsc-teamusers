@@ -252,6 +252,31 @@ TOTP enrollment is completed through `/me/totp/enroll` and
 codes; operators must direct users to store them in an approved secrets
 facility because the service never displays them again.
 
+## Account recovery operations
+
+Password-reset requests are safe to expose through the public authentication
+boundary: `POST /auth/password-reset/request` always returns an empty `204`,
+including for unknown logins. For an active account, verify that the
+notification outbox contains and eventually delivers the
+`notify.password.reset_requested` event rather than attempting to read a token
+from application logs. The recipient completes the reset with
+`POST /auth/password-reset/confirm`; success revokes all refresh sessions, so
+the user must sign in again on every device.
+
+If a user has lost both their authenticator and all backup codes, use a separate
+administrator account with `iam:users:any` to remove the MFA credentials:
+
+```sh
+curl --fail-with-body -sS -X DELETE "$IAM_BASE_URL/users/$USER_ID/totp" \
+  -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN"
+```
+
+The operation returns `204`, is recorded as `admin.totp_reset`, and deletes the
+active TOTP secret, any pending enrollment, and all backup-code digests. It does
+not reset the password or return credential material. Confirm the user can sign
+in with their password, then have them enroll TOTP again and store the new
+backup codes in an approved secrets facility. An unknown user returns `404`.
+
 ## Notification service integration
 
 Set `TEAMUSERS_NOTIFICATION_ENDPOINTS` to a comma-separated list of notification
@@ -259,9 +284,9 @@ service endpoint URLs and `TEAMUSERS_NOTIFICATION_SECRET` to the HMAC secret
 shared with the notification service. The notifier polls the notification
 outbox every two seconds. It sends notification directives currently emitted by
 this service (`user.created`, `user.disabled`, `user.verification`,
-`user.approved`, and `session.reuse_detected`) as HMAC-signed JSON `POST`
-requests to each configured endpoint. This service decides what to notify and
-when; the notification service owns actual email/SMS delivery.
+`user.approved`, `password.reset_requested`, and `session.reuse_detected`) as
+HMAC-signed JSON `POST` requests to each configured endpoint. This service decides
+what to notify and when; the notification service owns actual email/SMS delivery.
 
 ```json
 {

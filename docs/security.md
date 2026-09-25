@@ -57,6 +57,32 @@ are stored in one `backup_codes` credential row as a JSON array. This gives
 about 81 bits of entropy per code without adding Argon2 work to every MFA
 attempt.
 
+## Password and lost-MFA recovery threat model
+
+Password-reset requests are intentionally non-identifying: the request endpoint
+returns an empty `204` for known, unknown, inactive, malformed, and otherwise
+unsuccessful requests. A matching active account causes a 32-byte random token
+to be stored only as a SHA-256 digest with a one-hour expiry and single-use
+consumption. The plaintext is carried only in the transactional notification
+outbox payload. The endpoint uses both client-IP and normalized-login buckets;
+confirmation uses a separate per-IP bucket to bound token guessing.
+
+Confirmation validates the configured password policy, replaces or creates the
+password credential, revokes every refresh session, and clears lockout state in
+one transaction. The reset-request audit action is written only when a token
+and notification were committed, so audit records do not turn the public
+request endpoint into an account-existence oracle. Reset completion is audited
+against the recovered user.
+
+Backup-code regeneration requires an authenticated user bearer, an active TOTP
+credential, and the current password. Ten new random codes replace the prior
+single JSON digest row atomically; old codes therefore fail immediately and
+plaintext codes are returned only once. If a user loses both their authenticator
+and backup codes, an administrator with `iam:users:any` may delete that user's
+active/pending TOTP and backup credentials through `DELETE /users/{id}/totp`.
+That operation is transactional, audited as `admin.totp_reset`, and deliberately
+does not reveal credential material.
+
 Password and MFA failures increment the per-user lockout counter. At the
 configured threshold, the account is locked until the configured deadline;
 successful login resets the counter and deadline. An attacker who can submit
