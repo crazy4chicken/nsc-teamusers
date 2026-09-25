@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"teamusers/internal/authn"
 	"teamusers/internal/store"
@@ -98,13 +97,9 @@ func TestBackupCodeRegeneration(t *testing.T) {
 	}
 	var enrollment totpEnrollResponse
 	decodeResponse(t, body, &enrollment)
-	code, err := authn.TOTPCode(enrollment.Secret, time.Now().UTC())
+	_, body, err := confirmTOTP(t, stack, enrollment.Secret, accessToken)
 	if err != nil {
-		t.Fatalf("generate TOTP confirmation code: %v", err)
-	}
-	status, body = stack.jsonRequest(t, http.MethodPost, "/me/totp/confirm", map[string]string{"code": code}, accessToken)
-	if status != http.StatusOK {
-		t.Fatalf("TOTP confirmation = %d: %s", status, body)
+		t.Fatal(err)
 	}
 	var original backupCodesResponse
 	decodeResponse(t, body, &original)
@@ -174,13 +169,8 @@ func TestAdminTOTPReset(t *testing.T) {
 	}
 	var enrollment totpEnrollResponse
 	decodeResponse(t, body, &enrollment)
-	code, err := authn.TOTPCode(enrollment.Secret, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("generate target TOTP code: %v", err)
-	}
-	status, body = stack.jsonRequest(t, http.MethodPost, "/me/totp/confirm", map[string]string{"code": code}, targetAccess)
-	if status != http.StatusOK {
-		t.Fatalf("target TOTP confirmation = %d: %s", status, body)
+	if _, _, err := confirmTOTP(t, stack, enrollment.Secret, targetAccess); err != nil {
+		t.Fatal(err)
 	}
 
 	status, body = stack.jsonRequest(t, http.MethodDelete, "/users/"+target.ID+"/totp", nil, adminToken)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -43,13 +44,12 @@ func TestTOTPEnrollmentConfirmAndMFALogin(t *testing.T) {
 		t.Fatalf("TOTP enrollment = %+v, want secret and otpauth URL", enrollment)
 	}
 
-	code, err := authn.TOTPCode(enrollment.Secret, time.Now().UTC())
+	code, body, err := confirmTOTP(t, stack, enrollment.Secret, accessToken)
 	if err != nil {
-		t.Fatalf("generate confirmation code: %v", err)
+		t.Fatal(err)
 	}
-	status, body = stack.jsonRequest(t, http.MethodPost, "/me/totp/confirm", map[string]string{"code": code}, accessToken)
-	if status != http.StatusOK {
-		t.Fatalf("TOTP confirm status = %d, want %d: %s", status, http.StatusOK, body)
+	if code == "" {
+		t.Fatal("TOTP confirmation returned an empty code")
 	}
 	var backup backupCodesResponse
 	decodeResponse(t, body, &backup)
@@ -114,9 +114,20 @@ func TestTOTPEnrollmentConfirmAndMFALogin(t *testing.T) {
 		t.Fatalf("MFA challenge = %+v, want required token", challenge)
 	}
 
-	code, err = authn.TOTPCode(enrollment.Secret, time.Now().UTC())
+	status, body = stack.jsonRequest(t, http.MethodGet, "/users", nil, challenge.MFAToken)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("MFA token used as access token status = %d, want %d: %s", status, http.StatusUnauthorized, body)
+	}
+	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login/mfa", map[string]string{
+		"mfa_token": accessToken,
+		"code":      "000000",
+	}, "")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("access token used as MFA token status = %d, want %d: %s", status, http.StatusUnauthorized, body)
+	}
+	code, err = currentTOTPCode(t, enrollment.Secret)
 	if err != nil {
-		t.Fatalf("generate login code: %v", err)
+		t.Fatal(err)
 	}
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login/mfa", map[string]string{
 		"mfa_token": challenge.MFAToken,
@@ -177,13 +188,8 @@ func TestMFALockoutExpires(t *testing.T) {
 	}
 	var enrollment totpEnrollResponse
 	decodeResponse(t, body, &enrollment)
-	code, err := authn.TOTPCode(enrollment.Secret, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("generate lockout confirmation code: %v", err)
-	}
-	status, body = stack.jsonRequest(t, http.MethodPost, "/me/totp/confirm", map[string]string{"code": code}, accessToken)
-	if status != http.StatusOK {
-		t.Fatalf("TOTP lockout confirm status = %d, want %d: %s", status, http.StatusOK, body)
+	if _, _, err := confirmTOTP(t, stack, enrollment.Secret, accessToken); err != nil {
+		t.Fatal(err)
 	}
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
 		"username": user.Username,
@@ -205,12 +211,18 @@ func TestMFALockoutExpires(t *testing.T) {
 	}
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login/mfa", map[string]string{
 		"mfa_token": challenge.MFAToken,
-		"code":      code,
+		"code":      "000000",
 	}, "")
 	if status != http.StatusLocked {
 		t.Fatalf("locked MFA status = %d, want %d: %s", status, http.StatusLocked, body)
 	}
-	time.Sleep(1200 * time.Millisecond)
+	if _, err := stack.database.pool.Exec(context.Background(), `UPDATE users SET locked_until = now() - interval '1 second' WHERE id = $1`, user.ID); err != nil {
+		t.Fatalf("expire MFA lockout in database: %v", err)
+	}
+	code, err := currentTOTPCode(t, enrollment.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login/mfa", map[string]string{
 		"mfa_token": challenge.MFAToken,
 		"code":      code,
@@ -244,4 +256,28 @@ func TestWeakPasswordsAreRejected(t *testing.T) {
 	if status != http.StatusUnprocessableEntity || !strings.Contains(string(body), "weak_password") {
 		t.Fatalf("weak admin credential = %d %s, want weak_password 422", status, body)
 	}
+}
+func currentTOTPCode(t *testing.T, secret string) (string, error) {
+	t.Helper()
+	return authn.TOTPCode(secret, time.Now().UTC())
+}
+
+func confirmTOTP(t *testing.T, stack *integrationStack, secret, accessToken string) (string, []byte, error) {
+	t.Helper()
+	code, err := currentTOTPCode(t, secret)
+	if err != nil {
+		return "", nil, fmt.Errorf("generate TOTP confirmation code: %w", err)
+	}
+	status, body := stack.jsonRequest(t, http.MethodPost, "/me/totp/confirm", map[string]string{"code": code}, accessToken)
+	if status == http.StatusUnauthorized {
+		code, err = authn.TOTPCode(secret, time.Now().UTC().Add(30*time.Second))
+		if err != nil {
+			return "", nil, fmt.Errorf("generate next-step TOTP confirmation code: %w", err)
+		}
+		status, body = stack.jsonRequest(t, http.MethodPost, "/me/totp/confirm", map[string]string{"code": code}, accessToken)
+	}
+	if status != http.StatusOK {
+		return "", body, fmt.Errorf("TOTP confirm status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	return code, body, nil
 }

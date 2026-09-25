@@ -97,6 +97,38 @@ func TestAdminUsersEndpoints(t *testing.T) {
 	if status != http.StatusBadRequest {
 		t.Fatalf("password credential without password status = %d, want %d", status, http.StatusBadRequest)
 	}
+	status, body = stack.jsonRequest(t, http.MethodPost, "/users/"+alice.ID+"/credentials", map[string]string{
+		"kind":     "password",
+		"password": "NewAlicePassword1",
+	}, adminToken)
+	if status != http.StatusCreated {
+		t.Fatalf("password credential rotation status = %d, want %d: %s", status, http.StatusCreated, body)
+	}
+	var rotated struct {
+		UserID string `json:"user_id"`
+		Kind   string `json:"kind"`
+	}
+	decodeResponse(t, body, &rotated)
+	if rotated.UserID != alice.ID || rotated.Kind != "password" {
+		t.Fatalf("rotated credential = %+v, want alice password credential", rotated)
+	}
+	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
+		"username": "alice",
+		"password": "alice-password1",
+	}, "")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("login with rotated-out password status = %d, want %d: %s", status, http.StatusUnauthorized, body)
+	}
+	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
+		"username": "alice",
+		"password": "NewAlicePassword1",
+	}, "")
+	if status != http.StatusOK {
+		t.Fatalf("login with rotated password status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	var rotatedPair tokenPair
+	decodeResponse(t, body, &rotatedPair)
+	assertTokenPair(t, rotatedPair)
 	status, _ = stack.rawRequest(t, http.MethodPost, "/users", []byte("{"), adminToken, map[string]string{
 		"Content-Type": "application/json",
 	})

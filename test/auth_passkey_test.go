@@ -36,11 +36,17 @@ func TestPasskeyHTTPPaths(t *testing.T) {
 		t.Fatalf("register options = %+v, want challenge and none attestation", begin.PublicKey)
 	}
 
-	status, _ = stack.rawRequest(t, http.MethodPost, "/me/passkeys/register/finish", []byte(`{"garbage":true}`), accessToken, map[string]string{
-		"Content-Type": "application/json",
-	})
-	if status != http.StatusBadRequest && status != http.StatusUnauthorized {
-		t.Fatalf("garbage register finish status = %d, want 400 or 401", status)
+	status, body = stack.rawRequest(t, http.MethodPost, "/me/passkeys/register/finish", []byte(`{"garbage":true}`), accessToken, nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("garbage register finish status = %d, want %d: %s", status, http.StatusBadRequest, body)
+	}
+	var problem struct {
+		Title  string `json:"title"`
+		Status int    `json:"status"`
+	}
+	decodeResponse(t, body, &problem)
+	if problem.Status != http.StatusBadRequest || problem.Title != "Invalid Request" {
+		t.Fatalf("garbage register finish problem = %+v, want Invalid Request 400", problem)
 	}
 
 	status, body = stack.jsonRequest(t, http.MethodGet, "/me/passkeys", nil, accessToken)
