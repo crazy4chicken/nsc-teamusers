@@ -11,14 +11,18 @@ import (
 // kept in httpapi so future /me resources can be mounted without coupling the
 // HTTP routing package to authentication internals.
 type MeHandlers struct {
-	Profile        http.HandlerFunc
-	PatchProfile   http.HandlerFunc
-	ChangePassword http.HandlerFunc
-	ListSessions   http.HandlerFunc
-	DeleteSession  http.HandlerFunc
-	EnrollTOTP     http.HandlerFunc
-	ConfirmTOTP    http.HandlerFunc
-	DeleteTOTP     http.HandlerFunc
+	Profile                   http.HandlerFunc
+	PatchProfile              http.HandlerFunc
+	ChangePassword            http.HandlerFunc
+	ListSessions              http.HandlerFunc
+	DeleteSession             http.HandlerFunc
+	EnrollTOTP                http.HandlerFunc
+	ConfirmTOTP               http.HandlerFunc
+	DeleteTOTP                http.HandlerFunc
+	BeginPasskeyRegistration  http.HandlerFunc
+	FinishPasskeyRegistration http.HandlerFunc
+	ListPasskeys              http.HandlerFunc
+	DeletePasskey             http.HandlerFunc
 }
 
 // SessionResponse is the intentionally limited refresh-session representation
@@ -45,6 +49,10 @@ func NewMeRouter(authMW func(http.Handler) http.Handler, handlers MeHandlers) ch
 	router.Post("/me/totp/enroll", handlers.EnrollTOTP)
 	router.Post("/me/totp/confirm", handlers.ConfirmTOTP)
 	router.Delete("/me/totp", handlers.DeleteTOTP)
+	router.Post("/me/passkeys/register/begin", handlers.BeginPasskeyRegistration)
+	router.Post("/me/passkeys/register/finish", handlers.FinishPasskeyRegistration)
+	router.Get("/me/passkeys", handlers.ListPasskeys)
+	router.Delete("/me/passkeys/{credID}", handlers.DeletePasskey)
 	return router
 }
 

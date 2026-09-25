@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -68,6 +69,7 @@ type Service struct {
 	dummyHash  string
 	argonSlots chan struct{}
 	audit      *auditlog.Writer
+	webAuthn   *webauthn.WebAuthn
 	now        func() time.Time
 }
 
@@ -88,6 +90,10 @@ func New(deps Deps) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	webAuthn, err := newWebAuthn(deps.Config)
+	if err != nil {
+		return nil, err
+	}
 	if deps.Audit == nil {
 		deps.Audit = auditlog.NewWriter()
 	}
@@ -101,6 +107,7 @@ func New(deps Deps) (*Service, error) {
 		dummyHash:  newDummyPasswordHash(),
 		argonSlots: make(chan struct{}, argonSlots),
 		audit:      deps.Audit,
+		webAuthn:   webAuthn,
 		now:        time.Now,
 	}
 	if pool != nil {
@@ -121,6 +128,8 @@ func (s *Service) Routes() chi.Router {
 	router.Post("/auth/verify-email", s.verifyEmail)
 	router.Post("/auth/client-credentials", s.clientCredentials)
 	router.Post("/auth/login/mfa", s.loginMFA)
+	router.Post("/auth/passkey/login/begin", s.beginPasskeyLogin)
+	router.Post("/auth/passkey/login/finish", s.finishPasskeyLogin)
 	router.Post("/auth/refresh", s.refresh)
 	router.Post("/auth/logout", s.logout)
 	router.Post("/auth/introspect", s.introspect)

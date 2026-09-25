@@ -27,10 +27,14 @@ const (
 	envLockoutThreshold      = "TEAMUSERS_LOCKOUT_THRESHOLD"
 	envLockoutDuration       = "TEAMUSERS_LOCKOUT_DURATION"
 	envPasswordMinLength     = "TEAMUSERS_PASSWORD_MIN_LENGTH"
+	envWebAuthnRPID          = "TEAMUSERS_WEBAUTHN_RP_ID"
+	envWebAuthnOrigin        = "TEAMUSERS_WEBAUTHN_ORIGIN"
 
 	DefaultLockoutThreshold  = 5
 	DefaultLockoutDuration   = 15 * time.Minute
 	DefaultPasswordMinLength = 12
+	DefaultWebAuthnRPID      = "localhost"
+	DefaultWebAuthnOrigin    = "http://localhost"
 )
 
 // Config is the process configuration. Values are resolved in flag, env, and
@@ -49,6 +53,8 @@ type Config struct {
 	LockoutThreshold      int           `json:"lockout_threshold"`
 	LockoutDuration       time.Duration `json:"lockout_duration"`
 	PasswordMinLength     int           `json:"password_min_length"`
+	WebAuthnRPID          string        `json:"webauthn_rp_id"`
+	WebAuthnOrigin        string        `json:"webauthn_origin"`
 }
 
 // Load reads configuration from the process environment and optional command
@@ -74,6 +80,8 @@ func Load(args ...string) (Config, error) {
 	lockoutThreshold := envOrDefault(envLockoutThreshold, strconv.Itoa(DefaultLockoutThreshold))
 	lockoutDuration := envOrDefault(envLockoutDuration, DefaultLockoutDuration.String())
 	passwordMinLength := envOrDefault(envPasswordMinLength, strconv.Itoa(DefaultPasswordMinLength))
+	webauthnRPID := envOrDefault(envWebAuthnRPID, DefaultWebAuthnRPID)
+	webauthnOrigin := envOrDefault(envWebAuthnOrigin, DefaultWebAuthnOrigin)
 
 	fs.StringVar(&connectionString, "connection-string", connectionString, "PostgreSQL connection string")
 	fs.StringVar(&listenAddress, "listen-address", listenAddress, "HTTP listen address")
@@ -88,6 +96,8 @@ func Load(args ...string) (Config, error) {
 	fs.StringVar(&lockoutThreshold, "lockout-threshold", lockoutThreshold, "failed login attempts before account lockout")
 	fs.StringVar(&lockoutDuration, "lockout-duration", lockoutDuration, "account lockout duration")
 	fs.StringVar(&passwordMinLength, "password-min-length", passwordMinLength, "minimum password length")
+	fs.StringVar(&webauthnRPID, "webauthn-rp-id", webauthnRPID, "WebAuthn relying-party ID")
+	fs.StringVar(&webauthnOrigin, "webauthn-origin", webauthnOrigin, "WebAuthn relying-party origin")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -132,6 +142,8 @@ func Load(args ...string) (Config, error) {
 		LockoutThreshold:      threshold,
 		LockoutDuration:       duration,
 		PasswordMinLength:     minLength,
+		WebAuthnRPID:          strings.TrimSpace(webauthnRPID),
+		WebAuthnOrigin:        strings.TrimSpace(webauthnOrigin),
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -150,6 +162,12 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.PasswordMinLength == 0 {
 		c.PasswordMinLength = DefaultPasswordMinLength
+	}
+	if strings.TrimSpace(c.WebAuthnRPID) == "" {
+		c.WebAuthnRPID = DefaultWebAuthnRPID
+	}
+	if strings.TrimSpace(c.WebAuthnOrigin) == "" {
+		c.WebAuthnOrigin = DefaultWebAuthnOrigin
 	}
 	return c
 }

@@ -27,14 +27,18 @@ const backupCodeAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 // MeRoutes returns the authenticated self-service routes owned by Service.
 func (s *Service) MeRoutes() chi.Router {
 	return httpapi.NewMeRouter(s.Middleware(), httpapi.MeHandlers{
-		Profile:        s.profile,
-		PatchProfile:   s.patchProfile,
-		ChangePassword: s.changePassword,
-		ListSessions:   s.listOwnSessions,
-		DeleteSession:  s.deleteOwnSession,
-		EnrollTOTP:     s.enrollTOTP,
-		ConfirmTOTP:    s.confirmTOTP,
-		DeleteTOTP:     s.deleteTOTP,
+		Profile:                   s.profile,
+		PatchProfile:              s.patchProfile,
+		ChangePassword:            s.changePassword,
+		ListSessions:              s.listOwnSessions,
+		DeleteSession:             s.deleteOwnSession,
+		EnrollTOTP:                s.enrollTOTP,
+		ConfirmTOTP:               s.confirmTOTP,
+		DeleteTOTP:                s.deleteTOTP,
+		BeginPasskeyRegistration:  s.beginPasskeyRegistration,
+		FinishPasskeyRegistration: s.finishPasskeyRegistration,
+		ListPasskeys:              s.listPasskeys,
+		DeletePasskey:             s.deletePasskey,
 	})
 }
 

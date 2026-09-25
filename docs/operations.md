@@ -24,9 +24,17 @@ default**. The supported environment variables are:
 | `TEAMUSERS_LOCKOUT_THRESHOLD` | `5` | Failed password or MFA attempts before lockout. |
 | `TEAMUSERS_LOCKOUT_DURATION` | `15m` | Duration of an account lockout; parsed by `time.ParseDuration`. |
 | `TEAMUSERS_PASSWORD_MIN_LENGTH` | `12` | Minimum Unicode password length; passwords also require a letter and digit. |
+| `TEAMUSERS_WEBAUTHN_RP_ID` | `localhost` | WebAuthn relying-party ID. |
+| `TEAMUSERS_WEBAUTHN_ORIGIN` | `http://localhost` | WebAuthn browser origin. |
 
 Do not put credentials in the repository. Use Nekostick's protected service
 configuration or another approved secret facility, and restrict read access.
+
+For production, set both WebAuthn variables to the public relying-party
+configuration: `TEAMUSERS_WEBAUTHN_RP_ID` must be the effective public domain and
+`TEAMUSERS_WEBAUTHN_ORIGIN` must be the complete HTTPS origin (including the
+port when it is non-default). Do not leave the localhost defaults enabled on a
+public deployment; the origin is verified during every ceremony.
 
 ## First run
 

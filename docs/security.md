@@ -69,6 +69,30 @@ one letter and one digit. The policy is enforced at registration and when an
 administrator creates or rotates a password credential; weak values are
 rejected rather than silently modified.
 
+## Passkey and WebAuthn ceremonies
+
+WebAuthn ceremony sessions are stored server-side for five minutes. Finishing a
+ceremony atomically deletes the matching challenge only while it is unexpired;
+expired, consumed, and unknown challenges are indistinguishable. This makes a
+challenge single-use even when two finish requests race.
+
+Registration requests `attestation = "none"` and accepts only the resulting
+unattributed credential policy. The service does not collect or retain
+attestation identity claims, so deployments that require authenticator
+allow-lists need a separate policy before enabling enrollment.
+
+Login supports both username-bound assertions and discoverable (usernameless)
+assertions. A username supplied to login begin is not an identity oracle:
+unknown users and users without a passkey return the same generic
+authentication problem. Discoverable login resolves the account only after the
+authenticator returns its credential ID and user handle; status and lockout
+checks still run before token issuance.
+
+Username-bound begin performs a lookup before issuing assertion options, so its
+timing can differ from a discoverable begin. The endpoint is IP- and
+username-rate-limited, and unknown users still receive the same generic
+authentication problem.
+
 ## Trusted client address
 
 The service uses `X-Forwarded-For` only when the direct TCP peer is loopback.

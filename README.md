@@ -7,12 +7,21 @@ and transactional audit/outbox events.
 
 ## Features
 
-- Password and service-account token issuance with EdDSA JWTs and JWKS.
-- Refresh-token rotation, family reuse detection, and permission-version checks.
-- RBAC plus conditional bindings for data-driven `resource:action:scope` permissions.
-- Runtime `/auth/*` and `/authz/*` APIs plus an authenticated admin CRUD plane.
-- Append-only audit log, PostgreSQL outbox relay, NATS JetStream, and HMAC-signed HTTP notifications to a notification service.
-- `healthz`, `readyz`, `run`, `status`, and `doctor` surfaces for supervision.
+- Password, TOTP 2FA (with backup codes), and passkey/WebAuthn authentication
+  with EdDSA JWTs and JWKS.
+- Self-service registration with email verification and admin approval modes.
+- Refresh-token rotation, family reuse detection, account lockout, and
+  permission-version checks.
+- Self-service `/me` plane: profile, password change, session and passkey
+  management.
+- RBAC plus conditional bindings for data-driven `resource:action:scope`
+  permissions; the admin plane itself is gated by `iam:*:any` permissions.
+- Runtime `/auth/*` and `/authz/*` APIs plus the authenticated admin CRUD plane
+  with batch operations and CSV user import.
+- Append-only audit log, PostgreSQL outbox relay, NATS JetStream, and
+  HMAC-signed HTTP notifications to a notification service.
+- `healthz`, `readyz`, `run`, `status`, `doctor`, and `bootstrap-admin`
+  surfaces for supervision and initial setup.
 - Static Linux/amd64 binary with Nekostick supervised-child deployment.
 
 ## Quickstart: local development

@@ -252,6 +252,69 @@ no-dash lowercase values are stored as SHA-256 digests in one JSON credential.
 Submit a valid TOTP or backup code. The active TOTP and all backup credentials
 are deleted, and the endpoint returns `204 No Content`.
 
+### `POST /me/passkeys/register/begin` — Begin passkey registration
+
+The caller must send an active user bearer token. The request body is empty. The
+response is the WebAuthn credential-creation options object; the `publicKey`
+member includes the RP (`rp.id = "localhost"` by default), user handle, a
+base64url challenge, and `attestation = "none"`:
+
+```json
+{
+  "publicKey": {
+    "rp": {"name":"teamusers","id":"localhost"},
+    "user": {"name":"alice","displayName":"Alice","id":"..."},
+    "challenge":"<base64url>",
+    "pubKeyCredParams":[{"type":"public-key","alg":-7}],
+    "attestation":"none"
+  }
+}
+```
+
+The server stores the ceremony session for five minutes. `POST
+/me/passkeys/register/finish` accepts the browser's standard
+`PublicKeyCredential` creation response and returns `204` after the credential
+is stored. A challenge is single-use; malformed, expired, or replayed
+responses return a problem response.
+
+### `GET /me/passkeys` and `DELETE /me/passkeys/{credID}` — Manage passkeys
+
+`GET /me/passkeys` returns only credential identifiers and their enrollment
+timestamp; public-key and attestation material is never returned:
+
+```json
+[{"id":"<base64url credential id>","created_at":"2026-01-01T00:00:00Z"}]
+```
+
+`DELETE /me/passkeys/{credID}` uses the same unpadded base64url identifier and
+returns `204`. An unknown identifier returns `404` without revealing another
+credential.
+
+### `POST /auth/passkey/login/begin` — Begin passkey login
+
+This public endpoint accepts an optional username:
+
+```json
+{"username":"alice"}
+```
+
+An empty object starts a discoverable (usernameless) ceremony. The response is
+the WebAuthn credential-request options object with a five-minute,
+single-use challenge. An unknown username and an account without passkeys
+return the same generic authentication problem.
+
+### `POST /auth/passkey/login/finish` — Finish passkey login
+
+Submit the browser's standard `PublicKeyCredential` assertion response. A
+successful assertion returns the normal full token pair:
+
+```json
+{"access_token":"<JWT>","refresh_token":"<opaque token>","token_type":"Bearer","expires_in":600}
+```
+
+The active-user and account-lockout checks are the same as password login;
+failed assertions count toward the configured lockout threshold.
+
 ### `POST /auth/verify-email` — Public email verification
 
 Submit the token delivered through the notification service:
