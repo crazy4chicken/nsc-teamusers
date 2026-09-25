@@ -403,6 +403,8 @@ Collection list and create methods are registered with both `/collection` and
 | `PATCH /users/{id}` | Any of `username`, `email`, `display_name`, `status`; `status` is `active` or `disabled`. | `200` updated `User`. |
 | `DELETE /users/{id}` | No body. | `204`. |
 | `POST /users/{id}/disable` | No body. | `200` disabled `User`. |
+| `POST /users/batch` | `{"ids":["01J..."],"op":"disable"}` or `op` `enable`; up to 500 IDs. | `200` `{"results":[{"id":"01J...","ok":true},{"id":"missing","ok":false,"error":"not_found"}]}`. Each row is independent; unknown IDs are row errors. Disable rows use the same session revocation, lockout reset, permission invalidation, audit, and notification transition as the single-user operation. |
+| `POST /users/import` | `text/csv` with header `username,email,display_name,password`; up to 500 data rows. | `200` `{"results":[{"row":2,"username":"alice","ok":true,"id":"01J..."},{"row":3,"username":"bob","ok":false,"error":"weak_password"}]}`. Rows are numbered from the CSV file (the header is row 1). Users are active immediately and receive password credentials; malformed CSV or a missing/invalid header returns `422`. |
 | `POST /users/{id}/credentials` | `{"kind":"service"}` generates a service secret, or `{"kind":"password","password":"..."}` creates/rotates a password credential. | `201` `{"user_id":"01J...","username":"orders-service","kind":"password"}`; service credentials additionally return `client_id` (the username) and one-time `client_secret`. |
 | `POST /users/{id}/approve` | No body. | `200` active `User`; emits `notify.user.approved`. |
 | `GET /users/{id}/sessions` | No body. | `200` active sessions as `[{"id":"<opaque-digest>","created_at":"...","expires_at":"..."}]`. |
@@ -446,6 +448,7 @@ not completed. An unknown user returns `404`.
 | `PATCH /groups/{id}` | Any of `team_id`, `name`. | `200` updated `Group`. |
 | `DELETE /groups/{id}` | No body. | `204`. |
 | `PUT /groups/{id}/members` | `{"user_id":"01J-user","expires_at":"2026-02-01T00:00:00Z"}`; `expires_at` is optional. | `200` `Membership`. |
+| `POST /groups/{id}/members/batch` | `{"user_ids":["01J-user", "01J-other"]}`; up to 500 IDs. | `200` `{"results":[{"id":"01J-user","ok":true},{"id":"01J-other","ok":false,"error":"already_member"}]}`. Duplicate or unknown users are row errors; an unknown group returns `404` for the whole request. Successful rows bump each affected user's `perm_ver` and append `membership.created` audit entries. |
 | `DELETE /groups/{id}/members` | `{"user_id":"01J-user"}`. | `204`. |
 | `DELETE /groups/{id}/members/{userID}` | No body. | `204`. |
 

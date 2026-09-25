@@ -215,33 +215,8 @@ func (h *adminHandler) disableUser(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var updated store.User
 	err := h.withTx(r.Context(), func(ctx context.Context, tx store.Tx) error {
-		before, err := store.GetUser(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		candidate := before
-		candidate.Status = "disabled"
-		updated, err = store.UpdateUser(ctx, tx, candidate)
-		if err != nil {
-			return err
-		}
-		if err := store.ResetFailedLogins(ctx, tx, id); err != nil {
-			return err
-		}
-		updated.FailedLogins = 0
-		updated.LockedUntil = nil
-		version, err := store.BumpUserPermVer(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		updated.PermVer = version
-		if err := store.RevokeAllUserSessions(ctx, tx, id, "user disabled"); err != nil {
-			return err
-		}
-		if err := appendUserDisabledEvents(ctx, tx, id, nil); err != nil {
-			return err
-		}
-		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, nil, "user.disabled", id, before, updated))
+		var err error
+		updated, err = h.applyUserStatus(ctx, tx, r, id, "disabled", "user.disabled")
 		return err
 	})
 	if err != nil {

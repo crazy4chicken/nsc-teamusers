@@ -216,6 +216,18 @@ account_locked` before password verification. A successful password-only login
 or MFA completion resets both fields. Disabling a user through the admin API
 also resets the fields. After the duration elapses, the user can try again.
 
+## Bulk admin operations
+
+The admin batch endpoints cap each request at 500 user IDs or CSV data rows. A
+status or membership batch commits each successful row independently, so an
+unknown user does not roll back other rows. An unknown group is checked before
+processing membership rows and rejects the whole request. CSV imports require
+the exact `username,email,display_name,password` header and create active users
+without registration or email-verification side effects. Review the returned
+per-row `error` values and reconcile failed rows before retrying; retries of a
+successful membership row are reported as `already_member`.
+
+
 TOTP enrollment is completed through `/me/totp/enroll` and
 `/me/totp/confirm`. The confirmation response contains ten one-time backup
 codes; operators must direct users to store them in an approved secrets
