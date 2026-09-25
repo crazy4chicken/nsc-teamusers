@@ -11,6 +11,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 	ctx := context.Background()
 
 	admin := seedPasswordUser(t, ctx, stack.database.pool, "admin", "admin-password")
+	bootstrapTestAdmin(t, ctx, stack.database.pool, admin.ID)
 	adminToken := loginUser(t, stack, admin.Username, "admin-password")
 
 	status, body := stack.jsonRequest(t, http.MethodPost, "/users", map[string]string{
@@ -49,7 +50,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 	status, body = stack.jsonRequest(t, http.MethodPost, "/teams", map[string]string{
 		"slug": "orders",
 		"name": "Orders",
-	}, serviceToken)
+	}, adminToken)
 	if status != http.StatusCreated {
 		t.Fatalf("team creation status = %d, want %d: %s", status, http.StatusCreated, body)
 	}
@@ -62,7 +63,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 	status, body = stack.jsonRequest(t, http.MethodPost, "/groups", map[string]string{
 		"team_id": team.ID,
 		"name":    "operators",
-	}, serviceToken)
+	}, adminToken)
 	if status != http.StatusCreated {
 		t.Fatalf("group creation status = %d, want %d: %s", status, http.StatusCreated, body)
 	}
@@ -77,7 +78,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 			"key":           key,
 			"description":   "integration permission",
 			"registered_by": admin.ID,
-		}, serviceToken)
+		}, adminToken)
 		if status != http.StatusCreated {
 			t.Fatalf("permission %s status = %d, want %d: %s", key, status, http.StatusCreated, body)
 		}
@@ -86,7 +87,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 	status, body = stack.jsonRequest(t, http.MethodPost, "/roles", map[string]string{
 		"team_id": team.ID,
 		"name":    "operator",
-	}, serviceToken)
+	}, adminToken)
 	if status != http.StatusCreated {
 		t.Fatalf("role creation status = %d, want %d: %s", status, http.StatusCreated, body)
 	}
@@ -98,7 +99,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 
 	status, body = stack.jsonRequest(t, http.MethodPut, "/roles/"+role.ID+"/permissions", map[string]any{
 		"permission_keys": []string{"order:read:team", "order:write:team", "doc:read:own"},
-	}, serviceToken)
+	}, adminToken)
 	if status != http.StatusOK {
 		t.Fatalf("role permissions status = %d, want %d: %s", status, http.StatusOK, body)
 	}
@@ -108,14 +109,14 @@ func TestAuthzEndToEnd(t *testing.T) {
 		"role_id":      role.ID,
 		"subject_kind": "group",
 		"subject_id":   group.ID,
-	}, serviceToken)
+	}, adminToken)
 	if status != http.StatusCreated {
 		t.Fatalf("group binding status = %d, want %d: %s", status, http.StatusCreated, body)
 	}
 
 	status, body = stack.jsonRequest(t, http.MethodPut, "/groups/"+group.ID+"/members", map[string]string{
 		"user_id": target.ID,
-	}, serviceToken)
+	}, adminToken)
 	if status != http.StatusOK {
 		t.Fatalf("group membership status = %d, want %d: %s", status, http.StatusOK, body)
 	}
@@ -164,7 +165,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 	// indistinguishable from a successful condition evaluation.
 	status, body = stack.jsonRequest(t, http.MethodPut, "/roles/"+role.ID+"/permissions", map[string]any{
 		"permission_keys": []string{"order:read:team", "order:write:team"},
-	}, serviceToken)
+	}, adminToken)
 	if status != http.StatusOK {
 		t.Fatalf("role permission narrowing status = %d, want %d: %s", status, http.StatusOK, body)
 	}
@@ -172,7 +173,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 	status, body = stack.jsonRequest(t, http.MethodPost, "/roles", map[string]string{
 		"team_id": team.ID,
 		"name":    "document-owner",
-	}, serviceToken)
+	}, adminToken)
 	if status != http.StatusCreated {
 		t.Fatalf("conditional role creation status = %d, want %d: %s", status, http.StatusCreated, body)
 	}
@@ -181,7 +182,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 
 	status, body = stack.jsonRequest(t, http.MethodPut, "/roles/"+conditionalRole.ID+"/permissions", map[string]any{
 		"permission_keys": []string{"doc:read:own"},
-	}, serviceToken)
+	}, adminToken)
 	if status != http.StatusOK {
 		t.Fatalf("conditional role permissions status = %d, want %d: %s", status, http.StatusOK, body)
 	}
@@ -193,7 +194,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 		"subject_kind": "user",
 		"subject_id":   target.ID,
 		"condition":    condition,
-	}, serviceToken)
+	}, adminToken)
 	if status != http.StatusCreated {
 		t.Fatalf("direct conditional binding status = %d, want %d: %s", status, http.StatusCreated, body)
 	}
@@ -228,7 +229,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 		t.Fatal("non-matching ABAC check allowed a different owner")
 	}
 
-	status, body = stack.jsonRequest(t, http.MethodPost, "/users/"+target.ID+"/disable", nil, serviceToken)
+	status, body = stack.jsonRequest(t, http.MethodPost, "/users/"+target.ID+"/disable", nil, adminToken)
 	if status != http.StatusOK {
 		t.Fatalf("disable user status = %d, want %d: %s", status, http.StatusOK, body)
 	}
@@ -275,7 +276,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 		t.Fatalf("authorization with user token status = %d, want %d", status, http.StatusUnauthorized)
 	}
 
-	status, body = stack.jsonRequest(t, http.MethodGet, "/audit", nil, serviceToken)
+	status, body = stack.jsonRequest(t, http.MethodGet, "/audit", nil, adminToken)
 	if status != http.StatusOK {
 		t.Fatalf("audit endpoint status = %d, want %d: %s", status, http.StatusOK, body)
 	}

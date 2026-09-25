@@ -13,6 +13,7 @@ import (
 
 	auditlog "teamusers/internal/audit"
 	"teamusers/internal/config"
+	"teamusers/internal/domain"
 	"teamusers/internal/store"
 )
 
@@ -56,6 +57,7 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 	if authMW != nil {
 		router.Use(authMW)
 		router.Use(h.requireSubject)
+		router.Use(h.requirePermission)
 	}
 
 	for _, route := range []struct {
@@ -141,6 +143,78 @@ func (h *adminHandler) requireSubject(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// requirePermission enforces the resource permission for each administrative
+// route after authentication has populated the subject. The admin plane is low
+// QPS, so resolving permissions directly from the store on every request is
+// intentional.
+func (h *adminHandler) requirePermission(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subject, ok := SubjectFrom(r.Context())
+		if !ok {
+			WriteProblem(w, r, http.StatusUnauthorized, "Unauthorized", "an authenticated subject is required")
+			return
+		}
+		if subject.Kind != "user" {
+			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "administrative access requires a user subject")
+			return
+		}
+
+		key := adminPermissionForPath(r.URL.Path)
+		if key == "" {
+			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
+			return
+		}
+		requested, err := domain.Parse(key)
+		if err != nil {
+			WriteProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "authorization service unavailable")
+			return
+		}
+		permissionKeys, resolveErr := store.ListUnconditionalRolePermissions(r.Context(), h.q, subject.UserID, time.Now())
+		if resolveErr != nil {
+			WriteProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "authorization service unavailable")
+			return
+		}
+		grants := make([]domain.Permission, 0, len(permissionKeys))
+		for _, key := range permissionKeys {
+			permission, parseErr := domain.Parse(key)
+			if parseErr == nil {
+				grants = append(grants, permission)
+			}
+		}
+		resolution := domain.Resolve(grants, []domain.Permission{requested})
+		if len(resolution) != 1 || !resolution[0].Matched || !resolution[0].Allowed {
+			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func adminPermissionForPath(path string) string {
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segments) >= 3 && segments[0] == "users" && segments[2] == "sessions" {
+		return "iam:sessions:any"
+	}
+	switch {
+	case path == "/users" || strings.HasPrefix(path, "/users/"):
+		return "iam:users:any"
+	case path == "/teams" || strings.HasPrefix(path, "/teams/"):
+		return "iam:teams:any"
+	case path == "/groups" || strings.HasPrefix(path, "/groups/"):
+		return "iam:groups:any"
+	case path == "/roles" || strings.HasPrefix(path, "/roles/"):
+		return "iam:roles:any"
+	case path == "/permissions" || strings.HasPrefix(path, "/permissions/"):
+		return "iam:permissions:any"
+	case path == "/bindings" || strings.HasPrefix(path, "/bindings/"):
+		return "iam:bindings:any"
+	case path == "/audit" || strings.HasPrefix(path, "/audit/"):
+		return "iam:audit:any"
+	default:
+		return ""
+	}
 }
 
 func (h *adminHandler) withTx(ctx context.Context, fn func(context.Context, store.Tx) error) error {

@@ -11,6 +11,7 @@ func TestAuthLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	admin := seedPasswordUser(t, ctx, stack.database.pool, "admin", "admin-password")
+	bootstrapTestAdmin(t, ctx, stack.database.pool, admin.ID)
 
 	status, _ := stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
 		"username": admin.Username,

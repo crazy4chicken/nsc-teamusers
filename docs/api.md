@@ -13,7 +13,7 @@ default `Strip` forwarding mode, which removes the prefix before forwarding.
 | Public | No bearer token is required. |
 | User bearer | `Authorization: Bearer <access-token>` for an active user or service subject. The token's `perm_ver` must still match the user row. `/me` requires a `kind=user` token and always acts on that token subject. |
 | Service-only | A valid active access token whose JWT `kind` claim is `service`. |
-| Admin-subject | A valid active bearer subject. The current admin router checks that a subject exists; it does not yet enforce an `iam:*` permission. |
+| Admin-subject | A valid active bearer whose JWT `kind` is `user`; each route family additionally requires its `iam:*` permission key. Service subjects are rejected with `403`. |
 
 Access tokens are EdDSA JWTs. The issuer is `teamusers`; the claims include
 `iss`, `sub`, `kind` (`user` or `service`), `perm_ver`, `iat`, `exp`, `jti`, and
@@ -386,12 +386,26 @@ invalid service token is `401`, and resolver/database failures are `500`.
 
 Every route in this section requires an `admin-subject`: an active bearer
 access token whose subject and `perm_ver` pass the shared authentication
-middleware. Both `user` and `service` token kinds satisfy the current subject
-check. There is no unauthenticated first-user route and no `iam:*` permission
-gate in the current implementation.
+middleware, whose JWT `kind` is `user`, and whose effective permissions include
+the key for the route family. Permission resolution runs against the current
+database state on every admin request.
 
+| Route family | Required permission |
+| --- | --- |
+| `/users*` (except `/users/{id}/sessions*`) | `iam:users:any` |
+| `/teams*` | `iam:teams:any` |
+| `/groups*` | `iam:groups:any` |
+| `/roles*` | `iam:roles:any` |
+| `/permissions` | `iam:permissions:any` |
+| `/bindings*` | `iam:bindings:any` |
+| `/audit` | `iam:audit:any` |
+| `/users/{id}/sessions*` | `iam:sessions:any` |
+
+Missing keys return `403` with problem detail `insufficient_permissions`.
+Service-kind tokens are also rejected with `403` before permission resolution.
 Collection list and create methods are registered with both `/collection` and
 `/collection/`; the item paths below use the canonical slashless form.
+
 
 ### Users
 

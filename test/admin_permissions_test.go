@@ -45,8 +45,8 @@ func TestAdminPermissionEndpoints(t *testing.T) {
 		Items []json.RawMessage `json:"items"`
 	}
 	decodeResponse(t, body, &page)
-	if len(page.Items) != 1 {
-		t.Fatalf("permission list has %d items, want one after replay", len(page.Items))
+	if len(page.Items) != len(testBootstrapAdminPermissionKeys)+1 {
+		t.Fatalf("permission list has %d items, want bootstrap keys plus one after replay", len(page.Items))
 	}
 
 	status, _ = stack.jsonRequest(t, http.MethodPost, "/permissions", map[string]string{

@@ -55,6 +55,7 @@ func TestMeProfilePasswordAndSessions(t *testing.T) {
 	alice := seedPasswordUser(t, context.Background(), stack.database.pool, "me-alice", "OldPassword1")
 	bob := seedPasswordUser(t, context.Background(), stack.database.pool, "me-bob", "BobPassword1")
 	admin := seedPasswordUser(t, context.Background(), stack.database.pool, "me-admin", "AdminPassword1")
+	bootstrapTestAdmin(t, context.Background(), stack.database.pool, admin.ID)
 
 	if status, _ := stack.jsonRequest(t, http.MethodGet, "/me", nil, ""); status != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated /me status = %d, want %d", status, http.StatusUnauthorized)

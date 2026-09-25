@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -292,6 +293,91 @@ func seedPasswordUser(t *testing.T, ctx context.Context, q store.Q, username, pa
 	return user
 }
 
+var testBootstrapAdminPermissionKeys = []string{
+	"iam:users:any",
+	"iam:teams:any",
+	"iam:groups:any",
+	"iam:roles:any",
+	"iam:permissions:any",
+	"iam:bindings:any",
+	"iam:audit:any",
+	"iam:sessions:any",
+}
+
+func bootstrapTestAdmin(t *testing.T, ctx context.Context, q store.Q, userID string) {
+	t.Helper()
+	err := store.WithAdminTx(ctx, q, func(ctx context.Context, tx store.Tx) error {
+		permissionAdded := false
+		for _, key := range testBootstrapAdminPermissionKeys {
+			tag, err := tx.Exec(ctx, `
+                INSERT INTO permissions (key, description, registered_by)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (key) DO NOTHING`, key, "integration admin permission", "integration")
+			if err != nil {
+				return err
+			}
+			permissionAdded = permissionAdded || tag.RowsAffected() > 0
+		}
+		if permissionAdded {
+			if _, err := store.BumpPermissionRegistryPermVer(ctx, tx); err != nil {
+				return err
+			}
+		}
+
+		var roleID string
+		err := tx.QueryRow(ctx, `
+            SELECT id FROM roles
+            WHERE team_id IS NULL AND name = $1
+            ORDER BY id LIMIT 1`, "iam-admin").Scan(&roleID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			role, err := store.CreateRole(ctx, tx, store.Role{Name: "iam-admin"})
+			if err != nil {
+				return err
+			}
+			roleID = role.ID
+		} else if err != nil {
+			return err
+		}
+
+		permissionChanged := false
+		for _, key := range testBootstrapAdminPermissionKeys {
+			tag, err := tx.Exec(ctx, `
+                INSERT INTO role_permissions (role_id, permission_key)
+                VALUES ($1, $2)
+                ON CONFLICT (role_id, permission_key) DO NOTHING`, roleID, key)
+			if err != nil {
+				return err
+			}
+			permissionChanged = permissionChanged || tag.RowsAffected() > 0
+		}
+
+		var bound bool
+		if err := tx.QueryRow(ctx, `
+            SELECT EXISTS(
+                SELECT 1 FROM role_bindings
+                WHERE role_id = $1 AND subject_kind = 'user' AND subject_id = $2
+            )`, roleID, userID).Scan(&bound); err != nil {
+			return err
+		}
+		if !bound {
+			if _, err := store.CreateRoleBinding(ctx, tx, store.RoleBinding{
+				RoleID: roleID, SubjectKind: "user", SubjectID: userID,
+			}); err != nil {
+				return err
+			}
+			permissionChanged = true
+		}
+		if permissionChanged {
+			_, err := store.BumpUserPermVer(ctx, tx, userID)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("bootstrap integration admin %q: %v", userID, err)
+	}
+}
+
 func loginUser(t *testing.T, stack *integrationStack, username, password string) string {
 	t.Helper()
 	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
@@ -375,6 +461,7 @@ func newAdminSession(t *testing.T) (*integrationStack, store.User, string) {
 	t.Helper()
 	stack := newIntegrationStack(t)
 	admin := seedPasswordUser(t, context.Background(), stack.database.pool, "admin", "admin-password")
+	bootstrapTestAdmin(t, context.Background(), stack.database.pool, admin.ID)
 	return stack, admin, loginUser(t, stack, admin.Username, "admin-password")
 }
 

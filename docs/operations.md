@@ -64,15 +64,26 @@ configuration or another approved secret facility, and restrict read access.
 
 ### Initial identities
 
-The admin plane has no unauthenticated bootstrap endpoint. An initial admin
-subject must therefore be provisioned by an approved out-of-band bootstrap
-procedure (for example, a controlled database bootstrap tool) before the first
-admin API request. Do not expose the admin router without an authenticated
-bootstrap subject.
+The admin plane has no unauthenticated bootstrap endpoint. Create the first
+active user through an approved database seed or other controlled provisioning
+procedure, then grant that user the platform administrator role with the
+idempotent store-direct CLI command:
 
-Once `ADMIN_ACCESS_TOKEN` is available, create the first human user through
-the admin API. Set `IAM_BASE_URL` to the actual bound address (the examples use
-an explicit local `8080` listener):
+```sh
+export TEAMUSERS_CONNECTION_STRING='postgres://...'
+teamusers bootstrap-admin --username alice
+```
+
+The command ensures the eight `iam:*` permission keys, the platform-scoped
+`iam-admin` role, and the user binding. It fails with a clear error when the
+username does not exist and is safe to rerun. It does not create users or grant
+administrative access at runtime.
+
+An administrator can remove their own last `iam:*:any` grant, for example by deleting their own role binding. If that happens, recover access by rerunning `teamusers bootstrap-admin --username <name>`; the idempotent command restores the platform administrator role, permissions, and binding.
+
+Once `ADMIN_ACCESS_TOKEN` is available, use the admin API to create additional
+human users and service accounts. Set `IAM_BASE_URL` to the actual bound
+address (the examples use an explicit local `8080` listener):
 
 ```sh
 export IAM_BASE_URL=http://127.0.0.1:8080
@@ -81,7 +92,7 @@ export ADMIN_ACCESS_TOKEN='use-a-secret-manager-value'
 curl --fail-with-body -sS -X POST "$IAM_BASE_URL/users" \
   -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data '{"username":"alice","email":"alice@example.test","display_name":"Alice","password":"Replace-this-before-use1"}'
+  --data '{"username":"bob","email":"bob@example.test","display_name":"Bob","password":"Replace-this-before-use1"}'
 ```
 
 The response is the created user and never includes a password hash. The admin

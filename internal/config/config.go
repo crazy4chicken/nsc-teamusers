@@ -198,7 +198,7 @@ func (c Config) ValidateFor(command string) error {
 		return err
 	}
 	switch strings.ToLower(strings.TrimSpace(command)) {
-	case "run", "doctor":
+	case "run", "doctor", "bootstrap-admin":
 		if strings.TrimSpace(c.ConnectionString) == "" {
 			return errors.New("connection string is required for " + strings.ToLower(strings.TrimSpace(command)))
 		}

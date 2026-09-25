@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
@@ -35,7 +36,22 @@ const (
 	migrationTimeout     = 2 * time.Minute
 	shutdownTimeout      = 10 * time.Second
 	doctorTimeout        = 15 * time.Second
+	bootstrapTimeout     = 15 * time.Second
 )
+
+var bootstrapAdminPermissions = [...]struct {
+	key         string
+	description string
+}{
+	{key: "iam:users:any", description: "Manage users"},
+	{key: "iam:teams:any", description: "Manage teams"},
+	{key: "iam:groups:any", description: "Manage groups"},
+	{key: "iam:roles:any", description: "Manage roles"},
+	{key: "iam:permissions:any", description: "Manage permissions"},
+	{key: "iam:bindings:any", description: "Manage role bindings"},
+	{key: "iam:audit:any", description: "Read the audit log"},
+	{key: "iam:sessions:any", description: "Manage user sessions"},
+}
 
 type statusOutput struct {
 	Version string        `json:"version"`
@@ -61,7 +77,7 @@ type doctorOutput struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: teamusers <run|status|doctor> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: teamusers <run|status|doctor|bootstrap-admin> [flags]")
 		os.Exit(2)
 	}
 
@@ -95,10 +111,184 @@ func main() {
 		if !doctor(args...) {
 			os.Exit(1)
 		}
+	case "bootstrap-admin":
+		username, configArgs, err := parseBootstrapAdminArgs(args)
+		if err == nil {
+			var cfg config.Config
+			cfg, err = config.Load(configArgs...)
+			if err == nil {
+				err = cfg.ValidateFor("bootstrap-admin")
+			}
+			if err == nil {
+				err = runBootstrapAdmin(cfg, username)
+			}
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			if strings.HasPrefix(err.Error(), "bootstrap-admin: ") {
+				os.Exit(1)
+			}
+			os.Exit(2)
+		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q; expected run, status, or doctor\n", command)
+		fmt.Fprintf(os.Stderr, "unknown command %q; expected run, status, doctor, or bootstrap-admin\n", command)
 		os.Exit(2)
 	}
+}
+
+func parseBootstrapAdminArgs(args []string) (string, []string, error) {
+	var username string
+	configArgs := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--username":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return "", nil, errors.New("bootstrap-admin: --username requires a value")
+			}
+			username = strings.TrimSpace(args[i+1])
+			i++
+		case strings.HasPrefix(arg, "--username="):
+			username = strings.TrimSpace(strings.TrimPrefix(arg, "--username="))
+			if username == "" {
+				return "", nil, errors.New("bootstrap-admin: --username requires a value")
+			}
+		default:
+			configArgs = append(configArgs, arg)
+		}
+	}
+	if username == "" {
+		return "", nil, errors.New("bootstrap-admin: --username is required")
+	}
+	return username, configArgs, nil
+}
+
+func runBootstrapAdmin(cfg config.Config, username string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), bootstrapTimeout)
+	defer cancel()
+	pool, err := store.NewPool(ctx, cfg.ConnectionString)
+	if err != nil {
+		return fmt.Errorf("bootstrap-admin: connect PostgreSQL: %w", err)
+	}
+	defer pool.Close()
+	if err := pool.Ping(ctx); err != nil {
+		return fmt.Errorf("bootstrap-admin: ping PostgreSQL: %w", err)
+	}
+	result, err := bootstrapAdmin(ctx, pool, username)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "bootstrap-admin: ensured %d permission keys for %s (%d newly added)\n", len(bootstrapAdminPermissions), result.Username, result.PermissionsAdded)
+	if result.RoleCreated {
+		fmt.Fprintln(os.Stdout, "bootstrap-admin: created role iam-admin")
+	} else {
+		fmt.Fprintln(os.Stdout, "bootstrap-admin: role iam-admin already exists")
+	}
+	if result.RolePermissionsAdded > 0 {
+		fmt.Fprintf(os.Stdout, "bootstrap-admin: added %d permissions to iam-admin\n", result.RolePermissionsAdded)
+	} else {
+		fmt.Fprintln(os.Stdout, "bootstrap-admin: iam-admin already held all permissions")
+	}
+	if result.BindingCreated {
+		fmt.Fprintf(os.Stdout, "bootstrap-admin: bound %s to iam-admin\n", result.Username)
+	} else {
+		fmt.Fprintf(os.Stdout, "bootstrap-admin: %s already bound to iam-admin\n", result.Username)
+	}
+	return nil
+}
+
+type bootstrapAdminResult struct {
+	Username             string
+	PermissionsAdded     int
+	RoleCreated          bool
+	RolePermissionsAdded int
+	BindingCreated       bool
+}
+
+func bootstrapAdmin(ctx context.Context, q store.Q, username string) (bootstrapAdminResult, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return bootstrapAdminResult{}, errors.New("bootstrap-admin: --username is required")
+	}
+	user, err := store.GetUserByUsername(ctx, q, username)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return bootstrapAdminResult{}, fmt.Errorf("bootstrap-admin: user %q was not found", username)
+	}
+	if err != nil {
+		return bootstrapAdminResult{}, fmt.Errorf("bootstrap-admin: look up user %q: %w", username, err)
+	}
+	result := bootstrapAdminResult{Username: user.Username}
+	err = store.WithAdminTx(ctx, q, func(ctx context.Context, tx store.Tx) error {
+		for _, permission := range bootstrapAdminPermissions {
+			tag, err := tx.Exec(ctx, `
+                INSERT INTO permissions (key, description, registered_by)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (key) DO NOTHING`, permission.key, permission.description, "teamusers-bootstrap-admin")
+			if err != nil {
+				return err
+			}
+			result.PermissionsAdded += int(tag.RowsAffected())
+		}
+		if result.PermissionsAdded > 0 {
+			if _, err := store.BumpPermissionRegistryPermVer(ctx, tx); err != nil {
+				return err
+			}
+		}
+
+		var roleID string
+		err := tx.QueryRow(ctx, `
+            SELECT id FROM roles
+            WHERE team_id IS NULL AND name = $1
+            ORDER BY id LIMIT 1`, "iam-admin").Scan(&roleID)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			roleID = store.NewID()
+			if _, err := tx.Exec(ctx, `
+                INSERT INTO roles (id, team_id, name) VALUES ($1, NULL, $2)`, roleID, "iam-admin"); err != nil {
+				return err
+			}
+			result.RoleCreated = true
+		case err != nil:
+			return err
+		}
+
+		for _, permission := range bootstrapAdminPermissions {
+			tag, err := tx.Exec(ctx, `
+                INSERT INTO role_permissions (role_id, permission_key)
+                VALUES ($1, $2)
+                ON CONFLICT (role_id, permission_key) DO NOTHING`, roleID, permission.key)
+			if err != nil {
+				return err
+			}
+			result.RolePermissionsAdded += int(tag.RowsAffected())
+		}
+
+		var bound bool
+		if err := tx.QueryRow(ctx, `
+            SELECT EXISTS(
+                SELECT 1 FROM role_bindings
+                WHERE role_id = $1 AND subject_kind = 'user' AND subject_id = $2
+            )`, roleID, user.ID).Scan(&bound); err != nil {
+			return err
+		}
+		if !bound {
+			if _, err := tx.Exec(ctx, `
+                INSERT INTO role_bindings (id, team_id, role_id, subject_kind, subject_id)
+                VALUES ($1, NULL, $2, 'user', $3)`, store.NewID(), roleID, user.ID); err != nil {
+				return err
+			}
+			result.BindingCreated = true
+		}
+		if result.RolePermissionsAdded > 0 || result.BindingCreated {
+			_, err := store.BumpUserPermVer(ctx, tx, user.ID)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return bootstrapAdminResult{}, fmt.Errorf("bootstrap-admin: provision %q: %w", username, err)
+	}
+	return result, nil
 }
 
 func run(cfg config.Config) error {

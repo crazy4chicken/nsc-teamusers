@@ -22,6 +22,24 @@ revocation state. Refresh-token introspection checks the stored session and its
 revocation/expiry state. This divergence preserves stateless access-token
 validation while retaining operational refresh-token status.
 
+## Admin-plane dogfooding
+
+The administrative HTTP plane is intentionally dogfooded through the same
+permission engine used by runtime authorization. Every request must carry an
+active `kind=user` access token; service-kind tokens are rejected with `403`.
+The route family is resolved against the caller's current role bindings on each
+request (the plane is low QPS), and a missing `iam:*` key fails closed with
+`insufficient_permissions`.
+
+The eight administrative keys are provisioned explicitly by
+`teamusers bootstrap-admin --username <name>`. This command creates or
+reconciles the platform-scoped `iam-admin` role and its binding; there is no
+runtime or first-request elevation path. Keep the bootstrap database
+connection and the initial user's credential under the same out-of-band
+controls as other production secrets.
+
+An admin can remove their own last `iam:*:any` grant; rerun `teamusers bootstrap-admin --username <name>` to restore the role and binding.
+
 ## TOTP and recovery credentials
 
 TOTP uses RFC 6238 with SHA-1, six-digit codes, a 30-second step, and a

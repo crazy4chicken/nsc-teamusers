@@ -235,6 +235,7 @@ func TestWeakPasswordsAreRejected(t *testing.T) {
 	}
 
 	admin := seedPasswordUser(t, context.Background(), stack.database.pool, "weak-admin", "WeakAdminPassword1")
+	bootstrapTestAdmin(t, context.Background(), stack.database.pool, admin.ID)
 	adminToken := loginUser(t, stack, admin.Username, "WeakAdminPassword1")
 	status, body = stack.jsonRequest(t, http.MethodPost, "/users/"+admin.ID+"/credentials", map[string]string{
 		"kind":     "password",

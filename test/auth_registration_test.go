@@ -93,6 +93,7 @@ func TestRegistrationApprovalLifecycle(t *testing.T) {
 	}
 
 	admin := seedPasswordUser(t, context.Background(), stack.database.pool, "approval-admin", "admin-password")
+	bootstrapTestAdmin(t, context.Background(), stack.database.pool, admin.ID)
 	adminToken := loginUser(t, stack, admin.Username, "admin-password")
 	status, body = stack.jsonRequest(t, http.MethodPost, "/users/"+registered.ID+"/approve", nil, adminToken)
 	if status != http.StatusUnprocessableEntity || !strings.Contains(string(body), "email_not_verified") {
