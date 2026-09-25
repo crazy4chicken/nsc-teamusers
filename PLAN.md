@@ -305,6 +305,7 @@ internal/
   events/               outbox relay, JetStream publisher
   audit/                append-only writer
 sdk/go/                 local verification SDK (JWKS cache, perm cache, middleware)
+test/                   end-to-end integration tests (TEAMUSERS_TEST_PG-gated)
 docs/                   API reference, ops runbook, Nekostick integration
 PLAN.md                 this file
 ```
