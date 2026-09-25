@@ -12,12 +12,14 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	auditlog "teamusers/internal/audit"
+	"teamusers/internal/config"
 	"teamusers/internal/store"
 )
 
 type adminHandler struct {
 	q     store.Q
 	audit *auditlog.Writer
+	cfg   config.Config
 }
 type adminProblemError struct {
 	status int
@@ -44,11 +46,11 @@ func writeValidationError(w http.ResponseWriter, r *http.Request, err error) boo
 }
 
 // NewAdminRouter constructs the protected administrative HTTP plane.
-func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler) http.Handler) chi.Router {
+func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler) http.Handler, cfg config.Config) chi.Router {
 	if audit == nil {
 		audit = auditlog.NewWriter()
 	}
-	h := &adminHandler{q: q, audit: audit}
+	h := &adminHandler{q: q, audit: audit, cfg: cfg}
 	router := chi.NewRouter()
 	if authMW != nil {
 		router.Use(authMW)
@@ -81,6 +83,7 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 		r.Patch("/{id}", h.patchUser)
 		r.Delete("/{id}", h.deleteUser)
 		r.Post("/{id}/disable", h.disableUser)
+		r.Post("/{id}/approve", h.approveUser)
 		r.Post("/{id}/credentials", h.createUserCredential)
 	})
 	router.Route("/teams", func(r chi.Router) {

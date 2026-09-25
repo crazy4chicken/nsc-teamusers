@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -233,6 +234,52 @@ func (h *adminHandler) disableUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+func (h *adminHandler) approveUser(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var updated store.User
+	err := h.withTx(r.Context(), func(ctx context.Context, tx store.Tx) error {
+		before, err := store.GetUser(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if h.registrationMode() == "approval" && before.EmailVerifiedAt == nil {
+			return unprocessableError("email_not_verified")
+		}
+		subject, ok := SubjectFrom(r.Context())
+		if !ok || subject.UserID == "" {
+			return validationError("approver identity is required")
+		}
+		updated, err = store.ApproveUser(ctx, tx, id, subject.UserID, time.Now().UTC())
+		if errors.Is(err, store.ErrNotFound) {
+			return unprocessableError("email_not_verified")
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := h.audit.Append(ctx, tx, h.auditEntry(r, nil, "user.approved", id, before, updated)); err != nil {
+			return err
+		}
+		return appendNotifyEvent(ctx, tx, "user.approved", map[string]string{"user_id": id})
+	})
+	if err != nil {
+		if writeValidationError(w, r, err) {
+			return
+		}
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (h *adminHandler) registrationMode() string {
+	switch mode := strings.ToLower(strings.TrimSpace(h.cfg.RegistrationMode)); mode {
+	case "approval", "open":
+		return mode
+	default:
+		return "closed"
+	}
 }
 
 func hashPassword(password string) (string, error) {

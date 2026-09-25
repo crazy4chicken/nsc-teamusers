@@ -138,7 +138,7 @@ func run(cfg config.Config) error {
 	}
 	authRoutes := authService.Routes()
 	authzRoutes := authz.NewRouter(pool, authService.Middleware())
-	adminRoutes := httpapi.NewAdminRouter(pool, auditWriter, authService.Middleware())
+	adminRoutes := httpapi.NewAdminRouter(pool, auditWriter, authService.Middleware(), cfg)
 	server.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/authz/") || r.URL.Path == "/authz" {
 			authzRoutes.ServeHTTP(w, r)

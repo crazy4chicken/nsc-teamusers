@@ -21,6 +21,7 @@ const (
 	envNATSURL               = "TEAMUSERS_NATS_URL"
 	envNotificationEndpoints = "TEAMUSERS_NOTIFICATION_ENDPOINTS"
 	envNotificationSecret    = "TEAMUSERS_NOTIFICATION_SECRET"
+	envRegistrationMode      = "TEAMUSERS_REGISTRATION_MODE"
 )
 
 // Config is the process configuration. Values are resolved in flag, env, and
@@ -35,6 +36,7 @@ type Config struct {
 	NATSURL               string   `json:"nats_url,omitempty"`
 	NotificationEndpoints []string `json:"notification_endpoints,omitempty"`
 	NotificationSecret    string   `json:"notification_secret,omitempty"`
+	RegistrationMode      string   `json:"registration_mode"`
 }
 
 // Load reads configuration from the process environment and optional command
@@ -56,6 +58,7 @@ func Load(args ...string) (Config, error) {
 	natsURL := envOrDefault(envNATSURL, "")
 	notificationEndpoints := envOrDefault(envNotificationEndpoints, "")
 	notificationSecret := envOrDefault(envNotificationSecret, "")
+	registrationMode := envOrDefault(envRegistrationMode, "closed")
 
 	fs.StringVar(&connectionString, "connection-string", connectionString, "PostgreSQL connection string")
 	fs.StringVar(&listenAddress, "listen-address", listenAddress, "HTTP listen address")
@@ -66,6 +69,7 @@ func Load(args ...string) (Config, error) {
 	fs.StringVar(&natsURL, "nats-url", natsURL, "NATS URL")
 	fs.StringVar(&notificationEndpoints, "notification-endpoints", notificationEndpoints, "comma-separated notification service endpoint URLs")
 	fs.StringVar(&notificationSecret, "notification-secret", notificationSecret, "notification service signing secret")
+	fs.StringVar(&registrationMode, "registration-mode", registrationMode, "registration mode (closed, approval, open)")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -85,6 +89,7 @@ func Load(args ...string) (Config, error) {
 		NATSURL:               natsURL,
 		NotificationEndpoints: parseNotificationEndpoints(notificationEndpoints),
 		NotificationSecret:    notificationSecret,
+		RegistrationMode:      strings.ToLower(strings.TrimSpace(registrationMode)),
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -108,6 +113,15 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.KeyDir) == "" {
 		return errors.New("key directory must not be empty")
+	}
+	mode := strings.ToLower(strings.TrimSpace(c.RegistrationMode))
+	if mode == "" {
+		mode = "closed"
+	}
+	switch mode {
+	case "closed", "approval", "open":
+	default:
+		return fmt.Errorf("registration mode must be one of closed, approval, open, got %q", c.RegistrationMode)
 	}
 	return nil
 }

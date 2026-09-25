@@ -12,11 +12,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/mail"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
@@ -110,10 +112,12 @@ func New(deps Deps) (*Service, error) {
 	return service, nil
 }
 
-// Routes returns the public authentication and JWKS routes.
+// Routes returns the public authentication, registration, and JWKS routes.
 func (s *Service) Routes() chi.Router {
 	router := chi.NewRouter()
 	router.Post("/auth/login", s.login)
+	router.Post("/auth/register", s.register)
+	router.Post("/auth/verify-email", s.verifyEmail)
 	router.Post("/auth/client-credentials", s.clientCredentials)
 	router.Post("/auth/refresh", s.refresh)
 	router.Post("/auth/logout", s.logout)
@@ -162,6 +166,150 @@ func (s *Service) authenticateBearer(r *http.Request, requiredKind string) (toke
 type loginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+type registerRequest struct {
+	Username    string `json:"username"`
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+	DisplayName string `json:"display_name"`
+}
+
+type verifyEmailRequest struct {
+	Token string `json:"token"`
+}
+
+func (s *Service) register(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allowIP(requestIP(r), s.now()) {
+		writeRateLimited(w, r)
+		return
+	}
+	if s.registrationMode() == "closed" {
+		writeAuthProblem(w, r, http.StatusForbidden, "registration_closed")
+		return
+	}
+	var request registerRequest
+	if !decodeJSON(w, r, &request) {
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "request body must be valid JSON")
+		return
+	}
+	request.Username = strings.TrimSpace(request.Username)
+	request.Email = strings.TrimSpace(request.Email)
+	if request.Username == "" {
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "username is required")
+		return
+	}
+	parsedEmail, err := mail.ParseAddress(request.Email)
+	if err != nil || parsedEmail.Address != request.Email {
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "email must be a valid address")
+		return
+	}
+	if len([]rune(request.Password)) < 8 {
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "password must be at least 8 characters")
+		return
+	}
+	passwordHash, err := HashPassword(request.Password)
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	plaintextToken, tokenHash, err := newVerificationToken()
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	expiresAt := s.now().Add(24 * time.Hour)
+	var created store.User
+	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		created, err = store.CreateUser(ctx, tx, store.User{
+			Username:    request.Username,
+			Email:       &request.Email,
+			DisplayName: request.DisplayName,
+			Status:      "pending",
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := store.CreateCredential(ctx, tx, store.Credential{
+			UserID: created.ID,
+			Kind:   "password",
+			Hash:   passwordHash,
+		}); err != nil {
+			return err
+		}
+		if _, err := store.CreateVerificationToken(ctx, tx, store.VerificationToken{
+			UserID:    created.ID,
+			Kind:      "email_verify",
+			TokenHash: tokenHash,
+			ExpiresAt: expiresAt,
+		}); err != nil {
+			return err
+		}
+		return appendNotifyEvent(ctx, tx, "user.verification", map[string]any{
+			"user_id":    created.ID,
+			"email":      request.Email,
+			"token":      plaintextToken,
+			"expires_at": expiresAt,
+		})
+	})
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			httpapi.WriteProblem(w, r, http.StatusUnprocessableEntity, "registration failed", "registration could not be completed")
+			return
+		}
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"id": created.ID, "status": created.Status})
+}
+
+func (s *Service) verifyEmail(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allowIP(requestIP(r), s.now()) {
+		writeRateLimited(w, r)
+		return
+	}
+	var request verifyEmailRequest
+	if !decodeJSON(w, r, &request) {
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "request body must be valid JSON")
+		return
+	}
+	token := strings.TrimSpace(request.Token)
+	if token == "" {
+		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	tokenHash := hashVerificationToken(token)
+	err := store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		userID, kind, err := store.ConsumeVerificationToken(ctx, tx, tokenHash)
+		if err != nil {
+			return err
+		}
+		if kind != "email_verify" {
+			return store.ErrNotFound
+		}
+		if err := store.SetEmailVerified(ctx, tx, userID, s.now()); err != nil {
+			return err
+		}
+		if s.registrationMode() == "open" {
+			_, err = tx.Exec(ctx, `
+                UPDATE users SET status = 'active', updated_at = now()
+                WHERE id = $1 AND status = 'pending'`, userID)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type clientCredentialsRequest struct {
@@ -234,7 +382,17 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeInternal(w, r)
 		return
 	}
-	if userErr != nil || credentialErr != nil || !valid || user.Status != "active" {
+	if userErr != nil || credentialErr != nil || !valid {
+		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
+		writeUnauthorized(w, r)
+		return
+	}
+	if user.Status == "pending" {
+		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
+		writeAuthProblem(w, r, http.StatusForbidden, "account_pending")
+		return
+	}
+	if user.Status != "active" {
 		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
 		writeUnauthorized(w, r)
 		return
@@ -734,6 +892,42 @@ func newRefreshToken() (string, error) {
 func refreshTokenHash(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func (s *Service) registrationMode() string {
+	switch mode := strings.ToLower(strings.TrimSpace(s.cfg.RegistrationMode)); mode {
+	case "approval", "open":
+		return mode
+	default:
+		return "closed"
+	}
+}
+
+func newVerificationToken() (string, string, error) {
+	data := make([]byte, 32)
+	if _, err := rand.Read(data); err != nil {
+		return "", "", fmt.Errorf("generate verification token: %w", err)
+	}
+	plaintext := base64.RawURLEncoding.EncodeToString(data)
+	return plaintext, hashVerificationToken(plaintext), nil
+}
+
+func hashVerificationToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func appendNotifyEvent(ctx context.Context, q store.Q, topic string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, err = store.AppendOutboxEvent(ctx, q, store.OutboxEvent{Topic: "notify." + topic, Payload: data})
+	return err
+}
+
+func writeAuthProblem(w http.ResponseWriter, r *http.Request, status int, code string) {
+	httpapi.WriteProblem(w, r, status, code, code)
 }
 
 func bearerToken(header string) (string, bool) {

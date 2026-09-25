@@ -9,8 +9,8 @@ import (
 // GetUserByUsername loads the identity used by password and service logins.
 func GetUserByUsername(ctx context.Context, q Q, username string) (User, error) {
 	return scanUser(q.QueryRow(ctx, `
-		SELECT id, username, email, display_name, status, perm_ver, created_at, updated_at
-		FROM users WHERE username = $1`, username))
+        SELECT id, username, email, display_name, status, perm_ver, email_verified_at, approved_at, approved_by, created_at, updated_at
+        FROM users WHERE username = $1`, username))
 }
 
 // GetUserTeamID returns a stable active team for token issuance. Users may be

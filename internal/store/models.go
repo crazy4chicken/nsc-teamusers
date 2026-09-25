@@ -7,14 +7,17 @@ import (
 
 // User mirrors the users table.
 type User struct {
-	ID          string    `json:"id"`
-	Username    string    `json:"username"`
-	Email       *string   `json:"email,omitempty"`
-	DisplayName string    `json:"display_name"`
-	Status      string    `json:"status"`
-	PermVer     int64     `json:"perm_ver"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID              string     `json:"id"`
+	Username        string     `json:"username"`
+	Email           *string    `json:"email,omitempty"`
+	DisplayName     string     `json:"display_name"`
+	Status          string     `json:"status"`
+	PermVer         int64      `json:"perm_ver"`
+	EmailVerifiedAt *time.Time `json:"email_verified_at,omitempty"`
+	ApprovedAt      *time.Time `json:"approved_at,omitempty"`
+	ApprovedBy      *string    `json:"approved_by,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // Credential mirrors the credentials table.

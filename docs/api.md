@@ -130,6 +130,43 @@ On an active user with a valid password, `200` returns:
 Invalid credentials and malformed login bodies return `401` with a problem;
 rate-limit exhaustion returns `429`.
 
+### `POST /auth/register` — Public self-registration
+
+Registration is controlled by `TEAMUSERS_REGISTRATION_MODE`. In `closed` mode
+the endpoint returns `403` with a problem whose detail is
+`registration_closed`. In `approval` or `open` mode, submit:
+
+```json
+{"username":"alice","email":"alice@example.test","password":"at-least-eight-characters","display_name":"Alice"}
+```
+
+The username must be unique, the email must be a valid address, and the
+password must contain at least eight characters. A successful request returns
+`201` with `{"id":"01J...","status":"pending"}`. The password is stored
+only as an Argon2id credential. The service writes a transactional
+`notify.user.verification` event containing the plaintext verification token;
+the token is not returned by this endpoint.
+
+### `POST /auth/verify-email` — Public email verification
+
+Submit the token delivered through the notification service:
+
+```json
+{"token":"<base64url verification token>"}
+```
+
+An unexpired, unused token returns `204 No Content` and records
+`email_verified_at`. In `open` mode the pending user also becomes active. In
+`approval` mode the user remains pending until an administrator approves it.
+Email verification is mode-independent; in `closed` and `approval` modes it
+records verification but never activates an account.
+An unknown, expired, already-used, or otherwise invalid token returns `400`
+with problem detail `invalid_token`.
+
+Pending accounts have their password checked normally but `/auth/login` then
+returns `403` with problem detail `account_pending`; invalid credentials still
+return the generic `401` authentication problem.
+
 ### `POST /auth/client-credentials` — Public service login
 
 Request:
@@ -262,6 +299,7 @@ Collection list and create methods are registered with both `/collection` and
 | `DELETE /users/{id}` | No body. | `204`. |
 | `POST /users/{id}/disable` | No body. | `200` disabled `User`. |
 | `POST /users/{id}/credentials` | `{"kind":"service"}` generates a service secret, or `{"kind":"password","password":"..."}` creates/rotates a password credential. | `201` `{"user_id":"01J...","username":"orders-service","kind":"password"}`; service credentials additionally return `client_id` (the username) and one-time `client_secret`. |
+| `POST /users/{id}/approve` | No body. | `200` active `User`; emits `notify.user.approved`. |
 
 The credential endpoint accepts only `kind` `service` or `password`. A service
 credential's generated `client_secret` is returned only on creation/rotation
@@ -272,6 +310,10 @@ operations runbook.
 
 Invalid `kind` or a missing password for `kind=password` returns `400`; an
 unknown user returns `404`; and a missing or stale admin bearer returns `401`.
+
+In `approval` registration mode, approval requires `email_verified_at` and
+returns `422` with problem detail `email_not_verified` when verification has
+not completed. An unknown user returns `404`.
 
 ### Teams
 

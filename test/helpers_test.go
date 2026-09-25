@@ -95,6 +95,10 @@ type auditResponse struct {
 }
 
 func newIntegrationStack(t *testing.T) *integrationStack {
+	return newIntegrationStackWithMode(t, "closed")
+}
+
+func newIntegrationStackWithMode(t *testing.T, registrationMode string) *integrationStack {
 	t.Helper()
 	database := newIntegrationDatabase(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -105,6 +109,7 @@ func newIntegrationStack(t *testing.T) *integrationStack {
 		ListenPort:       0,
 		LogLevel:         "error",
 		KeyDir:           t.TempDir(),
+		RegistrationMode: registrationMode,
 	}
 	server := httpapi.NewServer(cfg, database.pool)
 	if err := server.Listen(); err != nil {
@@ -127,7 +132,7 @@ func newIntegrationStack(t *testing.T) *integrationStack {
 	}
 	authRoutes := authService.Routes()
 	authzRoutes := authz.NewRouter(database.pool, authService.Middleware())
-	adminRoutes := httpapi.NewAdminRouter(database.pool, auditWriter, authService.Middleware())
+	adminRoutes := httpapi.NewAdminRouter(database.pool, auditWriter, authService.Middleware(), cfg)
 	server.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/authz/") || r.URL.Path == "/authz" {
 			authzRoutes.ServeHTTP(w, r)

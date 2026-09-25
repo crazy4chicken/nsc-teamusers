@@ -20,6 +20,7 @@ default**. The supported environment variables are:
 | `TEAMUSERS_NATS_URL` | empty | NATS URL for the JetStream outbox relay. |
 | `TEAMUSERS_NOTIFICATION_ENDPOINTS` | empty | Comma-separated notification service endpoint URLs. |
 | `TEAMUSERS_NOTIFICATION_SECRET` | empty | HMAC-SHA256 signing secret for notification service calls. |
+| `TEAMUSERS_REGISTRATION_MODE` | `closed` | Public registration mode: `closed`, `approval`, or `open`. |
 
 Do not put credentials in the repository. Use Nekostick's protected service
 configuration or another approved secret facility, and restrict read access.
@@ -199,11 +200,12 @@ limits at the trusted proxy if fleet-wide limits are required.
 
 Set `TEAMUSERS_NOTIFICATION_ENDPOINTS` to a comma-separated list of notification
 service endpoint URLs and `TEAMUSERS_NOTIFICATION_SECRET` to the HMAC secret
-shared with the notification service. The notifier polls the transactional outbox
-every two seconds. It sends notification directives currently emitted by this
-service (`user.created`, `user.disabled`, and `session.reuse_detected`) as
-HMAC-signed JSON `POST` requests to each configured endpoint. This service decides
-what to notify and when; the notification service owns actual email/SMS delivery.
+shared with the notification service. The notifier polls the notification
+outbox every two seconds. It sends notification directives currently emitted by
+this service (`user.created`, `user.disabled`, `user.verification`,
+`user.approved`, and `session.reuse_detected`) as HMAC-signed JSON `POST`
+requests to each configured endpoint. This service decides what to notify and
+when; the notification service owns actual email/SMS delivery.
 
 ```json
 {
