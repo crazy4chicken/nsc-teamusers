@@ -238,8 +238,37 @@ caller's profile fields:
 ```
 
 Credential and password data are never returned. `PATCH /me` accepts only
-`{"display_name":"New name"}` and returns the updated profile. Email changes
-are outside this API and return `422` with an unsupported-field problem.
+`{"display_name":"New name"}` and returns the updated profile.
+
+### `POST /me/email` — Request an email change
+
+Submit the replacement address and current password:
+
+```json
+{"new_email":"new@example.test","password":"current-password1"}
+```
+
+The password must match or the endpoint returns `401` with detail
+`invalid_credentials`. A malformed address returns `422` with `invalid_email`;
+an address already used by another account returns `422` with `email_taken`.
+The service does not change the profile immediately. It stores a single-use
+24-hour `email_change` token and writes a transactional
+`notify.email.change_verification` event whose recipient is the new address.
+Success returns `204`.
+
+### `POST /me/email/confirm` — Confirm an email change
+
+Submit the token delivered to the new address:
+
+```json
+{"token":"<one-time-token>"}
+```
+
+The token is bound to the authenticated user and consumed atomically. On
+success the service sets the new address and `email_verified_at`, records
+`email.changed`, and returns `204`. Unknown, expired, used, wrong-kind, or
+foreign-user tokens return `400` with `invalid_token`.
+
 
 ### `POST /me/password` — Change the own password
 
@@ -255,6 +284,44 @@ policy or the endpoint returns `422` with detail `weak_password`. A successful
 change returns `200` and explicitly states that all refresh sessions were
 revoked; the caller must sign in again. This includes the session used for the
 request.
+
+### `DELETE /me` — Erase the own account
+
+Submit the current password:
+
+```json
+{"password":"current-password1"}
+```
+
+The password must match or the endpoint returns `401` with
+`invalid_credentials`. Success returns `204` and irreversibly anonymizes the
+user in one transaction: the username and email become generated
+`deleted_<ULID>` values (with the email under `deleted.invalid`), the display
+name is cleared, and status becomes `disabled`. Every credential kind and every
+refresh session is removed/revoked. The append-only audit record is retained
+as `user.erased`, using only the opaque user ULID; no former profile or
+credential material is recorded.
+
+### `GET /me/export` — Export own account data
+
+The caller receives `200 application/json` with
+`Content-Disposition: attachment`. The body contains the profile, all
+`memberships` (`group_id` and `team_id`), `effective_permissions` keys,
+active refresh sessions, `totp_enabled`, and `passkey_count`:
+
+```json
+{
+  "profile":{"id":"01J-user","username":"alice","email":"alice@example.test","display_name":"Alice","status":"active","email_verified_at":"2026-01-01T00:00:00Z","created_at":"2026-01-01T00:00:00Z"},
+  "memberships":[{"group_id":"01J-group","team_id":"01J-team"}],
+  "effective_permissions":["orders:read:team"],
+  "active_sessions":[{"id":"<opaque-digest>","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-31T00:00:00Z"}],
+  "totp_enabled":false,
+  "passkey_count":0
+}
+```
+
+Credential hashes, service secrets, TOTP seeds, backup-code digests, and
+passkey public-key material are never included.
 
 ### `GET /me/sessions` — List own active sessions
 

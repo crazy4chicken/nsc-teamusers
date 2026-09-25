@@ -110,6 +110,32 @@ one letter and one digit. The policy is enforced at registration and when an
 administrator creates or rotates a password credential; weak values are
 rejected rather than silently modified.
 
+
+## Profile lifecycle and erasure
+
+Email changes require the current password before a request is accepted. The
+replacement address is checked for valid syntax and ownership, but is not
+written to `users` until the caller presents a single-use `email_change` token.
+The token is valid for 24 hours; only its SHA-256 digest is stored in
+`verification_tokens`, while the plaintext is carried transactionally in a
+`notify.email.change_verification` outbox payload addressed to the new email.
+Confirmation is bound to the bearer subject, sets `email_verified_at`, and
+records only opaque user IDs in the audit target.
+
+`DELETE /me` is an erasure operation rather than a physical row deletion.
+Foreign keys and append-only audit records need the stable user ULID for
+referential history, so the service replaces the username and email with
+generated `deleted_<ULID>` values, clears the display name, and disables the
+row. All credential kinds and refresh sessions are deleted/revoked in the
+same transaction. Audit records retain the opaque ULID and action metadata,
+not the former profile, password, token, or credential material. This gives
+operational history without retaining directly identifying profile data.
+
+The self-service export includes profile metadata, memberships, effective
+permission keys, active session metadata, TOTP-enabled state, and passkey
+count. It deliberately excludes credential hashes, service secrets, TOTP
+seeds, backup-code digests, and serialized passkey material.
+
 ## Passkey and WebAuthn ceremonies
 
 WebAuthn ceremony sessions are stored server-side for five minutes. Finishing a

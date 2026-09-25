@@ -21,6 +21,18 @@ func GetUserByEmail(ctx context.Context, q Q, email string) (User, error) {
         FROM users WHERE email = $1`, email))
 }
 
+// IsEmailTaken reports whether another user already owns the case-insensitive
+// email address. The excluded user ID is allowed to retain its current value.
+func IsEmailTaken(ctx context.Context, q Q, email, excludedUserID string) (bool, error) {
+	var taken bool
+	err := q.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM users
+			WHERE email = $1 AND ($2 = '' OR id <> $2)
+		)`, email, excludedUserID).Scan(&taken)
+	return taken, err
+}
+
 // GetUserForAuth loads the identity and lockout state used by an authentication
 // attempt. Lockout columns are returned with the same user projection as the
 // regular user helpers.

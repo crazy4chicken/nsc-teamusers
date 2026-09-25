@@ -140,6 +140,30 @@ func DeleteMembership(ctx context.Context, q Q, groupID, userID string) error {
 	return err
 }
 
+// ListAllMembershipsByUser returns every membership row for an export. Unlike
+// the administrative listing helper, this has no page limit.
+func ListAllMembershipsByUser(ctx context.Context, q Q, userID string) ([]Membership, error) {
+	rows, err := q.Query(ctx, `
+		SELECT team_id, group_id, user_id, expires_at
+		FROM memberships WHERE user_id = $1 ORDER BY group_id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	memberships := make([]Membership, 0)
+	for rows.Next() {
+		membership, err := scanMembership(rows)
+		if err != nil {
+			return nil, err
+		}
+		memberships = append(memberships, membership)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return memberships, nil
+}
+
 func ListMembershipsByUser(ctx context.Context, q Q, userID, cursor string, limit int) ([]Membership, string, error) {
 	limit = pageLimit(limit)
 	var rows pgx.Rows

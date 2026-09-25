@@ -14,6 +14,10 @@ type MeHandlers struct {
 	Profile                   http.HandlerFunc
 	PatchProfile              http.HandlerFunc
 	ChangePassword            http.HandlerFunc
+	ChangeEmail               http.HandlerFunc
+	ConfirmEmailChange        http.HandlerFunc
+	DeleteProfile             http.HandlerFunc
+	ExportProfile             http.HandlerFunc
 	ListSessions              http.HandlerFunc
 	DeleteSession             http.HandlerFunc
 	EnrollTOTP                http.HandlerFunc
@@ -45,6 +49,10 @@ func NewMeRouter(authMW func(http.Handler) http.Handler, handlers MeHandlers) ch
 	router.Get("/me", handlers.Profile)
 	router.Patch("/me", handlers.PatchProfile)
 	router.Post("/me/password", handlers.ChangePassword)
+	router.Post("/me/email", handlers.ChangeEmail)
+	router.Post("/me/email/confirm", handlers.ConfirmEmailChange)
+	router.Delete("/me", handlers.DeleteProfile)
+	router.Get("/me/export", handlers.ExportProfile)
 	router.Get("/me/sessions", handlers.ListSessions)
 	router.Delete("/me/sessions/{id}", handlers.DeleteSession)
 	router.Post("/me/totp/enroll", handlers.EnrollTOTP)

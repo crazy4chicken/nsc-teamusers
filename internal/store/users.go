@@ -69,6 +69,26 @@ func UpdateUser(ctx context.Context, q Q, user User) (User, error) {
 		user.ID, user.Username, user.Email, user.DisplayName, user.Status))
 }
 
+// UpdateUserEmail changes the address and marks it verified at the supplied time.
+func UpdateUserEmail(ctx context.Context, q Q, userID, email string, verifiedAt time.Time) (User, error) {
+	return scanUser(q.QueryRow(ctx, `
+		UPDATE users
+		SET email = $2, email_verified_at = $3, updated_at = now()
+		WHERE id = $1
+		RETURNING id, username, email, display_name, status, perm_ver, failed_logins, locked_until, email_verified_at, approved_at, approved_by, created_at, updated_at`,
+		userID, email, verifiedAt))
+}
+
+// AnonymizeUser replaces all user-facing identifiers while retaining the
+// opaque user ID used by append-only audit records.
+func AnonymizeUser(ctx context.Context, q Q, userID, username, email string) error {
+	_, err := q.Exec(ctx, `
+		UPDATE users
+		SET username = $2, email = $3, display_name = '', status = 'disabled', updated_at = now()
+		WHERE id = $1`, userID, username, email)
+	return err
+}
+
 func DeleteUser(ctx context.Context, q Q, id string) error {
 	_, err := q.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
 	return err
@@ -198,6 +218,13 @@ func ActivateTOTPCredential(ctx context.Context, q Q, userID string) (Credential
 
 func DeleteCredential(ctx context.Context, q Q, userID, kind string) error {
 	_, err := q.Exec(ctx, `DELETE FROM credentials WHERE user_id = $1 AND kind = $2`, userID, kind)
+	return err
+}
+
+// DeleteAllCredentials removes every credential kind owned by a user. Keeping
+// this operation kind-agnostic ensures newly added credential types are erased.
+func DeleteAllCredentials(ctx context.Context, q Q, userID string) error {
+	_, err := q.Exec(ctx, `DELETE FROM credentials WHERE user_id = $1`, userID)
 	return err
 }
 
