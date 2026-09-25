@@ -56,7 +56,26 @@ func (p Permission) Validate() error {
 	if err := validateScope(p.Scope); err != nil {
 		return err
 	}
+	if p.Resource == "iam" {
+		if p.Scope == "any" {
+			return nil
+		}
+		switch p.Action {
+		case "teams", "groups", "roles", "bindings":
+			if p.Scope == "team" {
+				return nil
+			}
+		}
+		return fmt.Errorf("invalid iam permission scope %q for area %q", p.Scope, p.Action)
+	}
 	return nil
+}
+
+// ValidatePermissionKey validates a serialized permission key at a write
+// boundary. Runtime permission parsing uses the same grammar through Parse.
+func ValidatePermissionKey(key string) error {
+	_, err := Parse(key)
+	return err
 }
 
 // String serializes a permission in its canonical grammar form.

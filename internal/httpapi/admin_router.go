@@ -1,21 +1,323 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	auditlog "teamusers/internal/audit"
 	"teamusers/internal/config"
 	"teamusers/internal/domain"
 	"teamusers/internal/store"
 )
+
+type adminGrantScopeContextKey struct{}
+
+const (
+	adminGrantScopeAny  = "any"
+	adminGrantScopeTeam = "team"
+)
+
+func withAdminGrantScope(r *http.Request, scope string) *http.Request {
+	ctx := context.WithValue(r.Context(), adminGrantScopeContextKey{}, scope)
+	return r.WithContext(ctx)
+}
+
+func adminGrantScopeFrom(ctx context.Context) string {
+	scope, _ := ctx.Value(adminGrantScopeContextKey{}).(string)
+	return scope
+}
+
+// requirePermission enforces the resource permission for each administrative
+// route after authentication has populated the subject. The admin plane is low
+// QPS, so resolving permissions directly from the store on every request is
+// intentional.
+func (h *adminHandler) requirePermission(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subject, ok := SubjectFrom(r.Context())
+		if !ok {
+			WriteProblem(w, r, http.StatusUnauthorized, "Unauthorized", "an authenticated subject is required")
+			return
+		}
+		if subject.Kind != "user" {
+			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "administrative access requires a user subject")
+			return
+		}
+
+		area := adminPermissionArea(r.URL.Path)
+		key := adminPermissionForPath(r.URL.Path)
+		if area == "" || key == "" {
+			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
+			return
+		}
+		requested, err := domain.Parse(key)
+		if err != nil {
+			WriteProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "authorization service unavailable")
+			return
+		}
+		now := time.Now()
+		permissionKeys, resolveErr := store.ListUnconditionalRolePermissions(r.Context(), h.q, subject.UserID, now)
+		if resolveErr != nil {
+			WriteProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "authorization service unavailable")
+			return
+		}
+		grants := parsePermissionGrants(permissionKeys)
+		if permissionGranted(grants, requested) {
+			next.ServeHTTP(w, withAdminGrantScope(r, adminGrantScopeAny))
+			return
+		}
+		if !isTeamScopedAdminArea(area) {
+			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
+			return
+		}
+
+		teamID, targeted, targetErr := h.resolveAdminTeam(r.Context(), r, area)
+		if targetErr != nil {
+			if errors.Is(targetErr, pgx.ErrNoRows) {
+				WriteProblem(w, r, http.StatusNotFound, "Not Found", "the requested resource was not found")
+				return
+			}
+			WriteProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "authorization service unavailable")
+			return
+		}
+		if !targeted || teamID == "" {
+			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
+			return
+		}
+
+		teamPermissions, teamErr := store.ListUnconditionalTeamRolePermissions(r.Context(), h.q, subject.UserID, now)
+		if teamErr != nil {
+			WriteProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "authorization service unavailable")
+			return
+		}
+		for _, candidate := range teamPermissions {
+			if candidate.TeamID != teamID {
+				continue
+			}
+			requestedTeam := domain.Permission{Resource: "iam", Action: area, Scope: "team"}
+			if permissionGranted(parsePermissionGrants(candidate.Keys), requestedTeam) {
+				next.ServeHTTP(w, withAdminGrantScope(r, adminGrantScopeTeam))
+				return
+			}
+		}
+		WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
+	})
+}
+
+func parsePermissionGrants(keys []string) []domain.Permission {
+	grants := make([]domain.Permission, 0, len(keys))
+	for _, key := range keys {
+		permission, err := domain.Parse(key)
+		if err == nil {
+			grants = append(grants, permission)
+		}
+	}
+	return grants
+}
+
+func permissionGranted(grants []domain.Permission, requested domain.Permission) bool {
+	resolution := domain.Resolve(grants, []domain.Permission{requested})
+	return len(resolution) == 1 && resolution[0].Matched && resolution[0].Allowed
+}
+
+func adminPathSegments(path string) []string {
+	trimmed := strings.Trim(path, "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
+}
+
+func adminPermissionArea(path string) string {
+	segments := adminPathSegments(path)
+	if len(segments) == 0 {
+		return ""
+	}
+	if segments[0] == "users" && len(segments) >= 3 && segments[2] == "sessions" {
+		return "sessions"
+	}
+	switch segments[0] {
+	case "invitations", "users":
+		return "users"
+	case "teams":
+		return "teams"
+	case "groups":
+		return "groups"
+	case "roles":
+		return "roles"
+	case "permissions":
+		return "permissions"
+	case "bindings":
+		return "bindings"
+	case "audit":
+		return "audit"
+	default:
+		return ""
+	}
+}
+
+func isTeamScopedAdminArea(area string) bool {
+	switch area {
+	case "teams", "groups", "roles", "bindings":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *adminHandler) resolveAdminTeam(ctx context.Context, r *http.Request, area string) (string, bool, error) {
+	segments := adminPathSegments(r.URL.Path)
+	switch area {
+	case "teams":
+		if len(segments) < 2 || segments[1] == "" {
+			return "", false, nil
+		}
+		team, err := store.GetTeam(ctx, h.q, segments[1])
+		if err != nil {
+			return "", true, err
+		}
+		return team.ID, true, nil
+	case "groups":
+		if len(segments) >= 2 && segments[1] != "" {
+			group, err := store.GetGroup(ctx, h.q, segments[1])
+			if err != nil {
+				return "", true, err
+			}
+			return group.TeamID, true, nil
+		}
+		if r.Method == http.MethodPost {
+			return h.resolveAdminBodyTeam(ctx, r, "team_id")
+		}
+		teamID := strings.TrimSpace(r.URL.Query().Get("team_id"))
+		if teamID == "" {
+			return "", false, nil
+		}
+		team, err := store.GetTeam(ctx, h.q, teamID)
+		if err != nil {
+			return "", true, err
+		}
+		return team.ID, true, nil
+	case "roles":
+		if len(segments) >= 2 && segments[1] != "" {
+			role, err := store.GetRole(ctx, h.q, segments[1])
+			if err != nil {
+				return "", true, err
+			}
+			if role.TeamID == nil {
+				return "", true, nil
+			}
+			return *role.TeamID, true, nil
+		}
+		if r.Method == http.MethodPost {
+			return h.resolveAdminBodyTeam(ctx, r, "team_id")
+		}
+		teamID := strings.TrimSpace(r.URL.Query().Get("team_id"))
+		if teamID == "" {
+			return "", false, nil
+		}
+		team, err := store.GetTeam(ctx, h.q, teamID)
+		if err != nil {
+			return "", true, err
+		}
+		return team.ID, true, nil
+	case "bindings":
+		if len(segments) >= 2 && segments[1] != "" {
+			binding, err := store.GetRoleBinding(ctx, h.q, segments[1])
+			if err != nil {
+				return "", true, err
+			}
+			if binding.TeamID == nil {
+				return "", true, nil
+			}
+			return *binding.TeamID, true, nil
+		}
+		if r.Method != http.MethodPost {
+			return "", false, nil
+		}
+		raw, present, err := adminBodyField(r, "role_id")
+		if err != nil {
+			return "", false, err
+		}
+		if !present {
+			return "", false, nil
+		}
+		var roleID string
+		if json.Unmarshal(raw, &roleID) != nil {
+			return "", false, nil
+		}
+		roleID = strings.TrimSpace(roleID)
+		if roleID == "" {
+			return "", false, nil
+		}
+		role, err := store.GetRole(ctx, h.q, roleID)
+		if err != nil {
+			return "", true, err
+		}
+		if role.TeamID == nil {
+			return "", true, nil
+		}
+		return *role.TeamID, true, nil
+	default:
+		return "", false, nil
+	}
+}
+
+func (h *adminHandler) resolveAdminBodyTeam(ctx context.Context, r *http.Request, field string) (string, bool, error) {
+	raw, present, err := adminBodyField(r, field)
+	if err != nil {
+		return "", false, err
+	}
+	if !present {
+		return "", false, nil
+	}
+	teamID, err := decodeNullableString(raw)
+	if err != nil || teamID == nil {
+		return "", false, nil
+	}
+	team, err := store.GetTeam(ctx, h.q, *teamID)
+	if err != nil {
+		return "", true, err
+	}
+	return team.ID, true, nil
+}
+
+func adminBodyField(r *http.Request, field string) (json.RawMessage, bool, error) {
+	if r.Body == nil {
+		return nil, false, nil
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, false, err
+	}
+	_ = r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, false, nil
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(body, &values); err != nil {
+		return nil, false, nil
+	}
+	value, present := values[field]
+	return value, present, nil
+}
+
+func adminPermissionForPath(path string) string {
+	area := adminPermissionArea(path)
+	if area == "" {
+		return ""
+	}
+	return "iam:" + area + ":any"
+}
 
 type adminHandler struct {
 	q     store.Q
@@ -35,6 +337,9 @@ func validationError(detail string) error {
 
 func unprocessableError(detail string) error {
 	return &adminProblemError{status: http.StatusUnprocessableEntity, detail: detail}
+}
+func forbiddenError(detail string) error {
+	return &adminProblemError{status: http.StatusForbidden, detail: detail}
 }
 
 func writeValidationError(w http.ResponseWriter, r *http.Request, err error) bool {
@@ -152,80 +457,6 @@ func (h *adminHandler) requireSubject(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// requirePermission enforces the resource permission for each administrative
-// route after authentication has populated the subject. The admin plane is low
-// QPS, so resolving permissions directly from the store on every request is
-// intentional.
-func (h *adminHandler) requirePermission(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		subject, ok := SubjectFrom(r.Context())
-		if !ok {
-			WriteProblem(w, r, http.StatusUnauthorized, "Unauthorized", "an authenticated subject is required")
-			return
-		}
-		if subject.Kind != "user" {
-			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "administrative access requires a user subject")
-			return
-		}
-
-		key := adminPermissionForPath(r.URL.Path)
-		if key == "" {
-			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
-			return
-		}
-		requested, err := domain.Parse(key)
-		if err != nil {
-			WriteProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "authorization service unavailable")
-			return
-		}
-		permissionKeys, resolveErr := store.ListUnconditionalRolePermissions(r.Context(), h.q, subject.UserID, time.Now())
-		if resolveErr != nil {
-			WriteProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "authorization service unavailable")
-			return
-		}
-		grants := make([]domain.Permission, 0, len(permissionKeys))
-		for _, key := range permissionKeys {
-			permission, parseErr := domain.Parse(key)
-			if parseErr == nil {
-				grants = append(grants, permission)
-			}
-		}
-		resolution := domain.Resolve(grants, []domain.Permission{requested})
-		if len(resolution) != 1 || !resolution[0].Matched || !resolution[0].Allowed {
-			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func adminPermissionForPath(path string) string {
-	segments := strings.Split(strings.Trim(path, "/"), "/")
-	if len(segments) >= 3 && segments[0] == "users" && segments[2] == "sessions" {
-		return "iam:sessions:any"
-	}
-	switch {
-	case path == "/invitations" || strings.HasPrefix(path, "/invitations/"):
-		return "iam:users:any"
-	case path == "/users" || strings.HasPrefix(path, "/users/"):
-		return "iam:users:any"
-	case path == "/teams" || strings.HasPrefix(path, "/teams/"):
-		return "iam:teams:any"
-	case path == "/groups" || strings.HasPrefix(path, "/groups/"):
-		return "iam:groups:any"
-	case path == "/roles" || strings.HasPrefix(path, "/roles/"):
-		return "iam:roles:any"
-	case path == "/permissions" || strings.HasPrefix(path, "/permissions/"):
-		return "iam:permissions:any"
-	case path == "/bindings" || strings.HasPrefix(path, "/bindings/"):
-		return "iam:bindings:any"
-	case path == "/audit" || strings.HasPrefix(path, "/audit/"):
-		return "iam:audit:any"
-	default:
-		return ""
-	}
 }
 
 func (h *adminHandler) withTx(ctx context.Context, fn func(context.Context, store.Tx) error) error {

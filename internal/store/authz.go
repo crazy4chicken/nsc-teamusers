@@ -129,6 +129,61 @@ func ListUnconditionalRolePermissions(ctx context.Context, q Q, userID string, n
 	return permissions, nil
 
 }
+
+// TeamRolePermissions groups unconditional role permissions by the team scope
+// carried by a binding.
+type TeamRolePermissions struct {
+	TeamID string
+	Keys   []string
+}
+
+// ListUnconditionalTeamRolePermissions returns active, conditionless grants
+// for the caller's non-platform bindings, grouped by binding team. Direct
+// bindings and group-inherited bindings follow the same membership rules as
+// ListUnconditionalRolePermissions.
+func ListUnconditionalTeamRolePermissions(ctx context.Context, q Q, userID string, now time.Time) ([]TeamRolePermissions, error) {
+	rows, err := q.Query(ctx, `
+		SELECT DISTINCT b.team_id, rp.permission_key
+		FROM role_bindings b
+		JOIN roles r ON r.id = b.role_id
+		JOIN role_permissions rp ON rp.role_id = r.id
+		WHERE b.team_id IS NOT NULL
+		  AND (b.expires_at IS NULL OR b.expires_at > $2)
+		  AND (b.condition IS NULL OR btrim(b.condition) = '')
+		  AND (
+			(b.subject_kind = 'user' AND b.subject_id = $1 AND EXISTS (
+				SELECT 1 FROM memberships m
+				WHERE m.user_id = $1 AND m.team_id = b.team_id
+				  AND (m.expires_at IS NULL OR m.expires_at > $2)
+			))
+			OR (b.subject_kind = 'group' AND EXISTS (
+				SELECT 1 FROM memberships m
+				WHERE m.user_id = $1 AND m.group_id = b.subject_id
+				  AND (m.expires_at IS NULL OR m.expires_at > $2)
+				  AND m.team_id = b.team_id
+			))
+		  )
+		ORDER BY b.team_id, rp.permission_key`, userID, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	permissions := make([]TeamRolePermissions, 0)
+	for rows.Next() {
+		var teamID, key string
+		if err := rows.Scan(&teamID, &key); err != nil {
+			return nil, err
+		}
+		if len(permissions) == 0 || permissions[len(permissions)-1].TeamID != teamID {
+			permissions = append(permissions, TeamRolePermissions{TeamID: teamID})
+		}
+		permissions[len(permissions)-1].Keys = append(permissions[len(permissions)-1].Keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return permissions, nil
+}
 func scanAuthzRoleBindings(rows pgx.Rows) ([]RoleBinding, error) {
 	bindings := make([]RoleBinding, 0)
 	for rows.Next() {

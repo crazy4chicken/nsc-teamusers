@@ -124,10 +124,14 @@ func (h *adminHandler) patchRole(w http.ResponseWriter, r *http.Request) {
 		}
 		original := before
 		if len(request.TeamID) > 0 {
-			before.TeamID, err = decodeNullableString(request.TeamID)
-			if err != nil {
+			teamID, decodeErr := decodeNullableString(request.TeamID)
+			if decodeErr != nil {
 				return validationError("team_id must be a string or null")
 			}
+			if adminGrantScopeFrom(r.Context()) != adminGrantScopeAny && !sameTeamID(before.TeamID, teamID) {
+				return forbiddenError("team-scoped admins cannot change role team_id")
+			}
+			before.TeamID = teamID
 		}
 		if request.Name != nil {
 			before.Name = strings.TrimSpace(*request.Name)
@@ -206,8 +210,13 @@ func (h *adminHandler) setRolePermissions(w http.ResponseWriter, r *http.Request
 		return
 	}
 	for _, key := range permissionKeys {
-		if _, err := domain.Parse(key); err != nil {
+		permission, err := domain.Parse(key)
+		if err != nil {
 			WriteProblem(w, r, http.StatusUnprocessableEntity, "Invalid Permission", err.Error())
+			return
+		}
+		if adminGrantScopeFrom(r.Context()) != adminGrantScopeAny && permission.Scope != "team" {
+			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "team-scoped admins may only attach team-scoped permissions")
 			return
 		}
 	}
@@ -448,6 +457,13 @@ func (h *adminHandler) deleteBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func sameTeamID(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func decodeNullableString(raw json.RawMessage) (*string, error) {
