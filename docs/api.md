@@ -203,6 +203,23 @@ The password is stored only as an Argon2id credential. The service writes a
 transactional `notify.user.verification` event containing the plaintext
 verification token; the token is not returned by this endpoint.
 
+
+### `POST /auth/invite/accept` — Public invitation acceptance
+
+Submit the one-time token delivered by the notification service and a password:
+
+```json
+{"token":"<invitation-token>","password":"at-least-twelve1","display_name":"Alice"}
+```
+
+An unexpired, unused invitation token returns `204 No Content`, creates the
+password credential, activates the user, and records `email_verified_at` (the
+invitation email is treated as verified). `display_name` is optional. Unknown,
+expired, used, wrong-kind, cancelled, or already-active invitation tokens
+return `400` with problem detail `invalid_token`; a password that fails the
+configured policy returns `422` with `weak_password`. Requests are rate-limited
+per client IP.
+
 ### `GET /me` — User bearer self-service
 
 The caller must send an active user access token. The response contains only the
@@ -378,9 +395,7 @@ records verification but never activates an account.
 An unknown, expired, already-used, or otherwise invalid token returns `400`
 with problem detail `invalid_token`.
 
-Pending accounts have their password checked normally but `/auth/login` then
-returns `403` with problem detail `account_pending`; invalid credentials still
-return the generic `401` authentication problem.
+Pending and invited accounts have their password checked normally but `/auth/login` then returns `403` with problem detail `account_pending`; invalid credentials still return the generic `401` authentication problem.
 
 ### `POST /auth/client-credentials` — Public service login
 
@@ -531,7 +546,6 @@ Collection list and create methods are registered with both `/collection` and
 | `POST /users/import` | `text/csv` with header `username,email,display_name,password`; up to 500 data rows. | `200` `{"results":[{"row":2,"username":"alice","ok":true,"id":"01J..."},{"row":3,"username":"bob","ok":false,"error":"weak_password"}]}`. Rows are numbered from the CSV file (the header is row 1). Users are active immediately and receive password credentials; malformed CSV or a missing/invalid header returns `422`. |
 | `POST /users/{id}/credentials` | `{"kind":"service"}` generates a service secret, or `{"kind":"password","password":"..."}` creates/rotates a password credential. | `201` `{"user_id":"01J...","username":"orders-service","kind":"password"}`; service credentials additionally return `client_id` (the username) and one-time `client_secret`. |
 | `DELETE /users/{id}/totp` | No body. | `204`; deletes active/pending TOTP and backup-code credentials and appends `admin.totp_reset`. Unknown users return `404`. |
-| `POST /users/{id}/approve` | No body. | `200` active `User`; emits `notify.user.approved`. |
 | `GET /users/{id}/sessions` | No body. | `200` active sessions as `[{"id":"<opaque-digest>","created_at":"...","expires_at":"..."}]`. |
 | `DELETE /users/{id}/sessions/{sid}` | No body. | `204`; only the session belonging to `{id}` is affected. |
 | `DELETE /users/{id}/sessions` | No body. | `204`; revokes all refresh sessions for the user. |
@@ -552,6 +566,19 @@ unknown user returns `404`; and a missing or stale admin bearer returns `401`.
 In `approval` registration mode, approval requires `email_verified_at` and
 returns `422` with problem detail `email_not_verified` when verification has
 not completed. An unknown user returns `404`.
+
+### Invitations
+
+Invitation administration requires `iam:users:any`:
+
+| Method and path | Request | Response |
+| --- | --- | --- |
+| `POST /invitations` | `{"email":"alice@example.test","username":"alice","display_name":"Alice"}`. Email and username must be unique. | `201 {"id":"01J...","status":"invited"}`; emits `notify.user.invited`. |
+| `POST /invitations/{userID}/resend` | No body. The user must still be `invited`. | `204`; rotates the prior invitation token and emits a new `notify.user.invited`. |
+| `DELETE /invitations/{userID}` | No body. The user must still be `invited`. | `204`; deletes the user and cascaded records. |
+
+Invited users have status `invited` until acceptance. Resend and cancellation
+return `422` when the target is not invited; unknown users return `404`.
 
 ### Teams
 

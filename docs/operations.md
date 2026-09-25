@@ -277,6 +277,28 @@ not reset the password or return credential material. Confirm the user can sign
 in with their password, then have them enroll TOTP again and store the new
 backup codes in an approved secrets facility. An unknown user returns `404`.
 
+## Invitation operations
+
+Administrators with `iam:users:any` create invited users through
+`POST /invitations`. The service stores no password credential until the
+recipient accepts, hashes the one-time invitation token in
+`verification_tokens`, and writes the plaintext token only to the transactional
+`notify.user.invited` outbox payload. Invitation tokens are valid for seven
+days. The notification service should deliver the token over the approved
+invitation channel and must not expose it in logs.
+
+Use `POST /invitations/{userID}/resend` when delivery fails. Resend marks any
+previous unused invitation token used before creating a replacement, so only
+the newest token can be accepted. Use `DELETE /invitations/{userID}` to cancel
+an invitation; deletion cascades to its token and any other user records. Both
+operations are audited as `invitation.resent` or `invitation.cancelled`.
+
+The recipient submits the token and a policy-compliant password to
+`POST /auth/invite/accept`. Success activates the account and treats the
+invitation email as verified. Until acceptance, password login returns the
+generic `403 account_pending` problem used for other non-active lifecycle
+states.
+
 ## Notification service integration
 
 Set `TEAMUSERS_NOTIFICATION_ENDPOINTS` to a comma-separated list of notification
@@ -284,9 +306,10 @@ service endpoint URLs and `TEAMUSERS_NOTIFICATION_SECRET` to the HMAC secret
 shared with the notification service. The notifier polls the notification
 outbox every two seconds. It sends notification directives currently emitted by
 this service (`user.created`, `user.disabled`, `user.verification`,
-`user.approved`, `password.reset_requested`, and `session.reuse_detected`) as
-HMAC-signed JSON `POST` requests to each configured endpoint. This service decides
-what to notify and when; the notification service owns actual email/SMS delivery.
+`user.approved`, `user.invited`, `password.reset_requested`, and
+`session.reuse_detected`) as HMAC-signed JSON `POST` requests to each configured
+endpoint. This service decides what to notify and when; the notification service
+owns actual email/SMS delivery.
 
 ```json
 {

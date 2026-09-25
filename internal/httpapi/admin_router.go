@@ -78,6 +78,14 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 			router.Post(route.path, route.post)
 		}
 	}
+	router.Post("/invitations", h.createInvitation)
+	router.Delete("/invitations/{userID}", h.cancelInvitation)
+
+	router.Route("/invitations", func(r chi.Router) {
+		r.Post("/", h.createInvitation)
+		r.Post("/{userID}/resend", h.resendInvitation)
+		r.Delete("/{userID}", h.cancelInvitation)
+	})
 
 	router.Route("/users", func(r chi.Router) {
 		r.Get("/", h.listUsers)
@@ -199,6 +207,8 @@ func adminPermissionForPath(path string) string {
 		return "iam:sessions:any"
 	}
 	switch {
+	case path == "/invitations" || strings.HasPrefix(path, "/invitations/"):
+		return "iam:users:any"
 	case path == "/users" || strings.HasPrefix(path, "/users/"):
 		return "iam:users:any"
 	case path == "/teams" || strings.HasPrefix(path, "/teams/"):

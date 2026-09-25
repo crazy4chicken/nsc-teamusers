@@ -126,6 +126,7 @@ func (s *Service) Routes() chi.Router {
 	router.Post("/auth/login", s.login)
 	router.Post("/auth/register", s.register)
 	router.Post("/auth/verify-email", s.verifyEmail)
+	router.Post("/auth/invite/accept", s.acceptInvitation)
 	router.Post("/auth/password-reset/request", s.requestPasswordReset)
 	router.Post("/auth/password-reset/confirm", s.confirmPasswordReset)
 	router.Post("/auth/client-credentials", s.clientCredentials)
@@ -200,6 +201,14 @@ type passwordResetConfirmRequest struct {
 	Token       string `json:"token"`
 	NewPassword string `json:"new_password"`
 }
+
+type inviteAcceptRequest struct {
+	Token       string  `json:"token"`
+	Password    string  `json:"password"`
+	DisplayName *string `json:"display_name"`
+}
+
+var errWeakInvitePassword = errors.New("weak invitation password")
 
 var errWeakPasswordReset = errors.New("weak password")
 
@@ -327,6 +336,80 @@ func (s *Service) verifyEmail(w http.ResponseWriter, r *http.Request) {
 	})
 	if errors.Is(err, store.ErrNotFound) {
 		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Service) acceptInvitation(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allowIP(requestIP(r), s.now()) {
+		writeRateLimited(w, r)
+		return
+	}
+	var request inviteAcceptRequest
+	if !decodeJSON(w, r, &request) {
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "request body must be valid JSON")
+		return
+	}
+	request.Token = strings.TrimSpace(request.Token)
+	if request.Token == "" {
+		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	err := store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		userID, kind, payload, err := store.ConsumeVerificationTokenWithPayload(ctx, tx, hashVerificationToken(request.Token))
+		if errors.Is(err, store.ErrNotFound) || (err == nil && kind != "invite") {
+			return store.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		var invitation struct {
+			Email string `json:"email"`
+		}
+		if err := json.Unmarshal(payload, &invitation); err != nil || strings.TrimSpace(invitation.Email) == "" {
+			return store.ErrNotFound
+		}
+		user, err := store.GetUser(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		if user.Status != "invited" || user.Email == nil || !strings.EqualFold(strings.TrimSpace(*user.Email), strings.TrimSpace(invitation.Email)) {
+			return store.ErrNotFound
+		}
+		if !ValidatePassword(request.Password, s.cfg.PasswordMinLength) {
+			return errWeakInvitePassword
+		}
+		passwordHash, err := HashPassword(request.Password)
+		if err != nil {
+			return err
+		}
+		if _, err := store.CreateCredential(ctx, tx, store.Credential{
+			UserID: userID,
+			Kind:   "password",
+			Hash:   passwordHash,
+		}); err != nil {
+			return err
+		}
+		_, err = store.ActivateInvitedUser(ctx, tx, userID, request.DisplayName, s.now())
+		if errors.Is(err, pgx.ErrNoRows) {
+			return store.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		return s.appendAuthAudit(ctx, tx, "invitation.accepted", userID, userID)
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	if errors.Is(err, errWeakInvitePassword) {
+		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
 		return
 	}
 	if err != nil {
@@ -551,6 +634,11 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeInternal(w, r)
 		return
 	}
+	if userErr == nil && user.Status == "invited" {
+		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
+		writeAuthProblem(w, r, http.StatusForbidden, "account_pending")
+		return
+	}
 	if userErr != nil || credentialErr != nil || !valid {
 		if userErr == nil && user.ID != "" {
 			if err := s.recordLoginFailure(r.Context(), user); err != nil {
@@ -562,7 +650,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w, r)
 		return
 	}
-	if user.Status == "pending" {
+	if user.Status == "pending" || user.Status == "invited" {
 		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
 		writeAuthProblem(w, r, http.StatusForbidden, "account_pending")
 		return

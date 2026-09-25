@@ -74,6 +74,21 @@ and notification were committed, so audit records do not turn the public
 request endpoint into an account-existence oracle. Reset completion is audited
 against the recovered user.
 
+## Invitation tokens
+
+Invitation tokens are 32-byte random values rendered as base64url text. Only
+the SHA-256 digest is stored in `verification_tokens`; the plaintext is carried
+only in the transactional `notify.user.invited` outbox payload. Tokens are
+single-use and expire after seven days. Resending an invitation marks every
+previous unused invitation token used before issuing a replacement, and
+cancelling an invitation deletes the user and cascaded token rows.
+
+The public acceptance endpoint is rate-limited per client IP and returns the
+generic `invalid_token` problem for unknown, expired, used, wrong-kind,
+cancelled, and already-active invitation tokens. It validates the configured
+password policy before creating the password credential. An invited account
+cannot log in before acceptance; password login returns `403 account_pending`.
+
 Backup-code regeneration requires an authenticated user bearer, an active TOTP
 credential, and the current password. Ten new random codes replace the prior
 single JSON digest row atomically; old codes therefore fail immediately and
