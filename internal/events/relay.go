@@ -26,8 +26,9 @@ var natsSubjects = map[string]string{
 	"key.rotated":   "iam.key.rotated",
 }
 
-// Relay publishes unpublished non-webhook outbox events to JetStream. Rows
-// remain unpublished when a publish fails, so a later poll retries them.
+// Relay publishes unpublished outbox events other than the `notify.` notification
+// topics to JetStream. Rows remain unpublished when a publish fails, so a later
+// poll retries them.
 type Relay struct {
 	q            store.Q
 	natsURL      string

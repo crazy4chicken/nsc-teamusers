@@ -38,8 +38,8 @@ following is a concrete service definition using the entity fields
     "TEAMUSERS_NODE_ID": "teamusers",
     "TEAMUSERS_LOG_LEVEL": "info",
     "TEAMUSERS_NATS_URL": "",
-    "TEAMUSERS_WEBHOOK_ENDPOINTS": "",
-    "TEAMUSERS_WEBHOOK_SECRET": "<webhook-secret>"
+    "TEAMUSERS_NOTIFICATION_ENDPOINTS": "",
+    "TEAMUSERS_NOTIFICATION_SECRET": "<notification-secret>"
   },
   "StartMode": "Eager",
   "ForwardingMode": "Preserve"
@@ -55,7 +55,7 @@ as **CLI flags > `TEAMUSERS_LISTEN_*` > supervisor `PORT`/`HOST` > defaults**, s
 leave `TEAMUSERS_LISTEN_ADDRESS` and `TEAMUSERS_LISTEN_PORT` unset for a leased
 listener. Set them only when deliberately overriding the lease.
 
-The connection string and webhook secret in `Environment` are placeholders
+The connection string and notification service secret in `Environment` are placeholders
 above. Nekostick stores service `Environment` values as plaintext in its
 PostgreSQL configuration; restrict access to the service entity, audit reads,
 and backups accordingly. Never put real credentials in source control,
@@ -121,7 +121,7 @@ Nekostick captures child stdout/stderr line by line. The service's JSON `slog`
 records are single-line and fit the supervisor's 16 KiB line limit. Keep
 operator-injected environment values and any wrapper output within the
 supervisor's 200-lines/second and 1 MiB/second caps; never print DSNs, token
-secrets, private keys, or webhook secrets.
+secrets, private keys, or notification service secrets.
 
 ## Forwarded client addresses
 

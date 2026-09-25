@@ -276,8 +276,9 @@ owns the process lifecycle.
   the service binds exactly those (precedence: CLI > `TEAMUSERS_LISTEN_*` >
   `PORT`/`HOST` > default). Upstream is `http://$HOST:$PORT`.
 - **Service definition**: `FileName=<binary>`, `ArgumentList=["run"]`,
-  `Environment` carries `TEAMUSERS_CONNECTION_STRING`/`TEAMUSERS_KEY_DIR`/NATS and
-  webhook knobs. Secrets in service Environment are stored plaintext in
+  `Environment` carries `TEAMUSERS_CONNECTION_STRING`/`TEAMUSERS_KEY_DIR`/NATS,
+  `TEAMUSERS_NOTIFICATION_ENDPOINTS`, and `TEAMUSERS_NOTIFICATION_SECRET`.
+  Secrets in service Environment are stored plaintext in
   Nekostick's PG config — treat Host Config API read access as high-sensitivity.
 - **Lifecycle**: start mode Eager (auth is on every service's critical path;
   Lazy would stall first requests). Supervisor SIGTERMs the process group with
@@ -347,8 +348,10 @@ PLAN.md                 this file
   admin-written, never client-supplied at check time beyond the documented
   context schema.
 - **perm_ver fan-out cost** on bulk role edits: batch updates; measure in M3.
-- **Decided**: no SMTP/email in this service. Notification-style events
+- **Decided**: no SMTP/email in this service. Notification directives
   (`user.created`, `password.reset_requested`, …) are delivered as HMAC-signed
-  outbound **webhooks** to configurable endpoints; consumers own delivery.
+  HTTP calls to the configured notification service endpoint(s) from
+  `TEAMUSERS_NOTIFICATION_ENDPOINTS`. The notification service owns actual
+  email/SMS delivery; this service decides what to notify and when.
 - **Decided**: no admin console UI in this repo; the admin plane HTTP API is the
   management interface. A console may consume it later as a separate project.

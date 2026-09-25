@@ -12,29 +12,29 @@ import (
 )
 
 const (
-	envConnectionString = "TEAMUSERS_CONNECTION_STRING"
-	envListenAddress    = "TEAMUSERS_LISTEN_ADDRESS"
-	envListenPort       = "TEAMUSERS_LISTEN_PORT"
-	envNodeID           = "TEAMUSERS_NODE_ID"
-	envLogLevel         = "TEAMUSERS_LOG_LEVEL"
-	envKeyDir           = "TEAMUSERS_KEY_DIR"
-	envNATSURL          = "TEAMUSERS_NATS_URL"
-	envWebhookEndpoints = "TEAMUSERS_WEBHOOK_ENDPOINTS"
-	envWebhookSecret    = "TEAMUSERS_WEBHOOK_SECRET"
+	envConnectionString      = "TEAMUSERS_CONNECTION_STRING"
+	envListenAddress         = "TEAMUSERS_LISTEN_ADDRESS"
+	envListenPort            = "TEAMUSERS_LISTEN_PORT"
+	envNodeID                = "TEAMUSERS_NODE_ID"
+	envLogLevel              = "TEAMUSERS_LOG_LEVEL"
+	envKeyDir                = "TEAMUSERS_KEY_DIR"
+	envNATSURL               = "TEAMUSERS_NATS_URL"
+	envNotificationEndpoints = "TEAMUSERS_NOTIFICATION_ENDPOINTS"
+	envNotificationSecret    = "TEAMUSERS_NOTIFICATION_SECRET"
 )
 
 // Config is the process configuration. Values are resolved in flag, env, and
 // default order, respectively.
 type Config struct {
-	ConnectionString string   `json:"connection_string,omitempty"`
-	ListenAddress    string   `json:"listen_address"`
-	ListenPort       int      `json:"listen_port"`
-	NodeID           string   `json:"node_id,omitempty"`
-	LogLevel         string   `json:"log_level"`
-	KeyDir           string   `json:"key_dir"`
-	NATSURL          string   `json:"nats_url,omitempty"`
-	WebhookEndpoints []string `json:"webhook_endpoints,omitempty"`
-	WebhookSecret    string   `json:"webhook_secret,omitempty"`
+	ConnectionString      string   `json:"connection_string,omitempty"`
+	ListenAddress         string   `json:"listen_address"`
+	ListenPort            int      `json:"listen_port"`
+	NodeID                string   `json:"node_id,omitempty"`
+	LogLevel              string   `json:"log_level"`
+	KeyDir                string   `json:"key_dir"`
+	NATSURL               string   `json:"nats_url,omitempty"`
+	NotificationEndpoints []string `json:"notification_endpoints,omitempty"`
+	NotificationSecret    string   `json:"notification_secret,omitempty"`
 }
 
 // Load reads configuration from the process environment and optional command
@@ -54,8 +54,8 @@ func Load(args ...string) (Config, error) {
 	logLevel := envOrDefault(envLogLevel, "info")
 	keyDir := envOrDefault(envKeyDir, "./data/keys")
 	natsURL := envOrDefault(envNATSURL, "")
-	webhookEndpoints := envOrDefault(envWebhookEndpoints, "")
-	webhookSecret := envOrDefault(envWebhookSecret, "")
+	notificationEndpoints := envOrDefault(envNotificationEndpoints, "")
+	notificationSecret := envOrDefault(envNotificationSecret, "")
 
 	fs.StringVar(&connectionString, "connection-string", connectionString, "PostgreSQL connection string")
 	fs.StringVar(&listenAddress, "listen-address", listenAddress, "HTTP listen address")
@@ -64,8 +64,8 @@ func Load(args ...string) (Config, error) {
 	fs.StringVar(&logLevel, "log-level", logLevel, "log level (debug, info, warn, error)")
 	fs.StringVar(&keyDir, "key-dir", keyDir, "directory containing signing keys")
 	fs.StringVar(&natsURL, "nats-url", natsURL, "NATS URL")
-	fs.StringVar(&webhookEndpoints, "webhook-endpoints", webhookEndpoints, "comma-separated webhook endpoint URLs")
-	fs.StringVar(&webhookSecret, "webhook-secret", webhookSecret, "webhook signing secret")
+	fs.StringVar(&notificationEndpoints, "notification-endpoints", notificationEndpoints, "comma-separated notification service endpoint URLs")
+	fs.StringVar(&notificationSecret, "notification-secret", notificationSecret, "notification service signing secret")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -76,15 +76,15 @@ func Load(args ...string) (Config, error) {
 	}
 
 	cfg := Config{
-		ConnectionString: connectionString,
-		ListenAddress:    listenAddress,
-		ListenPort:       port,
-		NodeID:           nodeID,
-		LogLevel:         strings.ToLower(strings.TrimSpace(logLevel)),
-		KeyDir:           keyDir,
-		NATSURL:          natsURL,
-		WebhookEndpoints: parseWebhookEndpoints(webhookEndpoints),
-		WebhookSecret:    webhookSecret,
+		ConnectionString:      connectionString,
+		ListenAddress:         listenAddress,
+		ListenPort:            port,
+		NodeID:                nodeID,
+		LogLevel:              strings.ToLower(strings.TrimSpace(logLevel)),
+		KeyDir:                keyDir,
+		NATSURL:               natsURL,
+		NotificationEndpoints: parseNotificationEndpoints(notificationEndpoints),
+		NotificationSecret:    notificationSecret,
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -140,9 +140,9 @@ func (c Config) Redacted() Config {
 	if redacted.NATSURL != "" {
 		redacted.NATSURL = "[redacted]"
 	}
-	redacted.WebhookEndpoints = nil
-	if redacted.WebhookSecret != "" {
-		redacted.WebhookSecret = "[redacted]"
+	redacted.NotificationEndpoints = nil
+	if redacted.NotificationSecret != "" {
+		redacted.NotificationSecret = "[redacted]"
 	}
 	return redacted
 }
@@ -161,7 +161,7 @@ func (c Config) SlogLevel() slog.Level {
 	}
 }
 
-func parseWebhookEndpoints(raw string) []string {
+func parseNotificationEndpoints(raw string) []string {
 	parts := strings.Split(raw, ",")
 	endpoints := make([]string, 0, len(parts))
 	for _, part := range parts {

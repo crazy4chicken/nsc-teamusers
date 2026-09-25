@@ -99,7 +99,7 @@ func (h *adminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 		if err := appendPermissionChange(ctx, tx, []string{user.ID}, nil); err != nil {
 			return err
 		}
-		return appendWebhookEvent(ctx, tx, "user.created", map[string]string{
+		return appendNotifyEvent(ctx, tx, "user.created", map[string]string{
 			"user_id": user.ID, "username": user.Username,
 		})
 	})

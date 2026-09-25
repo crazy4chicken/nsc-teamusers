@@ -558,7 +558,7 @@ func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Req
 				return err
 			}
 			if _, err := store.AppendOutboxEvent(txctx, tx, store.OutboxEvent{
-				Topic: "webhook.session.reuse_detected", Payload: payload,
+				Topic: "notify.session.reuse_detected", Payload: payload,
 			}); err != nil {
 				return err
 			}

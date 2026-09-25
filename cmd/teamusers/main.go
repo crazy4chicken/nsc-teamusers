@@ -160,7 +160,7 @@ func run(cfg config.Config) error {
 	}()
 	go func() {
 		defer eventWorkers.Done()
-		events.NewDispatcher(pool, cfg, logger).Run(eventContext)
+		events.NewNotifier(pool, cfg, logger).Run(eventContext)
 	}()
 	waitForEvents := func(waitContext context.Context) {
 		cancelEvents()

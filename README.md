@@ -11,7 +11,7 @@ and transactional audit/outbox events.
 - Refresh-token rotation, family reuse detection, and permission-version checks.
 - RBAC plus conditional bindings for data-driven `resource:action:scope` permissions.
 - Runtime `/auth/*` and `/authz/*` APIs plus an authenticated admin CRUD plane.
-- Append-only audit log, PostgreSQL outbox relay, NATS JetStream, and HMAC webhooks.
+- Append-only audit log, PostgreSQL outbox relay, NATS JetStream, and HMAC-signed HTTP notifications to a notification service.
 - `healthz`, `readyz`, `run`, `status`, and `doctor` surfaces for supervision.
 - Static Linux/amd64 binary with Nekostick supervised-child deployment.
 
@@ -52,7 +52,7 @@ publish it under a custom prefix such as `/iam/` and keep the default `Strip`
 forwarding mode: Nekostick removes the prefix before the request reaches the
 child. The exact registration is in [the Nekostick guide](docs/nekostick.md).
 
-Keep real DSNs, webhook secrets, and signing keys in Nekostick's protected
+Keep real DSNs, notification service secrets, and signing keys in Nekostick's protected
 configuration. Its service environment is stored as plaintext in PostgreSQL,
 so restrict access to service definitions and backups.
 

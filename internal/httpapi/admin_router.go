@@ -187,11 +187,11 @@ func appendUserDisabledEvents(ctx context.Context, q store.Q, userID string, tea
 	if err := appendOutboxPayload(ctx, q, "user.disabled", payload); err != nil {
 		return err
 	}
-	return appendOutboxPayload(ctx, q, "webhook.user.disabled", map[string]string{"user_id": userID})
+	return appendOutboxPayload(ctx, q, "notify.user.disabled", map[string]string{"user_id": userID})
 }
 
-func appendWebhookEvent(ctx context.Context, q store.Q, topic string, payload any) error {
-	return appendOutboxPayload(ctx, q, "webhook."+topic, payload)
+func appendNotifyEvent(ctx context.Context, q store.Q, topic string, payload any) error {
+	return appendOutboxPayload(ctx, q, "notify."+topic, payload)
 }
 
 func bumpUserPermVers(ctx context.Context, q store.Q, userIDs []string) error {

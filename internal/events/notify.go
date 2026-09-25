@@ -20,15 +20,19 @@ import (
 )
 
 const (
-	webhookHTTPTimeout = 5 * time.Second
-	webhookMaxAttempts = 4 // initial delivery plus three retries
+	notificationHTTPTimeout = 5 * time.Second
+	notificationMaxAttempts = 4 // initial delivery plus three retries
 )
 
-var webhookRetryBackoff = [...]time.Duration{time.Second, 4 * time.Second, 15 * time.Second}
+var notificationRetryBackoff = [...]time.Duration{time.Second, 4 * time.Second, 15 * time.Second}
 
-// Dispatcher delivers webhook outbox events to every configured endpoint.
-// Failed rows are deliberately left unpublished for a later poll.
-type Dispatcher struct {
+// Notifier delivers notification directives from the outbox to every configured
+// notification service endpoint. A directive can represent a user.created
+// welcome email or a session.reuse_detected security alert. This is not a
+// general-purpose event bus: this service alone decides what constitutes a
+// notification and when to emit it. The notification service owns actual
+// email/SMS delivery, while failed rows remain unpublished for a later poll.
+type Notifier struct {
 	q            store.Q
 	endpoints    []string
 	secret       string
@@ -37,30 +41,30 @@ type Dispatcher struct {
 	pollInterval time.Duration
 }
 
-// NewDispatcher constructs a webhook dispatcher from process configuration.
-func NewDispatcher(q store.Q, cfg config.Config, logger *slog.Logger) *Dispatcher {
+// NewNotifier constructs a notification-service integration from process configuration.
+func NewNotifier(q store.Q, cfg config.Config, logger *slog.Logger) *Notifier {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	endpoints := make([]string, 0, len(cfg.WebhookEndpoints))
-	for _, endpoint := range cfg.WebhookEndpoints {
+	endpoints := make([]string, 0, len(cfg.NotificationEndpoints))
+	for _, endpoint := range cfg.NotificationEndpoints {
 		if endpoint = strings.TrimSpace(endpoint); endpoint != "" {
 			endpoints = append(endpoints, endpoint)
 		}
 	}
-	return &Dispatcher{
+	return &Notifier{
 		q:            q,
 		endpoints:    endpoints,
-		secret:       cfg.WebhookSecret,
-		client:       &http.Client{Timeout: webhookHTTPTimeout},
+		secret:       cfg.NotificationSecret,
+		client:       &http.Client{Timeout: notificationHTTPTimeout},
 		logger:       logger,
 		pollInterval: defaultPollInterval,
 	}
 }
 
-// Run polls the webhook outbox until ctx is canceled. Webhook delivery is
+// Run polls the notification outbox until ctx is canceled. Notification delivery is
 // best-effort at-least-once: a final delivery failure leaves the row pending.
-func (d *Dispatcher) Run(ctx context.Context) {
+func (d *Notifier) Run(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -69,7 +73,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 			return
 		}
 		if err := d.dispatchBatch(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			d.logger.Error("webhook dispatcher poll failed", "error", err)
+			d.logger.Error("notification notifier poll failed", "error", err)
 		}
 		timer := time.NewTimer(d.pollInterval)
 		select {
@@ -83,7 +87,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	}
 }
 
-func (d *Dispatcher) dispatchBatch(ctx context.Context) error {
+func (d *Notifier) dispatchBatch(ctx context.Context) error {
 	cursor := int64(0)
 	for {
 		events, nextCursor, err := store.FetchUnpublishedOutbox(ctx, d.q, cursor, outboxBatchSize)
@@ -103,40 +107,40 @@ func (d *Dispatcher) dispatchBatch(ctx context.Context) error {
 	}
 }
 
-func (d *Dispatcher) dispatchEvents(ctx context.Context, events []store.OutboxEvent) error {
-	webhookEvents := make([]store.OutboxEvent, 0, len(events))
+func (d *Notifier) dispatchEvents(ctx context.Context, events []store.OutboxEvent) error {
+	notificationEvents := make([]store.OutboxEvent, 0, len(events))
 	for _, event := range events {
-		if strings.HasPrefix(event.Topic, "webhook.") {
-			webhookEvents = append(webhookEvents, event)
+		if strings.HasPrefix(event.Topic, "notify.") {
+			notificationEvents = append(notificationEvents, event)
 		}
 	}
-	if len(webhookEvents) == 0 {
+	if len(notificationEvents) == 0 {
 		return nil
 	}
 	if len(d.endpoints) == 0 {
-		ids := make([]int64, 0, len(webhookEvents))
-		for _, event := range webhookEvents {
+		ids := make([]int64, 0, len(notificationEvents))
+		for _, event := range notificationEvents {
 			ids = append(ids, event.ID)
 		}
 		if err := store.MarkOutboxPublished(ctx, d.q, ids, time.Time{}); err != nil {
 			return err
 		}
-		d.logger.Debug("acknowledged webhook events without endpoints", "count", len(ids), "mode", "dev")
+		d.logger.Debug("acknowledged notification events without endpoints", "count", len(ids), "mode", "dev")
 		return nil
 	}
 
-	for _, event := range webhookEvents {
+	for _, event := range notificationEvents {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		body, err := webhookPayload(event)
+		body, err := notificationPayload(event)
 		if err != nil {
-			d.logger.Error("invalid webhook outbox payload", "event_id", event.ID, "topic", event.Topic, "error", err)
+			d.logger.Error("invalid notification outbox payload", "event_id", event.ID, "topic", event.Topic, "error", err)
 			continue
 		}
 		signature := d.signature(body)
 		if err := d.deliver(ctx, event, body, signature); err != nil {
-			d.logger.Error("webhook delivery failed", "event_id", event.ID, "topic", event.Topic, "endpoints", len(d.endpoints), "attempts", webhookMaxAttempts, "retry_backoff", "1s,4s,15s", "error", err)
+			d.logger.Error("notification service delivery failed", "event_id", event.ID, "topic", event.Topic, "endpoints", len(d.endpoints), "attempts", notificationMaxAttempts, "retry_backoff", "1s,4s,15s", "error", err)
 			continue
 		}
 		if err := store.MarkOutboxPublished(ctx, d.q, []int64{event.ID}, time.Time{}); err != nil {
@@ -146,7 +150,7 @@ func (d *Dispatcher) dispatchEvents(ctx context.Context, events []store.OutboxEv
 	return nil
 }
 
-func (d *Dispatcher) deliver(ctx context.Context, event store.OutboxEvent, body []byte, signature string) error {
+func (d *Notifier) deliver(ctx context.Context, event store.OutboxEvent, body []byte, signature string) error {
 	for _, endpoint := range d.endpoints {
 		if err := d.deliverEndpoint(ctx, event, endpoint, body, signature); err != nil {
 			return fmt.Errorf("endpoint %q: %w", endpoint, err)
@@ -155,11 +159,11 @@ func (d *Dispatcher) deliver(ctx context.Context, event store.OutboxEvent, body 
 	return nil
 }
 
-func (d *Dispatcher) deliverEndpoint(ctx context.Context, event store.OutboxEvent, endpoint string, body []byte, signature string) error {
+func (d *Notifier) deliverEndpoint(ctx context.Context, event store.OutboxEvent, endpoint string, body []byte, signature string) error {
 	var lastErr error
-	for attempt := range webhookMaxAttempts {
+	for attempt := range notificationMaxAttempts {
 		if attempt > 0 {
-			if err := waitForRetry(ctx, webhookRetryBackoff[attempt-1]); err != nil {
+			if err := waitForRetry(ctx, notificationRetryBackoff[attempt-1]); err != nil {
 				return err
 			}
 		}
@@ -167,14 +171,14 @@ func (d *Dispatcher) deliverEndpoint(ctx context.Context, event store.OutboxEven
 			return nil
 		} else {
 			lastErr = err
-			d.logger.Warn("webhook delivery attempt failed", "event_id", event.ID, "endpoint", endpoint, "attempt", attempt+1, "max_attempts", webhookMaxAttempts, "error", err)
+			d.logger.Warn("notification service delivery attempt failed", "event_id", event.ID, "endpoint", endpoint, "attempt", attempt+1, "max_attempts", notificationMaxAttempts, "error", err)
 		}
 	}
 	return lastErr
 }
 
-func (d *Dispatcher) post(ctx context.Context, endpoint string, body []byte, signature string) error {
-	requestContext, cancel := context.WithTimeout(ctx, webhookHTTPTimeout)
+func (d *Notifier) post(ctx context.Context, endpoint string, body []byte, signature string) error {
+	requestContext, cancel := context.WithTimeout(ctx, notificationHTTPTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -194,13 +198,13 @@ func (d *Dispatcher) post(ctx context.Context, endpoint string, body []byte, sig
 	return nil
 }
 
-func (d *Dispatcher) signature(body []byte) string {
+func (d *Notifier) signature(body []byte) string {
 	mac := hmac.New(sha256.New, []byte(d.secret))
 	_, _ = mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-func webhookPayload(event store.OutboxEvent) ([]byte, error) {
+func notificationPayload(event store.OutboxEvent) ([]byte, error) {
 	data := event.Payload
 	if len(data) == 0 {
 		data = []byte(`{}`)
@@ -224,7 +228,7 @@ func webhookPayload(event store.OutboxEvent) ([]byte, error) {
 		Data json.RawMessage `json:"data"`
 		At   time.Time       `json:"at"`
 	}{
-		ID: event.ID, Type: strings.TrimPrefix(event.Topic, "webhook."), Data: json.RawMessage(data), At: at,
+		ID: event.ID, Type: strings.TrimPrefix(event.Topic, "notify."), Data: json.RawMessage(data), At: at,
 	}
 	return json.Marshal(payload)
 }

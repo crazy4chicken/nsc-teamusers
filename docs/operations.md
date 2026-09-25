@@ -18,8 +18,8 @@ default**. The supported environment variables are:
 | `TEAMUSERS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
 | `TEAMUSERS_KEY_DIR` | `./data/keys` | Ed25519 private/public keys and the `ACTIVE` marker. |
 | `TEAMUSERS_NATS_URL` | empty | NATS URL for the JetStream outbox relay. |
-| `TEAMUSERS_WEBHOOK_ENDPOINTS` | empty | Comma-separated webhook URLs. |
-| `TEAMUSERS_WEBHOOK_SECRET` | empty | HMAC-SHA256 webhook secret. |
+| `TEAMUSERS_NOTIFICATION_ENDPOINTS` | empty | Comma-separated notification service endpoint URLs. |
+| `TEAMUSERS_NOTIFICATION_SECRET` | empty | HMAC-SHA256 signing secret for notification service calls. |
 
 Do not put credentials in the repository. Use Nekostick's protected service
 configuration or another approved secret facility, and restrict read access.
@@ -195,13 +195,15 @@ two seconds, authentication returns `429 application/problem+json` rather than
 queueing unbounded password work. Rate-limit state is per process; coordinate
 limits at the trusted proxy if fleet-wide limits are required.
 
-## Webhooks
+## Notification service integration
 
-Set `TEAMUSERS_WEBHOOK_ENDPOINTS` to a comma-separated list and
-`TEAMUSERS_WEBHOOK_SECRET` to a secret shared with every receiver. The dispatcher
-polls the transactional outbox every two seconds. It sends the webhook topics
-currently emitted by the service (`user.created`, `user.disabled`, and
-`session.reuse_detected`) as JSON `POST` requests:
+Set `TEAMUSERS_NOTIFICATION_ENDPOINTS` to a comma-separated list of notification
+service endpoint URLs and `TEAMUSERS_NOTIFICATION_SECRET` to the HMAC secret
+shared with the notification service. The notifier polls the transactional outbox
+every two seconds. It sends notification directives currently emitted by this
+service (`user.created`, `user.disabled`, and `session.reuse_detected`) as
+HMAC-signed JSON `POST` requests to each configured endpoint. This service decides
+what to notify and when; the notification service owns actual email/SMS delivery.
 
 ```json
 {
@@ -214,7 +216,7 @@ currently emitted by the service (`user.created`, `user.disabled`, and
 
 Headers are `Content-Type: application/json` and
 `X-Teamusers-Signature-256: sha256=<lowercase hex HMAC-SHA256>`. The HMAC input is
-the exact raw request body, not re-serialized JSON. A receiver can verify it
+the exact raw request body, not re-serialized JSON. The notification service can verify it
 before parsing:
 
 ```python
@@ -230,14 +232,13 @@ def verify(raw_body: bytes, header: str, secret: bytes) -> bool:
 Each endpoint gets an initial attempt plus three retries, with delays of 1, 4,
 and 15 seconds. Requests time out after five seconds. A non-2xx response or
 network failure leaves the outbox row unpublished for a later poll, so delivery
-is at-least-once and receivers must deduplicate by event `id`. With no webhook
-endpoints configured, webhook rows are acknowledged locally in development
-mode. Do not use an empty endpoint list as a production delivery guarantee.
+is at-least-once and the configured notification service must deduplicate by event `id`.
+With no notification service endpoints configured, notification rows are
+acknowledged locally in development mode. Do not use an empty endpoint list as a
+production delivery guarantee.
 
-## Outbox and NATS JetStream
-
-Set `TEAMUSERS_NATS_URL` to enable the relay. It publishes recognized non-webhook
-outbox topics to these subjects:
+Set `TEAMUSERS_NATS_URL` to enable the relay. It publishes recognized outbox
+topics other than `notify.*` notification directives to these subjects:
 
 | Outbox topic | JetStream subject |
 | --- | --- |
@@ -267,9 +268,9 @@ retention policy.
 The `outbox` is also durable state. The relay marks rows with `published_at`
 after successful publication, but this service does not delete old published
 rows. Define and document an operator-owned retention/archive job only after
-all consumers and webhook receivers have their required replay window. Never
-purge unpublished rows merely because they are old; investigate delivery or
-broker failures first.
+all consumers and notification service endpoints have their required replay
+window. Never purge unpublished rows merely because they are old; investigate
+delivery or broker failures first.
 
 The hourly session reaper deletes rows whose ordinary refresh TTL has elapsed;
 its successful and failed counts are visible in structured logs.
@@ -283,10 +284,10 @@ its successful and failed counts are visible in structured logs.
   sustained not-ready state and on restart loops.
 - Run `teamusers doctor` during deployment and incident triage. Its JSON
   report separates database, migration, and key-directory checks.
-- Alert on `reaped expired sessions` errors, `webhook delivery failed`,
-  `webhook dispatcher poll failed`, `outbox relay poll failed`, and repeated
+- Alert on `reaped expired sessions` errors, `notification service delivery failed`,
+  `notification notifier poll failed`, `outbox relay poll failed`, and repeated
   `publish outbox event failed` log records. Track pending/unpublished outbox
-  rows and webhook retry volume.
+  rows and notification retry volume.
 - Alert on a new `refresh token reuse detected` warning: it indicates a
   presented rotated token and family-wide revocation, often a stolen or
   concurrently used credential.
