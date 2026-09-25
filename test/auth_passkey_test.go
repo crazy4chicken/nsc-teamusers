@@ -60,6 +60,13 @@ func TestPasskeyHTTPPaths(t *testing.T) {
 		t.Fatalf("unknown passkey delete status = %d, want %d", status, http.StatusNotFound)
 	}
 
+	status, body = stack.rawRequest(t, http.MethodPost, "/auth/passkey/login/begin", nil, "", map[string]string{
+		"Content-Type": "application/json",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("empty-body passkey login begin status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/passkey/login/begin", map[string]string{
 		"username": "does-not-exist",
 	}, "")

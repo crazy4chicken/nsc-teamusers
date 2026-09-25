@@ -132,6 +132,7 @@ func (s *Service) finishPasskeyRegistration(w http.ResponseWriter, r *http.Reque
 	challenge := parsed.Response.CollectedClientData.Challenge
 	rawSession, err := store.ConsumeWebauthnChallenge(r.Context(), s.q, challenge, "register")
 	if errors.Is(err, store.ErrNotFound) {
+		writePasskeyInvalid(w, r)
 		return
 	}
 	if err != nil {
@@ -181,9 +182,16 @@ type passkeyLoginBeginRequest struct {
 
 func (s *Service) beginPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	var request passkeyLoginBeginRequest
-	if !decodeJSON(w, r, &request) {
+	body, ok := readPasskeyBody(w, r)
+	if !ok {
 		writeUnauthorized(w, r)
 		return
+	}
+	if len(bytes.TrimSpace(body)) != 0 {
+		if err := json.Unmarshal(body, &request); err != nil {
+			writeUnauthorized(w, r)
+			return
+		}
 	}
 	username := strings.TrimSpace(request.Username)
 	if username == "" {

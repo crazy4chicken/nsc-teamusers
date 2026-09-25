@@ -292,14 +292,14 @@ credential.
 
 ### `POST /auth/passkey/login/begin` — Begin passkey login
 
-This public endpoint accepts an optional username:
+This public endpoint accepts an optional username. The body may be omitted or
+an empty object to start a discoverable ceremony:
 
 ```json
 {"username":"alice"}
 ```
 
-An empty object starts a discoverable (usernameless) ceremony. The response is
-the WebAuthn credential-request options object with a five-minute,
+The response is the WebAuthn credential-request options object with a five-minute,
 single-use challenge. An unknown username and an account without passkeys
 return the same generic authentication problem.
 
