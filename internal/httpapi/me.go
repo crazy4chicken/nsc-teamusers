@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -10,9 +11,22 @@ import (
 // kept in httpapi so future /me resources can be mounted without coupling the
 // HTTP routing package to authentication internals.
 type MeHandlers struct {
-	EnrollTOTP  http.HandlerFunc
-	ConfirmTOTP http.HandlerFunc
-	DeleteTOTP  http.HandlerFunc
+	Profile        http.HandlerFunc
+	PatchProfile   http.HandlerFunc
+	ChangePassword http.HandlerFunc
+	ListSessions   http.HandlerFunc
+	DeleteSession  http.HandlerFunc
+	EnrollTOTP     http.HandlerFunc
+	ConfirmTOTP    http.HandlerFunc
+	DeleteTOTP     http.HandlerFunc
+}
+
+// SessionResponse is the intentionally limited refresh-session representation
+// returned by self-service and administrative session endpoints.
+type SessionResponse struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // NewMeRouter constructs the authenticated self-service router. Only user
@@ -23,6 +37,11 @@ func NewMeRouter(authMW func(http.Handler) http.Handler, handlers MeHandlers) ch
 		router.Use(authMW)
 	}
 	router.Use(requireMeSubject)
+	router.Get("/me", handlers.Profile)
+	router.Patch("/me", handlers.PatchProfile)
+	router.Post("/me/password", handlers.ChangePassword)
+	router.Get("/me/sessions", handlers.ListSessions)
+	router.Delete("/me/sessions/{id}", handlers.DeleteSession)
 	router.Post("/me/totp/enroll", handlers.EnrollTOTP)
 	router.Post("/me/totp/confirm", handlers.ConfirmTOTP)
 	router.Delete("/me/totp", handlers.DeleteTOTP)

@@ -87,6 +87,7 @@ type Session struct {
 	UserID         string          `json:"user_id"`
 	FamilyID       string          `json:"family_id"`
 	ClientMeta     json.RawMessage `json:"client_meta"`
+	CreatedAt      time.Time       `json:"created_at"`
 	ExpiresAt      time.Time       `json:"expires_at"`
 	FamilyNotAfter time.Time       `json:"family_not_after"`
 	RevokedAt      *time.Time      `json:"revoked_at,omitempty"`

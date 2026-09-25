@@ -170,6 +170,16 @@ The following is the contract consumers must implement:
   Rotation revokes the presented token. Presenting a rotated token triggers
   reuse detection and revokes the complete family. Logout revokes the complete
   family with reason `logout`.
+
+Password changes replace the Argon2id password credential and revoke every
+refresh session for that user, including the session used by the password-change
+request. The response tells the caller to sign in again; an already-issued access
+JWT remains subject to the normal ten-minute and active-user checks. Users can
+inspect active sessions with `GET /me/sessions` and revoke one with
+`DELETE /me/sessions/{id}`. Administrators can list or revoke sessions through
+the corresponding `/users/{id}/sessions` endpoints. Session IDs are opaque
+SHA-256 refresh-token digests and never reveal the plaintext token.
+
 - **`perm_ver`:** mutations that affect a user's effective permissions bump the
   user's monotonic `perm_ver`; the value is copied into new access JWTs and the
   `/authz/permissions/{userID}` response. Existing access tokens with an old

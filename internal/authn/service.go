@@ -721,6 +721,7 @@ func (s *Service) issuePair(ctx context.Context, q store.Q, user store.User, kin
 		UserID:         user.ID,
 		FamilyID:       familyID,
 		ClientMeta:     meta,
+		CreatedAt:      now,
 		ExpiresAt:      expiresAt,
 		FamilyNotAfter: familyNotAfter,
 	}); err != nil {

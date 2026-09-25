@@ -64,8 +64,8 @@ The user `email` field is omitted when it is null. Other resource shapes are:
 
 Nullable fields with `omitempty` (`team_id`, `condition`, `expires_at`, and
 nullable audit identifiers) are absent rather than emitted as JSON null.
-`client_meta` on a session is an opaque JSON object, but sessions are not
-returned by an HTTP route.
+`client_meta` on a session is retained internally. Session endpoints expose only
+the opaque digest ID and `created_at`/`expires_at` timestamps.
 
 Collection endpoints return a cursor page:
 
@@ -171,6 +171,55 @@ and one digit. A successful request returns `201` with `{"id":"01J...","status":
 The password is stored only as an Argon2id credential. The service writes a
 transactional `notify.user.verification` event containing the plaintext
 verification token; the token is not returned by this endpoint.
+
+### `GET /me` — User bearer self-service
+
+The caller must send an active user access token. The response contains only the
+caller's profile fields:
+
+```json
+{
+  "id":"01J-user",
+  "username":"alice",
+  "email":"alice@example.test",
+  "display_name":"Alice",
+  "status":"active",
+  "email_verified_at":"2026-01-01T00:00:00Z",
+  "created_at":"2026-01-01T00:00:00Z"
+}
+```
+
+Credential and password data are never returned. `PATCH /me` accepts only
+`{"display_name":"New name"}` and returns the updated profile. Email changes
+are outside this API and return `422` with an unsupported-field problem.
+
+### `POST /me/password` — Change the own password
+
+Submit the current and replacement passwords:
+
+```json
+{"current_password":"old-password1","new_password":"new-password2"}
+```
+
+The current password must match or the endpoint returns `401` with detail
+`invalid_credentials`. The replacement must satisfy the configured password
+policy or the endpoint returns `422` with detail `weak_password`. A successful
+change returns `200` and explicitly states that all refresh sessions were
+revoked; the caller must sign in again. This includes the session used for the
+request.
+
+### `GET /me/sessions` — List own active sessions
+
+Returns active, unexpired refresh sessions as an array. Session IDs are opaque
+SHA-256 refresh-token digests:
+
+```json
+[{"id":"<opaque-digest>","created_at":"2026-01-01T00:00:00Z","expires_at":"2026-01-31T00:00:00Z"}]
+```
+
+`DELETE /me/sessions/{id}` revokes one of the caller's sessions and returns
+`204`. An unknown, revoked, expired, or foreign session ID returns `404` without
+revealing whether another user's session exists.
 
 ### `POST /me/totp/enroll` — User bearer self-service
 
@@ -356,6 +405,12 @@ Collection list and create methods are registered with both `/collection` and
 | `POST /users/{id}/disable` | No body. | `200` disabled `User`. |
 | `POST /users/{id}/credentials` | `{"kind":"service"}` generates a service secret, or `{"kind":"password","password":"..."}` creates/rotates a password credential. | `201` `{"user_id":"01J...","username":"orders-service","kind":"password"}`; service credentials additionally return `client_id` (the username) and one-time `client_secret`. |
 | `POST /users/{id}/approve` | No body. | `200` active `User`; emits `notify.user.approved`. |
+| `GET /users/{id}/sessions` | No body. | `200` active sessions as `[{"id":"<opaque-digest>","created_at":"...","expires_at":"..."}]`. |
+| `DELETE /users/{id}/sessions/{sid}` | No body. | `204`; only the session belonging to `{id}` is affected. |
+| `DELETE /users/{id}/sessions` | No body. | `204`; revokes all refresh sessions for the user. |
+
+All three session operations are audited. Unknown users and unknown or
+foreign session IDs return `404` without disclosing session ownership.
 
 The credential endpoint accepts only `kind` `service` or `password`. A service
 credential's generated `client_secret` is returned only on creation/rotation

@@ -97,7 +97,7 @@ func GetUserTeamID(ctx context.Context, q Q, userID string) (string, error) {
 // enter the database.
 func GetSessionForUpdate(ctx context.Context, q Q, refreshHash string) (Session, error) {
 	return scanSession(q.QueryRow(ctx, `
-		SELECT id, user_id, family_id, client_meta, expires_at, family_not_after, revoked_at, revoke_reason
+		SELECT id, user_id, family_id, client_meta, created_at, expires_at, family_not_after, revoked_at, revoke_reason
 		FROM sessions WHERE id = $1 FOR UPDATE`, refreshHash))
 }
 
