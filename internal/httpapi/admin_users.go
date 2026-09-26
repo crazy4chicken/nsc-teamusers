@@ -20,17 +20,17 @@ import (
 
 type createUserRequest struct {
 	Username        string  `json:"username"`
-	Email           *string `json:"email"`
-	DisplayName     string  `json:"display_name"`
-	Password        string  `json:"password"`
-	InitialPassword string  `json:"initial_password"`
+	Email           *string `json:"email,omitempty"`
+	DisplayName     string  `json:"display_name,omitempty"`
+	Password        string  `json:"password,omitempty"`
+	InitialPassword string  `json:"initial_password,omitempty"`
 }
 
 type patchUserRequest struct {
-	Username    *string `json:"username"`
-	Email       *string `json:"email"`
-	DisplayName *string `json:"display_name"`
-	Status      *string `json:"status"`
+	Username    *string `json:"username,omitempty"`
+	Email       *string `json:"email,omitempty"`
+	DisplayName *string `json:"display_name,omitempty"`
+	Status      *string `json:"status,omitempty"`
 }
 
 func (h *adminHandler) listUsers(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +309,7 @@ func hashPassword(password string) (string, error) {
 
 type createCredentialRequest struct {
 	Kind     string `json:"kind"`
-	Password string `json:"password"`
+	Password string `json:"password,omitempty"`
 }
 
 // createUserCredential issues or rotates a user credential. For kind=service

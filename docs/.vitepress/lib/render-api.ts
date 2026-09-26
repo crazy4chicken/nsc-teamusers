@@ -96,7 +96,7 @@ function renderTag(tag: string, routes: ApiRoute[]): string {
 
 function renderOperation(lines: string[], route: ApiRoute): void {
   const operation = route.operation
-  lines.push(`### \`${route.method.toUpperCase()}\` ${headingPath(route.path)}`, '')
+  lines.push(`## <span class="http-method http-${route.method.toLowerCase()}">${route.method.toUpperCase()}</span> ${headingPath(route.path)}`, '')
   if (typeof operation.summary === 'string' && operation.summary !== '') {
     lines.push(operation.summary, '')
   }
@@ -107,7 +107,7 @@ function renderOperation(lines: string[], route: ApiRoute): void {
   const parameters = pathParameters(route.path)
   if (parameters.length > 0) {
     lines.push(
-      '#### Path parameters',
+      '### Path parameters',
       '',
       '| Parameter | Description |',
       '| --- | --- |',
@@ -136,7 +136,7 @@ function renderRequest(lines: string[], requestBody: RecordValue): void {
       : []
   )
   lines.push(
-    '#### Request body (application/json)',
+    '### Request body (application/json)',
     '',
     '| Field | Type | Required |',
     '| --- | --- | --- |'
@@ -157,7 +157,7 @@ function renderResponses(lines: string[], responses: RecordValue): void {
   if (success === undefined) {
     return
   }
-  lines.push('#### Responses', '', `- **${success.key}** — ${success.description}`)
+  lines.push('### Responses', '', `- **${success.key}** — ${success.description}`)
   const content = mediaType(asRecord(success.response.content), 'application/json')
   if (content !== undefined && Object.prototype.hasOwnProperty.call(content, 'example')) {
     renderJSON(lines, content.example)
@@ -171,7 +171,7 @@ function renderErrors(lines: string[], responses: RecordValue): void {
     return
   }
   lines.push(
-    '#### Errors',
+    '### Errors',
     '',
     '| Status | Code | Detail |',
     '| --- | --- | --- |'

@@ -177,7 +177,7 @@ func (s *Service) finishPasskeyRegistration(w http.ResponseWriter, r *http.Reque
 }
 
 type passkeyLoginBeginRequest struct {
-	Username string `json:"username"`
+	Username string `json:"username,omitempty"`
 }
 
 func (s *Service) beginPasskeyLogin(w http.ResponseWriter, r *http.Request) {

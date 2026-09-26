@@ -20,12 +20,12 @@ import (
 const maxBatchItems = 500
 
 type userBatchRequest struct {
-	IDs []string `json:"ids"`
+	IDs []string `json:"ids,omitempty"`
 	Op  string   `json:"op"`
 }
 
 type groupMembersBatchRequest struct {
-	UserIDs []string `json:"user_ids"`
+	UserIDs []string `json:"user_ids,omitempty"`
 }
 
 type batchResult struct {

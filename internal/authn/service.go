@@ -186,7 +186,7 @@ type registerRequest struct {
 	Username    string `json:"username"`
 	Email       string `json:"email"`
 	Password    string `json:"password"`
-	DisplayName string `json:"display_name"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 type verifyEmailRequest struct {
@@ -194,7 +194,7 @@ type verifyEmailRequest struct {
 }
 
 type passwordResetRequest struct {
-	Login string `json:"login"`
+	Login string `json:"login,omitempty"`
 }
 
 type passwordResetConfirmRequest struct {
@@ -205,7 +205,7 @@ type passwordResetConfirmRequest struct {
 type inviteAcceptRequest struct {
 	Token       string  `json:"token"`
 	Password    string  `json:"password"`
-	DisplayName *string `json:"display_name"`
+	DisplayName *string `json:"display_name,omitempty"`
 }
 
 var errWeakInvitePassword = errors.New("weak invitation password")
@@ -569,7 +569,7 @@ type refreshRequest struct {
 }
 
 type introspectRequest struct {
-	Token string `json:"token"`
+	Token string `json:"token,omitempty"`
 }
 
 type tokenResponse struct {
