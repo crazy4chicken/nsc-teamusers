@@ -224,3 +224,44 @@ func TestMeProfilePasswordAndSessions(t *testing.T) {
 		t.Fatalf("service /me status = %d, want %d", status, http.StatusUnauthorized)
 	}
 }
+
+func TestMeProfileUsernameChange(t *testing.T) {
+	stack := newIntegrationStack(t)
+	alice := seedPasswordUser(t, context.Background(), stack.database.pool, "me-rename", "RenamePassword1")
+	_ = seedPasswordUser(t, context.Background(), stack.database.pool, "Bob", "BobPassword1")
+	pair := loginMeTestPair(t, stack, alice.Username, "RenamePassword1")
+
+	status, body := stack.jsonRequest(t, http.MethodPatch, "/me", map[string]string{
+		"username": "  new-name  ",
+	}, pair.AccessToken)
+	if status != http.StatusOK {
+		t.Fatalf("username-only PATCH /me status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	var profile meProfileTestResponse
+	decodeResponse(t, body, &profile)
+	if profile.Username != "new-name" || profile.DisplayName != alice.DisplayName {
+		t.Fatalf("renamed profile = %+v, want username new-name and unchanged display name", profile)
+	}
+
+	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
+		"username": alice.Username,
+		"password": "RenamePassword1",
+	}, "")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("login with old username = %d, want %d: %s", status, http.StatusUnauthorized, body)
+	}
+	newPair := loginMeTestPair(t, stack, "new-name", "RenamePassword1")
+
+	status, body = stack.jsonRequest(t, http.MethodPatch, "/me", map[string]string{
+		"username": "bob",
+	}, newPair.AccessToken)
+	if status != http.StatusConflict {
+		t.Fatalf("case-insensitive duplicate username status = %d, want %d: %s", status, http.StatusConflict, body)
+	}
+	status, body = stack.jsonRequest(t, http.MethodPatch, "/me", map[string]string{
+		"username": "   ",
+	}, newPair.AccessToken)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid username status = %d, want %d: %s", status, http.StatusUnprocessableEntity, body)
+	}
+}

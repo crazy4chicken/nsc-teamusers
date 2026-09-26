@@ -37,7 +37,8 @@ type docProfileResponse struct {
 }
 
 type docProfilePatchRequest struct {
-	DisplayName string `json:"display_name"`
+	Username    string `json:"username,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 type docPasswordChangeRequest struct {
@@ -735,14 +736,14 @@ var DocOperations = []apidocs.Operation{
 		Method:          "PATCH",
 		Path:            "/me",
 		Tag:             "Self-service",
-		Summary:         "Update the current display name",
-		Description:     "Use when a user edits their own display name. Only display_name is accepted; email changes use the two-step email endpoints.",
+		Summary:         "Update the current profile",
+		Description:     "Use when a user edits their own username or display name. Username is trimmed using the same rules as administrative user updates; email changes use the two-step email endpoints. At least one of username or display_name is required.",
 		Security:        "user",
 		Request:         docProfilePatchRequest{},
-		RequestExample:  map[string]any{"display_name": "Alice Smith"},
+		RequestExample:  map[string]any{"username": "alice-new", "display_name": "Alice Smith"},
 		Response:        docProfileResponse{},
-		ResponseExample: map[string]any{"id": "01J8Z3USER000000000000001", "username": "alice", "email": "alice@example.test", "display_name": "Alice Smith", "status": "active", "email_verified_at": "2026-01-01T00:00:00Z", "created_at": "2026-01-01T00:00:00Z"},
-		Errors:          []apidocs.ErrorDoc{docError(400, "display_name is required", "Invalid Request"), docUnauthorized, docError(422, "unsupported_field", "Unsupported Field"), docError(422, "email change is not supported", "Unsupported Field"), docInternal},
+		ResponseExample: map[string]any{"id": "01J8Z3USER000000000000001", "username": "alice-new", "email": "alice@example.test", "display_name": "Alice Smith", "status": "active", "email_verified_at": "2026-01-01T00:00:00Z", "created_at": "2026-01-01T00:00:00Z"},
+		Errors:          []apidocs.ErrorDoc{docError(400, "at least one of username or display_name is required", "Invalid Request"), docUnauthorized, docError(422, "username is required", "Invalid Request"), docError(422, "username must be a string", "Invalid Request"), docError(422, "unsupported_field", "Unsupported Field"), docError(422, "email change is not supported", "Unsupported Field"), docConflict, docInternal},
 	},
 	{
 		Method:      "DELETE",

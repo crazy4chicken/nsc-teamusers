@@ -2910,8 +2910,8 @@ paths:
     patch:
       tags:
         - Self-service
-      summary: Update the current display name
-      description: Use when a user edits their own display name. Only display_name is accepted; email changes use the two-step email endpoints.
+      summary: Update the current profile
+      description: Use when a user edits their own username or display name. Username is trimmed using the same rules as administrative user updates; email changes use the two-step email endpoints. At least one of username or display_name is required.
       requestBody:
         required: true
         content:
@@ -2920,11 +2920,12 @@ paths:
               properties:
                 display_name:
                   type: string
-              required:
-                - display_name
+                username:
+                  type: string
               type: object
             example:
               display_name: Alice Smith
+              username: alice-new
       responses:
         "200":
           description: Successful response
@@ -2966,7 +2967,7 @@ paths:
                 email_verified_at: "2026-01-01T00:00:00Z"
                 id: 01J8Z3USER000000000000001
                 status: active
-                username: alice
+                username: alice-new
         "400":
           description: Invalid Request
           content:
@@ -2977,7 +2978,7 @@ paths:
                 type: about:blank
                 title: Invalid Request
                 status: 400
-                detail: display_name is required
+                detail: at least one of username or display_name is required
         "401":
           description: Unauthorized
           content:
@@ -2989,13 +2990,36 @@ paths:
                 title: Unauthorized
                 status: 401
                 detail: authentication failed
+        "409":
+          description: Conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Conflict
+                status: 409
+                detail: the resource already exists
         "422":
-          description: Unsupported Field; Unsupported Field
+          description: Invalid Request; Invalid Request; Unsupported Field; Unsupported Field
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
               examples:
+                username is required:
+                  value:
+                    type: about:blank
+                    title: Invalid Request
+                    status: 422
+                    detail: username is required
+                username must be a string:
+                  value:
+                    type: about:blank
+                    title: Invalid Request
+                    status: 422
+                    detail: username must be a string
                 unsupported_field:
                   value:
                     type: about:blank

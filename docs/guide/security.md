@@ -133,6 +133,8 @@ rejected rather than silently modified.
 
 ## Profile lifecycle and erasure
 
+`PATCH /me` accepts `username` and `display_name` independently; the username is trimmed using the same rules as administrative user updates. Username changes retain the stable user ID and existing sessions, while password login must use the new username. Discoverable passkey login remains anchored to the stable user ID rather than the mutable username.
+
 Email changes require the current password before a request is accepted. The
 replacement address is checked for valid syntax and ownership, but is not
 written to `users` until the caller presents a single-use `email_change` token.

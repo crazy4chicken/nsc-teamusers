@@ -99,10 +99,13 @@ func (s *Service) patchProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fields == nil {
-		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "display_name is required")
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "at least one of username or display_name is required")
 		return
 	}
 	var displayName string
+	var username string
+	hasDisplayName := false
+	hasUsername := false
 	for field, raw := range fields {
 		switch field {
 		case "display_name":
@@ -110,6 +113,18 @@ func (s *Service) patchProfile(w http.ResponseWriter, r *http.Request) {
 				httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "display_name must be a string")
 				return
 			}
+			hasDisplayName = true
+		case "username":
+			if err := json.Unmarshal(raw, &username); err != nil {
+				httpapi.WriteProblem(w, r, http.StatusUnprocessableEntity, "Invalid Request", "username must be a string")
+				return
+			}
+			username = strings.TrimSpace(username)
+			if username == "" {
+				httpapi.WriteProblem(w, r, http.StatusUnprocessableEntity, "Invalid Request", "username is required")
+				return
+			}
+			hasUsername = true
 		case "email":
 			httpapi.WriteProblem(w, r, http.StatusUnprocessableEntity, "Unsupported Field", "email change is not supported")
 			return
@@ -118,8 +133,8 @@ func (s *Service) patchProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if _, ok := fields["display_name"]; !ok {
-		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "display_name is required")
+	if !hasDisplayName && !hasUsername {
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "at least one of username or display_name is required")
 		return
 	}
 
@@ -130,7 +145,12 @@ func (s *Service) patchProfile(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		candidate := before
-		candidate.DisplayName = displayName
+		if hasDisplayName {
+			candidate.DisplayName = displayName
+		}
+		if hasUsername {
+			candidate.Username = username
+		}
 		updated, err = store.UpdateUser(ctx, tx, candidate)
 		if err != nil {
 			return err
