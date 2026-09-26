@@ -9,7 +9,7 @@ Use this API when an application needs a small identity and authorization servic
 - **Administrative plane**: `/users*`, `/teams*`, `/groups*`, `/roles*`, `/permissions*`, `/bindings*`, `/audit*`, and `/invitations*` are protected by a user bearer and the matching `iam:*` permission.
 - **Service authorization plane**: `/authz/*` is service-only. It evaluates a user's effective grants for an application resource and returns a fail-closed decision.
 
-See the per-area API reference pages - for example [authentication](./reference/authentication.md), [self-service](./reference/self-service.md), and [permissions](./reference/permissions.md) - for interactive, generated endpoint documentation.
+The per-area API reference pages are native VitePress pages derived at build time from the canonical OpenAPI document - for example [authentication](./reference/authentication), [self-service](./reference/self-service), and [permissions](./reference/permissions). Do not hand-edit generated reference output.
 
 ## Base URL and Nekostick
 
@@ -75,4 +75,4 @@ Authentication endpoints are rate-limited by client IP and, for credential looku
 
 ## Contract source
 
-The OpenAPI 3.1 document is generated from the Go handlers and `doc.go` metadata. Run `go run ./cmd/genspec` to regenerate `docs/public/openapi.yaml` and the per-tag files under `docs/public/specs/`; the `internal/apidocs` drift test enforces synchronization. The pages under `docs/api/reference/` render those generated specs interactively - endpoint details live in exactly one place: the code.
+Go emits the single canonical OpenAPI 3.1 document from the handlers and `doc.go` metadata. Run `go run ./cmd/genspec` to regenerate `docs/public/openapi.yaml`; VitePress parses that file at build time to derive the native pages under `docs/api/reference/`. The `internal/apidocs` drift test enforces synchronization, so endpoint details remain in code rather than hand-edited pages.
