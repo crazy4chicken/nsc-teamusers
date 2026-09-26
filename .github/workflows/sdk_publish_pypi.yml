@@ -1,0 +1,67 @@
+name: Publish Python SDK
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'sdk/python/**'
+      - '.github/workflows/sdk_publish_pypi.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install package with test extras
+        run: python -m pip install -e './sdk/python[test]'
+
+      - name: Test
+        run: python -m pytest sdk/python/tests
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: pypi-package
+    permissions:
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check whether the version is already published
+        id: published
+        run: |
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('sdk/python/pyproject.toml','rb'))['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if curl -fsS "https://pypi.org/pypi/teamusers-sdk/json" | python3 -c "import json,sys; exit(0 if '$VERSION' in json.load(sys.stdin).get('releases', {}) else 1)"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.published.outputs.exists == 'false'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Build distributions
+        if: steps.published.outputs.exists == 'false'
+        run: |
+          python -m pip install build
+          python -m build sdk/python --outdir sdk/python/dist
+
+      - name: Publish to PyPI
+        if: steps.published.outputs.exists == 'false'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: sdk/python/dist

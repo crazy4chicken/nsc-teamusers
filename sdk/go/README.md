@@ -1,6 +1,6 @@
 # teamusers Go SDK
 
-The package at `teamusers/sdk/go` verifies teamusers Ed25519 (`EdDSA`) access
+The package at `github.com/crazy4chicken/nsc-teamusers/sdk/go` verifies teamusers Ed25519 (`EdDSA`) access
 tokens and provides permission caching, local ABAC evaluation, middleware, and
 authoritative authorization checks. Permission caches use the token's
 `perm_ver` claim and can be invalidated by NATS events when built with the
@@ -11,13 +11,13 @@ optional `nats` build tag.
 From a consuming Go module:
 
 ```sh
-go get teamusers/sdk/go
+go get github.com/crazy4chicken/nsc-teamusers/sdk/go
 ```
 
 Import the package as `iam`:
 
 ```go
-import iam "teamusers/sdk/go"
+import iam "github.com/crazy4chicken/nsc-teamusers/sdk/go"
 ```
 
 ## Verification

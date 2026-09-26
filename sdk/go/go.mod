@@ -1,0 +1,25 @@
+module github.com/crazy4chicken/nsc-teamusers/sdk/go
+
+go 1.26.0
+
+require (
+	github.com/expr-lang/expr v1.17.8
+	github.com/lestrrat-go/jwx/v2 v2.1.7
+	github.com/nats-io/nats.go v1.54.0
+)
+
+require (
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
+	github.com/goccy/go-json v0.10.6 // indirect
+	github.com/klauspost/compress v1.20.0 // indirect
+	github.com/lestrrat-go/blackmagic v1.0.4 // indirect
+	github.com/lestrrat-go/httpcc v1.0.1 // indirect
+	github.com/lestrrat-go/httprc v1.0.6 // indirect
+	github.com/lestrrat-go/iter v1.0.2 // indirect
+	github.com/lestrrat-go/option v1.0.1 // indirect
+	github.com/nats-io/nkeys v0.4.16 // indirect
+	github.com/nats-io/nuid v1.0.1 // indirect
+	github.com/segmentio/asm v1.2.1 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+)
