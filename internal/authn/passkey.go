@@ -54,7 +54,7 @@ func (u passkeyUser) WebAuthnCredentials() []webauthnlib.Credential {
 func newWebAuthn(cfg config.Config) (*webauthnlib.WebAuthn, error) {
 	return webauthnlib.New(&webauthnlib.Config{
 		RPID:                   cfg.WebAuthnRPID,
-		RPDisplayName:          "teamusers",
+		RPDisplayName:          "Teamusers",
 		RPOrigins:              []string{cfg.WebAuthnOrigin},
 		AttestationPreference:  protocol.PreferNoAttestation,
 		AuthenticatorSelection: webauthnlib.SelectAuthenticator("", protocol.ResidentKeyRequired(), "preferred"),
