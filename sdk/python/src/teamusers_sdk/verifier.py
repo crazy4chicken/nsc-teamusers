@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from jwt import PyJWK
 DEFAULT_ISSUER = "teamusers"
 DEFAULT_AUDIENCE = "teamusers"
 DEFAULT_CACHE_TTL_SECONDS = 60 * 60
+
 
 TokenKind: TypeAlias = Literal["user", "service"]
 Audience: TypeAlias = str | tuple[str, ...]
@@ -121,6 +123,8 @@ class Verifier:
         audience: str = DEFAULT_AUDIENCE,
         *,
         expected_audience: str | None = None,
+        issuer: str = DEFAULT_ISSUER,
+        expected_issuer: str | None = None,
         cache_ttl: float = DEFAULT_CACHE_TTL_SECONDS,
         cache_ttl_seconds: float | None = None,
         fetcher: JWKSFetcher | None = None,
@@ -143,7 +147,11 @@ class Verifier:
             self._config_error = VerifierConfigError("expected audience is empty")
             configured_audience = DEFAULT_AUDIENCE
         self._audience = configured_audience
-
+        configured_issuer = expected_issuer if expected_issuer is not None else issuer
+        if not isinstance(configured_issuer, str) or not configured_issuer.strip():
+            self._config_error = VerifierConfigError("expected issuer is empty")
+            configured_issuer = DEFAULT_ISSUER
+        self._issuer = configured_issuer
         configured_ttl = cache_ttl_seconds if cache_ttl_seconds is not None else cache_ttl
         if not isinstance(configured_ttl, (int, float)) or isinstance(configured_ttl, bool):
             self._config_error = VerifierConfigError(
@@ -160,6 +168,9 @@ class Verifier:
         self._fetcher = fetcher or fetch or _default_fetcher
         self._static_keys: tuple[PyJWK, ...] | None = None
         self._cache: _CachedKeys | None = None
+        self._cache_lock = threading.RLock()
+        self._cache_generation = 0
+        self._refresh_attempted_kids: dict[str, int] = {}
         if jwks is not None:
             try:
                 self._static_keys = _parse_jwks(jwks)
@@ -195,33 +206,51 @@ class Verifier:
 
         keys = self._get_keys()
         candidates = _select_keys(keys, kid)
-        if not candidates and self._static_keys is None:
+        if not candidates and self._static_keys is None and kid is not None:
+            # A concurrent kid miss must share both the forced refresh and its
+            # result.  The generation marker also prevents repeated refreshes
+            # when a server legitimately returns a set without this kid.
+            with self._cache_lock:
+                current = self._cache
+                if current is not None:
+                    candidates = _select_keys(current.keys, kid)
+                if not candidates:
+                    generation = self._cache_generation
+                    if self._refresh_attempted_kids.get(kid) != generation:
+                        keys = self._get_keys(force_refresh=True)
+                        self._refresh_attempted_kids[kid] = self._cache_generation
+                    else:
+                        keys = self._cache.keys if self._cache is not None else keys
+                    candidates = _select_keys(keys, kid)
+        elif not candidates and self._static_keys is None:
             keys = self._get_keys(force_refresh=True)
             candidates = _select_keys(keys, kid)
         if not candidates:
             raise TokenVerificationError("no matching EdDSA key in JWKS")
 
-        payload = _decode_with_candidates(raw, candidates, self._audience)
-        return _claims_from_payload(payload, self._audience)
+        payload = _decode_with_candidates(raw, candidates, self._audience, self._issuer)
+        return _claims_from_payload(payload, self._audience, self._issuer)
 
     def _get_keys(self, force_refresh: bool = False) -> tuple[PyJWK, ...]:
         if self._static_keys is not None:
             return self._static_keys
 
-        now = time.monotonic()
-        if not force_refresh and self._cache is not None and self._cache.expires_at > now:
-            return self._cache.keys
+        with self._cache_lock:
+            now = time.monotonic()
+            if not force_refresh and self._cache is not None and self._cache.expires_at > now:
+                return self._cache.keys
 
-        try:
-            document = self._fetcher(self._jwks_url)
-        except SDKError:
-            raise
-        except Exception as error:
-            raise JWKSFetchError("fetch JWKS", error) from error
+            try:
+                document = self._fetcher(self._jwks_url)
+            except SDKError:
+                raise
+            except Exception as error:
+                raise JWKSFetchError("fetch JWKS", error) from error
 
-        keys = _parse_jwks(document)
-        self._cache = _CachedKeys(keys=keys, expires_at=now + self._cache_ttl)
-        return keys
+            keys = _parse_jwks(document)
+            self._cache = _CachedKeys(keys=keys, expires_at=now + self._cache_ttl)
+            self._cache_generation += 1
+            return keys
 
 
 def _default_fetcher(url: str) -> Mapping[str, Any]:
@@ -286,6 +315,7 @@ def _decode_with_candidates(
     raw: str,
     candidates: Sequence[PyJWK],
     audience: str,
+    issuer: str = DEFAULT_ISSUER,
 ) -> Mapping[str, Any]:
     last_error: BaseException | None = None
     for candidate in candidates:
@@ -294,7 +324,7 @@ def _decode_with_candidates(
                 raw,
                 candidate.key,
                 algorithms=["EdDSA"],
-                issuer=DEFAULT_ISSUER,
+                issuer=issuer,
                 audience=audience,
                 options={
                     "require": ["exp", "iss", "sub", "aud", "kind", "perm_ver"],
@@ -318,10 +348,11 @@ def _decode_with_candidates(
     raise TokenVerificationError("verify access token", last_error) from last_error
 
 
-def _claims_from_payload(payload: Mapping[str, Any], expected_audience: str) -> Claims:
-    if payload.get("iss") != DEFAULT_ISSUER:
+def _claims_from_payload(
+    payload: Mapping[str, Any], expected_audience: str, expected_issuer: str = DEFAULT_ISSUER
+) -> Claims:
+    if payload.get("iss") != expected_issuer:
         raise TokenClaimsError("invalid access token issuer")
-
     subject = payload.get("sub")
     if not isinstance(subject, str) or not subject:
         raise TokenClaimsError("access token subject is missing")
@@ -338,9 +369,8 @@ def _claims_from_payload(payload: Mapping[str, Any], expected_audience: str) -> 
 
     audience_raw = payload.get("aud")
     audience_values = _normalize_audience(audience_raw)
-    if audience_values is None or expected_audience not in audience_values:
+    if audience_values is None or len(audience_values) != 1 or audience_values[0] != expected_audience:
         raise TokenClaimsError("invalid access token audience")
-
     kind = payload.get("kind")
     if kind not in ("user", "service"):
         raise TokenClaimsError("invalid access token kind")

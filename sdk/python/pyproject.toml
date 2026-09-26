@@ -17,6 +17,9 @@ dependencies = [
 test = [
   "pytest>=8.0",
 ]
+nats-py = [
+  "nats-py>=2.9",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
