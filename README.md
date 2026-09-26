@@ -70,7 +70,7 @@ so restrict access to service definitions and backups.
 The VitePress site is organized under `docs/`:
 
 - `docs/guide/` contains the getting-started, security, operations, permissions, and Nekostick guides.
-- `docs/api/` contains the API reference pages generated from the OpenAPI contract.
+- `docs/api/` contains the hand-written API guide pages (use cases, concepts, curl flows) that accompany the specification.
 - `docs/public/openapi.yaml` is the downloadable OpenAPI 3.1 specification.
 
 Run `pnpm docs:dev` to preview the site locally, or `pnpm docs:build` to create a production build.
