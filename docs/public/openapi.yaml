@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: teamusers API
+  title: Teamusers API
   version: 1.0.0
   description: |
     teamusers is a JSON HTTP identity, authentication, authorization, and

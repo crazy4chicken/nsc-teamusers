@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: teamusers
+  name: Teamusers
   text: Standalone IAM microservice
   tagline: Identity, authentication, and authorization for the service fleet.
   actions:

@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  title: 'teamusers',
+  title: 'Teamusers',
   description: 'Standalone IAM microservice',
   cleanUrls: true,
   lastUpdated: true,
