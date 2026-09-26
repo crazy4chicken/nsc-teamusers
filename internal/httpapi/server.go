@@ -34,6 +34,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool) *Server {
 	router.Use(trustedRealIP(cfg.TrustedProxies))
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Timeout(30 * time.Second))
+	router.Use(idempotencyMiddleware(pool))
 
 	server := &Server{router: router, pool: pool}
 	router.Get("/healthz", server.healthz)
