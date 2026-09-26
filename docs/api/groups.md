@@ -45,8 +45,8 @@ curl -sS -X POST "$BASE/groups/$GROUP_ID/members/batch" -H "Authorization: Beare
 curl -i -X DELETE "$BASE/groups/$GROUP_ID/members/<user-id>" -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-The resulting group can receive a role binding; continue with [roles](./roles.md) and [bindings](./bindings.md). The permission version behavior is explained in [permissions](./permissions.md).
+The resulting group can receive a role binding; continue with [roles](./roles.md) and [bindings](./bindings.md). The permission version behavior is explained in the [API permissions](./permissions.md) page and [permissions guide](../guide/permissions.md).
 
 ## Errors and links
 
-`team_id` missing on list is `400`; unknown users, groups, or memberships are `404`; over 500 batch IDs are `422`; duplicate rows are returned as `already_member` in a successful batch response. Administrative authentication and scope failures are `401` or `403 insufficient_permissions`.
+`team_id` missing on list is `400`; unknown users, groups, or memberships are `404`; over 500 batch IDs are `422`; duplicate rows are returned as `already_member` in a successful batch response. Administrative authentication and scope failures are `401` or `403 insufficient_permissions`. See the [permissions guide](../guide/permissions.md) for scope rules.

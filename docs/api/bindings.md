@@ -2,7 +2,7 @@
 
 ## Use cases
 
-Use role bindings to assign a role to a user or group, optionally within a team, under a condition, or until an expiry. This is the final link between [roles](./roles.md) and the users evaluated by [permissions](./permissions.md).
+Use role bindings to assign a role to a user or group, optionally within a team, under a condition, or until an expiry. This is the final link between [roles](./roles.md) and the users evaluated by [permissions](./permissions.md) and the [permissions guide](../guide/permissions.md).
 
 ## Key concepts
 
@@ -44,4 +44,4 @@ curl -i -X DELETE "$BASE/bindings/$BINDING_ID" -H "Authorization: Bearer $ADMIN_
 
 ## Errors and links
 
-Missing role/subject references are `404`; malformed fields are `400`; invalid conditions or team mismatches are `422`; duplicate database bindings may return `409`; insufficient admin grants return `403 insufficient_permissions`. Pair this page with [groups](./groups.md), [roles](./roles.md), and [permissions](./permissions.md).
+Missing role/subject references are `404`; malformed fields and team mismatches are `400`; invalid conditions are `422`; duplicate database bindings may return `409`; insufficient admin grants return `403 insufficient_permissions`. Pair this page with [groups](./groups.md), [roles](./roles.md), [permissions](./permissions.md), and the [permissions guide](../guide/permissions.md).

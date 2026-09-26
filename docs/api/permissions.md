@@ -41,7 +41,9 @@ After binding the role (see [bindings](./bindings.md)), a service fetches effect
 curl -sS "$BASE/authz/permissions/<user-id>" -H "Authorization: Bearer $SERVICE_TOKEN"
 curl -sS -X POST "$BASE/authz/check" -H "Authorization: Bearer $SERVICE_TOKEN" \
   -H 'Content-Type: application/json' -d '{"subject":"<user-id>","permission":"orders:read:team","context":{"resource":{"owner_id":"<owner-id>","team_id":"<team-id>","attrs":{"region":"us-east-1"}}}}'
+
 ```
+For administrator grant setup, see the [permissions guide](../guide/permissions.md), [roles](./roles.md), and [bindings](./bindings.md).
 
 A decision has `allow`, `matched`, and `reason` (`permission granted`, `no matching grant`, `condition denied`, `permission denied`, or `user disabled`). The resolver is fail-closed when a condition cannot be evaluated.
 

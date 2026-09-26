@@ -41,8 +41,8 @@ curl -sS -X PATCH "$BASE/teams/$TEAM_ID" -H "Authorization: Bearer $ADMIN_TOKEN"
   -H 'Content-Type: application/json' -d '{"status":"disabled"}'
 ```
 
-A team is the starting point for the policy flow in [groups](./groups.md), [roles](./roles.md), and [bindings](./bindings.md). See [permissions](./permissions.md) for how `iam:teams:any` is granted.
+A team is the starting point for the policy flow in [groups](./groups.md), [roles](./roles.md), and [bindings](./bindings.md). See the [API permissions](./permissions.md) page and [permissions guide](../guide/permissions.md) for how `iam:teams:any` is granted.
 
 ## Errors and links
 
-Malformed JSON or an empty required field returns `400`; duplicates map to `409`; unknown IDs map to `404`; invalid status maps to `422`; missing admin grants map to `403 insufficient_permissions`. Team deletion is irreversible and should be audited through [audit](./audit.md).
+Malformed JSON or an empty required field returns `400`; duplicates map to `409`; unknown IDs map to `404`; invalid status maps to `400`; missing admin grants map to `403 insufficient_permissions`. Team deletion is irreversible and should be audited through [audit](./audit.md) and the [permissions guide](../guide/permissions.md).

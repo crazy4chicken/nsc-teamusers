@@ -68,4 +68,4 @@ curl -i -X DELETE "$BASE/me/totp" -H "Authorization: Bearer $ACCESS_TOKEN" \
 
 ## Errors and links
 
-Expect `401 authentication failed` or `invalid_credentials`, `400 invalid_token`, `409 totp_already_enabled`, `404 mfa_not_enrolled`, `422 weak_password`, `429 authentication temporarily busy`, and WebAuthn `400 invalid WebAuthn response`. See [sessions](./sessions.md), [authentication](./authentication.md), and [permissions](./permissions.md).
+Expect `401 authentication failed` or `invalid_credentials`, `400 invalid_token`, `409 totp_already_enabled`, `404 mfa_not_enrolled`, `422 weak_password`, `429 authentication temporarily busy`, and WebAuthn `400 invalid WebAuthn response`. See [sessions](./sessions.md), [authentication](./authentication.md), [permissions](./permissions.md), and the [permissions guide](../guide/permissions.md).

@@ -15,18 +15,19 @@ See [authentication](./authentication.md), [self-service](./self-service.md), an
 
 The local base URL is `http://localhost:8080`. The service listens on the configured address and does not terminate TLS; deploy TLS at the reverse-proxy boundary. When Nekostick publishes teamusers with Strip mode, use `https://<host>/iam` as the external base URL. Nekostick removes `/iam` before forwarding, so requests sent to `https://<host>/iam/auth/login` arrive at teamusers as `/auth/login`.
 
-Download the machine-readable contract from [`/openapi.yaml`](/openapi.yaml), or fetch it directly:
+Download the machine-readable contract from [`/openapi.yaml`](/openapi.yaml), or fetch it from the published documentation host:
 
 ```sh
-curl -fsS http://localhost:8080/openapi.yaml -o openapi.yaml
+curl -fsS https://<docs-host>/openapi.yaml -o openapi.yaml
 ```
 
-The Go server currently exposes `/healthz` and `/readyz` (not `/health`):
+The Go API server currently exposes `/healthz` and `/readyz` (not `/health`):
 
 ```sh
 curl -i http://localhost:8080/healthz
 curl -i http://localhost:8080/readyz
 ```
+
 
 ## Authentication classes
 
@@ -55,7 +56,7 @@ Successful JSON responses use `Content-Type: application/json`. Failures use RFC
 }
 ```
 
-`type`, `title`, and `status` are always present. `detail` contains a stable error code where the handler defines one (`invalid_token`, `weak_password`, `account_locked`, `mfa_not_enrolled`, `insufficient_permissions`, and so on). `instance` is the request ID when middleware created one. Authentication and database failures intentionally use generic details. See [security](../guide/security.md) for threat-model and token guidance.
+`type`, `title`, and `status` are always present. `detail` contains a stable error code where the handler defines one (`invalid_token`, `weak_password`, `account_locked`, `mfa_not_enrolled`, `insufficient_permissions`, and so on). `instance` is the request ID when middleware created one. Authentication and database failures intentionally use generic details. See [security](../guide/security.md) and the [permissions guide](../guide/permissions.md) for threat-model and authorization guidance.
 
 ## Cursor pagination
 

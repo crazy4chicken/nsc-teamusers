@@ -78,4 +78,4 @@ curl -i -X POST "$BASE/auth/password-reset/confirm" -H 'Content-Type: applicatio
 
 ## Errors and links
 
-Expect `401` `authentication failed`, `403` `account_pending`, `423` `account_locked`, `429` `authentication temporarily busy`, `400` `invalid_token`, and `422` `weak_password` where applicable. See [self-service](./self-service.md) for TOTP/passkey enrollment and [invitations](./invitations.md) for the admin invitation lifecycle. Permission-bearing service calls continue in [permissions](./permissions.md).
+Expect `401` `authentication failed`, `403` `account_pending`, `423` `account_locked`, `429` `authentication temporarily busy`, `400` `invalid_token`, and `422` `weak_password` where applicable. See [self-service](./self-service.md) for TOTP/passkey enrollment, [invitations](./invitations.md) for the admin invitation lifecycle, and the [permissions guide](../guide/permissions.md) for service authorization.

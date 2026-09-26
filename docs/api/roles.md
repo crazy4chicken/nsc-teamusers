@@ -9,7 +9,7 @@ Use roles to package registered permission keys into reusable platform-wide or t
 - A role's `team_id` is nullable: JSON `null` means platform scope; a ULID means team scope.
 - `PUT /roles/{id}/permissions` replaces the entire set. `permission_keys` is canonical; `permissions` remains an accepted legacy alias.
 - Permission keys must already be registered and use `resource:action:scope` grammar.
-- Role mutations bump affected users' `perm_ver`; see [permissions](./permissions.md) for cache and grant semantics.
+- Role mutations bump affected users' `perm_ver`; see the [API permissions](./permissions.md) page and [permissions guide](../guide/permissions.md) for cache and grant semantics.
 
 ## Endpoint table
 

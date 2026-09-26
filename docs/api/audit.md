@@ -17,7 +17,7 @@ Use the audit endpoint for compliance exports, incident response, and operationa
 | --- | --- | --- |
 | GET | `/audit?team_id=&cursor=0&limit=100` | Page append-only audit entries. |
 
-The route requires `iam:audit:any` (or the allowed team-scoped audit grant). See [permissions](./permissions.md) for granting admin access.
+The route requires `iam:audit:any` (or the allowed team-scoped audit grant). See the [API permissions](./permissions.md) page and [permissions guide](../guide/permissions.md) for granting admin access.
 
 ## Page the audit log
 

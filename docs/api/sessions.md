@@ -42,4 +42,4 @@ Use [authentication](./authentication.md) for refresh rotation and [users](./use
 
 ## Errors and links
 
-A missing or stale access token is `401`; an admin lacking `iam:sessions:any` is `403 insufficient_permissions`; unknown users or session IDs are `404`; storage errors are `500`. The response intentionally does not reveal whether a session belongs to another account.
+A missing or stale access token is `401`; an admin lacking `iam:sessions:any` is `403 insufficient_permissions`; unknown users or session IDs are `404`; storage errors are `500`. The response intentionally does not reveal whether a session belongs to another account. See the [permissions guide](../guide/permissions.md) for the admin grant.

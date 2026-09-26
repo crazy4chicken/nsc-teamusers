@@ -42,7 +42,7 @@ curl -i -X POST "$BASE/invitations/$USER_ID/resend" -H "Authorization: Bearer $A
 curl -i -X DELETE "$BASE/invitations/$USER_ID" -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-The invitation flow is an alternative to [authentication](./authentication.md) self-registration and commonly follows team/user setup in [users](./users.md). Granting the admin ability is described in [permissions](./permissions.md).
+The invitation flow is an alternative to [authentication](./authentication.md) self-registration and commonly follows team/user setup in [users](./users.md). Granting the admin ability is described in the [API permissions](./permissions.md) page and [permissions guide](../guide/permissions.md).
 
 ## Errors and links
 

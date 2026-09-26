@@ -63,4 +63,4 @@ curl -sS -X POST "$BASE/users/import" -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 ## Errors and links
 
-Common failures are `401` authentication failed, `403` insufficient_permissions, `404` not found, `409` resource already exists, `422` weak_password or validation detail, and `500` database failure. Session operations are documented in [sessions](./sessions.md), invitations in [invitations](./invitations.md), and the required role grants in [permissions](./permissions.md).
+Common failures are `401` authentication failed, `403` insufficient_permissions, `404` not found, `409` resource already exists, `400` validation detail, `422` weak_password, and `500` database failure. Session operations are documented in [sessions](./sessions.md), invitations in [invitations](./invitations.md), and the required role grants in the [API permissions](./permissions.md) page and [permissions guide](../guide/permissions.md).
