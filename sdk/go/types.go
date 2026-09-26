@@ -121,22 +121,24 @@ type Permission struct {
 	Resource string
 	Action   string
 	Scope    string
+	Deny     bool
 }
 
-// Parse parses a permission key according to PLAN.md §5. Deny keys are not
-// accepted by the v1 SDK because server-side deny evaluation is disabled.
+// Parse parses a permission key according to PLAN.md §5.
 func Parse(key string) (Permission, error) {
 	if key == "" {
 		return Permission{}, fmt.Errorf("permission key is empty")
 	}
+	deny := false
 	if strings.HasPrefix(key, "!") {
-		return Permission{}, fmt.Errorf("deny permission keys are not supported")
+		deny = true
+		key = strings.TrimPrefix(key, "!")
 	}
 	parts := strings.Split(key, ":")
 	if len(parts) != 3 {
 		return Permission{}, fmt.Errorf("permission key must contain resource, action, and scope")
 	}
-	permission := Permission{Resource: parts[0], Action: parts[1], Scope: parts[2]}
+	permission := Permission{Resource: parts[0], Action: parts[1], Scope: parts[2], Deny: deny}
 	if err := permission.Validate(); err != nil {
 		return Permission{}, err
 	}
@@ -164,7 +166,11 @@ func (p Permission) Validate() error {
 
 // String serializes a valid permission in canonical form.
 func (p Permission) String() string {
-	return p.Resource + ":" + p.Action + ":" + p.Scope
+	prefix := ""
+	if p.Deny {
+		prefix = "!"
+	}
+	return prefix + p.Resource + ":" + p.Action + ":" + p.Scope
 }
 
 // Match reports whether grant applies to request. Wildcards match one segment
@@ -173,7 +179,8 @@ func Match(grant, request Permission) bool {
 	if grant.Validate() != nil || request.Validate() != nil {
 		return false
 	}
-	return matchSegment(grant.Resource, request.Resource) &&
+	return grant.Deny == request.Deny &&
+		matchSegment(grant.Resource, request.Resource) &&
 		matchSegment(grant.Action, request.Action) &&
 		matchSegment(grant.Scope, request.Scope)
 }

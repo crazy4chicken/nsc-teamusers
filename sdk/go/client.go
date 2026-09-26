@@ -168,6 +168,8 @@ func (c *Client) Allow(ctx context.Context, claims Claims, permission string, re
 	}
 	requested, _ := Parse(permission)
 	conditionRejected := false
+	allowed := false
+	denied := false
 	for _, grant := range entry.Grants {
 		grantPermission := grant.permission
 		if grantPermission.Resource == "" {
@@ -177,7 +179,9 @@ func (c *Client) Allow(ctx context.Context, claims Claims, permission string, re
 				continue
 			}
 		}
-		if !Match(grantPermission, requested) {
+		if !matchSegment(grantPermission.Resource, requested.Resource) ||
+			!matchSegment(grantPermission.Action, requested.Action) ||
+			!matchSegment(grantPermission.Scope, requested.Scope) {
 			continue
 		}
 		if grant.Condition != nil && !grant.Condition.Eval(Context{
@@ -188,6 +192,16 @@ func (c *Client) Allow(ctx context.Context, claims Claims, permission string, re
 			conditionRejected = true
 			continue
 		}
+		if grantPermission.Deny {
+			denied = true
+		} else {
+			allowed = true
+		}
+	}
+	if denied {
+		return false, "permission denied"
+	}
+	if allowed {
 		return true, "permission granted"
 	}
 	if conditionRejected {

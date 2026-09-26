@@ -10,7 +10,7 @@ NATS-driven cache invalidation.
 
 - [TypeScript SDK](ts/README.md): `pnpm add teamusers-sdk`
 - [Python SDK](python/README.md): `python -m pip install teamusers-sdk`
-- [Go SDK](go/): import the `teamusers/sdk/go` package from this repository
+- [Go SDK](go/README.md): import the `teamusers/sdk/go` package from this repository
 
 Each language guide includes a usage example, claims reference, cache options,
 and typed verification errors. The TypeScript and Python test suites use local
