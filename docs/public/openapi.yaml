@@ -2172,12 +2172,6 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/ProblemDetails' }
           example: { type: about:blank, title: Invalid Request, status: 400, detail: request body must be valid JSON, instance: 01J8Z3REQ00000000000000001 }
-    ValidationError:
-      description: Semantic validation failed.
-      content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/ProblemDetails' }
-          example: { type: about:blank, title: Invalid Request, status: 422, detail: at least one field is required, instance: 01J8Z3REQ00000000000000001 }
     InvalidPage:
       description: Invalid cursor or limit.
       content:
@@ -2472,7 +2466,7 @@ components:
       description: Browser PublicKeyCredential JSON payload.
     RegisterRequest:
       type: object
-      required: [username, email, password, display_name]
+      required: [username, email, password]
       properties:
         username: { type: string }
         email: { type: string, format: email }
