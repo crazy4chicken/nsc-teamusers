@@ -35,6 +35,9 @@ func generate() error {
 
 func writeSpec(path string, operations []apidocs.Operation) error {
 	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
 	temporary, err := os.CreateTemp(directory, ".spec.tmp-*")
 	if err != nil {
 		return fmt.Errorf("create temporary file: %w", err)
