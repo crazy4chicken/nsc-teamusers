@@ -227,6 +227,7 @@ paths:
                   value: { access_token: eyJhbGciOiJFZERTQSIs..., refresh_token: refresh-token-opaque, token_type: Bearer, expires_in: 600 }
                 mfa:
                   value: { mfa_required: true, mfa_token: eyJhbGciOiJFZERTQSIs... }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403':
           description: Account is pending verification or approval (account_pending).
@@ -262,6 +263,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/TokenResponse' }
               example: { access_token: eyJhbGciOiJFZERTQSIs..., refresh_token: refresh-token-opaque, token_type: Bearer, expires_in: 600 }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '423':
           description: Account lockout (account_locked).
@@ -291,6 +293,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/TokenResponse' }
               example: { access_token: eyJhbGciOiJFZERTQSIs..., refresh_token: refresh-token-rotated, token_type: Bearer, expires_in: 600 }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/RateLimited' }
         '500': { $ref: '#/components/responses/InternalError' }
@@ -359,6 +362,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/TokenResponse' }
               example: { access_token: eyJhbGciOiJFZERTQSIs..., refresh_token: refresh-token-opaque, token_type: Bearer, expires_in: 600 }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '423':
           description: Service account lockout (account_locked).
@@ -691,6 +695,7 @@ paths:
             example: { password: CurrentAtLeastTwelve1 }
       responses:
         '204': { description: Account erased and anonymized; no response body. }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
         '401':
           description: Password missing or invalid (invalid_credentials).
           content:
@@ -724,6 +729,7 @@ paths:
                   message: { type: string }
                   sessions_revoked: { type: boolean }
               example: { message: password changed; all sessions were revoked; sign in again, sessions_revoked: true }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
         '401':
           description: Invalid current credentials.
           content:
@@ -753,6 +759,7 @@ paths:
             example: { new_email: alice.new@example.test, password: CurrentAtLeastTwelve1 }
       responses:
         '204': { description: Verification message queued; no response body. }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
         '401':
           description: Missing or invalid current password (invalid_credentials).
           content:
@@ -875,6 +882,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/BackupCodesResponse' }
               example: { backup_codes: [abcd-1234-efgh-5678, 9ijk-lmno-0123-pqrs, 1111-2222-3333-4444] }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409':
           description: TOTP became enabled concurrently (totp_already_enabled).
@@ -907,6 +915,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/BackupCodesResponse' }
               example: { backup_codes: [abcd-1234-efgh-5678, 9ijk-lmno-0123-pqrs, 1111-2222-3333-4444] }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
         '401':
           description: Password is missing or invalid (invalid_credentials).
           content:
@@ -940,6 +949,7 @@ paths:
             example: { code: '123456' }
       responses:
         '204': { description: TOTP and backup credentials deleted; no response body. }
+        '400': { $ref: '#/components/responses/InvalidRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '500': { $ref: '#/components/responses/InternalError' }
   /me/passkeys/register/begin:
@@ -2602,9 +2612,7 @@ components:
       properties:
         permission_keys: { type: array, items: { type: string } }
         permissions: { type: array, items: { type: string }, description: Legacy alias used when permission_keys is absent. }
-PUT 2619.=2621:
-      type: object
-      required: [email, username]
+    PermissionRequest:
       type: object
       required: [key, registered_by]
       properties:
@@ -2623,7 +2631,7 @@ PUT 2619.=2621:
         expires_at: { type: [string, 'null'], format: date-time }
     InvitationRequest:
       type: object
-      required: [email, username, display_name]
+      required: [email, username]
       properties:
         email: { type: string, format: email }
         username: { type: string }
