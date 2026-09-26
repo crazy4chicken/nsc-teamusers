@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -24,15 +25,18 @@ const (
 	envNotificationEndpoints = "TEAMUSERS_NOTIFICATION_ENDPOINTS"
 	envNotificationSecret    = "TEAMUSERS_NOTIFICATION_SECRET"
 	envRegistrationMode      = "TEAMUSERS_REGISTRATION_MODE"
+	envTokenAudience         = "TEAMUSERS_TOKEN_AUDIENCE"
 	envLockoutThreshold      = "TEAMUSERS_LOCKOUT_THRESHOLD"
 	envLockoutDuration       = "TEAMUSERS_LOCKOUT_DURATION"
 	envPasswordMinLength     = "TEAMUSERS_PASSWORD_MIN_LENGTH"
 	envWebAuthnRPID          = "TEAMUSERS_WEBAUTHN_RP_ID"
 	envWebAuthnOrigin        = "TEAMUSERS_WEBAUTHN_ORIGIN"
+	envTrustedProxies        = "TEAMUSERS_TRUSTED_PROXIES"
 
 	DefaultLockoutThreshold  = 5
 	DefaultLockoutDuration   = 15 * time.Minute
 	DefaultPasswordMinLength = 12
+	DefaultTokenAudience     = "teamusers"
 	DefaultWebAuthnRPID      = "localhost"
 	DefaultWebAuthnOrigin    = "http://localhost"
 )
@@ -40,21 +44,23 @@ const (
 // Config is the process configuration. Values are resolved in flag, env, and
 // default order, respectively.
 type Config struct {
-	ConnectionString      string        `json:"connection_string,omitempty"`
-	ListenAddress         string        `json:"listen_address"`
-	ListenPort            int           `json:"listen_port"`
-	NodeID                string        `json:"node_id,omitempty"`
-	LogLevel              string        `json:"log_level"`
-	KeyDir                string        `json:"key_dir"`
-	NATSURL               string        `json:"nats_url,omitempty"`
-	NotificationEndpoints []string      `json:"notification_endpoints,omitempty"`
-	NotificationSecret    string        `json:"notification_secret,omitempty"`
-	RegistrationMode      string        `json:"registration_mode"`
-	LockoutThreshold      int           `json:"lockout_threshold"`
-	LockoutDuration       time.Duration `json:"lockout_duration"`
-	PasswordMinLength     int           `json:"password_min_length"`
-	WebAuthnRPID          string        `json:"webauthn_rp_id"`
-	WebAuthnOrigin        string        `json:"webauthn_origin"`
+	ConnectionString      string         `json:"connection_string,omitempty"`
+	ListenAddress         string         `json:"listen_address"`
+	ListenPort            int            `json:"listen_port"`
+	NodeID                string         `json:"node_id,omitempty"`
+	LogLevel              string         `json:"log_level"`
+	KeyDir                string         `json:"key_dir"`
+	NATSURL               string         `json:"nats_url,omitempty"`
+	NotificationEndpoints []string       `json:"notification_endpoints,omitempty"`
+	NotificationSecret    string         `json:"notification_secret,omitempty"`
+	RegistrationMode      string         `json:"registration_mode"`
+	TokenAudience         string         `json:"token_audience"`
+	LockoutThreshold      int            `json:"lockout_threshold"`
+	LockoutDuration       time.Duration  `json:"lockout_duration"`
+	PasswordMinLength     int            `json:"password_min_length"`
+	WebAuthnRPID          string         `json:"webauthn_rp_id"`
+	WebAuthnOrigin        string         `json:"webauthn_origin"`
+	TrustedProxies        []netip.Prefix `json:"trusted_proxies,omitempty"`
 }
 
 // Load reads configuration from the process environment and optional command
@@ -77,11 +83,13 @@ func Load(args ...string) (Config, error) {
 	notificationEndpoints := envOrDefault(envNotificationEndpoints, "")
 	notificationSecret := envOrDefault(envNotificationSecret, "")
 	registrationMode := envOrDefault(envRegistrationMode, "closed")
+	tokenAudience := envOrDefault(envTokenAudience, DefaultTokenAudience)
 	lockoutThreshold := envOrDefault(envLockoutThreshold, strconv.Itoa(DefaultLockoutThreshold))
 	lockoutDuration := envOrDefault(envLockoutDuration, DefaultLockoutDuration.String())
 	passwordMinLength := envOrDefault(envPasswordMinLength, strconv.Itoa(DefaultPasswordMinLength))
 	webauthnRPID := envOrDefault(envWebAuthnRPID, DefaultWebAuthnRPID)
 	webauthnOrigin := envOrDefault(envWebAuthnOrigin, DefaultWebAuthnOrigin)
+	trustedProxies := envOrDefault(envTrustedProxies, "")
 
 	fs.StringVar(&connectionString, "connection-string", connectionString, "PostgreSQL connection string")
 	fs.StringVar(&listenAddress, "listen-address", listenAddress, "HTTP listen address")
@@ -93,11 +101,13 @@ func Load(args ...string) (Config, error) {
 	fs.StringVar(&notificationEndpoints, "notification-endpoints", notificationEndpoints, "comma-separated notification service endpoint URLs")
 	fs.StringVar(&notificationSecret, "notification-secret", notificationSecret, "notification service signing secret")
 	fs.StringVar(&registrationMode, "registration-mode", registrationMode, "registration mode (closed, approval, open)")
+	fs.StringVar(&tokenAudience, "token-audience", tokenAudience, "JWT token audience")
 	fs.StringVar(&lockoutThreshold, "lockout-threshold", lockoutThreshold, "failed login attempts before account lockout")
 	fs.StringVar(&lockoutDuration, "lockout-duration", lockoutDuration, "account lockout duration")
 	fs.StringVar(&passwordMinLength, "password-min-length", passwordMinLength, "minimum password length")
 	fs.StringVar(&webauthnRPID, "webauthn-rp-id", webauthnRPID, "WebAuthn relying-party ID")
 	fs.StringVar(&webauthnOrigin, "webauthn-origin", webauthnOrigin, "WebAuthn relying-party origin")
+	fs.StringVar(&trustedProxies, "trusted-proxies", trustedProxies, "comma-separated trusted proxy CIDRs or IPs")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -117,6 +127,10 @@ func Load(args ...string) (Config, error) {
 	minLength, err := strconv.Atoi(strings.TrimSpace(passwordMinLength))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid password minimum length %q: %w", passwordMinLength, err)
+	}
+	parsedTrustedProxies, err := parseTrustedProxies(trustedProxies)
+	if err != nil {
+		return Config{}, err
 	}
 	if threshold < 1 {
 		return Config{}, fmt.Errorf("lockout threshold must be positive, got %d", threshold)
@@ -139,11 +153,13 @@ func Load(args ...string) (Config, error) {
 		NotificationEndpoints: parseNotificationEndpoints(notificationEndpoints),
 		NotificationSecret:    notificationSecret,
 		RegistrationMode:      strings.ToLower(strings.TrimSpace(registrationMode)),
+		TokenAudience:         strings.TrimSpace(tokenAudience),
 		LockoutThreshold:      threshold,
 		LockoutDuration:       duration,
 		PasswordMinLength:     minLength,
 		WebAuthnRPID:          strings.TrimSpace(webauthnRPID),
 		WebAuthnOrigin:        strings.TrimSpace(webauthnOrigin),
+		TrustedProxies:        parsedTrustedProxies,
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -162,6 +178,9 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.PasswordMinLength == 0 {
 		c.PasswordMinLength = DefaultPasswordMinLength
+	}
+	if strings.TrimSpace(c.TokenAudience) == "" {
+		c.TokenAudience = DefaultTokenAudience
 	}
 	if strings.TrimSpace(c.WebAuthnRPID) == "" {
 		c.WebAuthnRPID = DefaultWebAuthnRPID
@@ -275,6 +294,30 @@ func ValidatePassword(password string, minLength int) bool {
 		}
 	}
 	return hasLetter && hasDigit
+}
+
+func parseTrustedProxies(raw string) ([]netip.Prefix, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	proxies := make([]netip.Prefix, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			return nil, fmt.Errorf("invalid trusted proxy %q: expected an IP address or CIDR", value)
+		}
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			address, addressErr := netip.ParseAddr(value)
+			if addressErr != nil {
+				return nil, fmt.Errorf("invalid trusted proxy %q: expected an IP address or CIDR", value)
+			}
+			prefix = netip.PrefixFrom(address, address.BitLen())
+		}
+		proxies = append(proxies, prefix.Masked())
+	}
+	return proxies, nil
 }
 
 func parseNotificationEndpoints(raw string) []string {

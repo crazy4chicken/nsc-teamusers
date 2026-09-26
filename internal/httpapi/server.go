@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +31,7 @@ type Server struct {
 func NewServer(cfg config.Config, pool *pgxpool.Pool) *Server {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
-	router.Use(trustedRealIP)
+	router.Use(trustedRealIP(cfg.TrustedProxies))
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Timeout(30 * time.Second))
 
@@ -104,19 +105,38 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
 }
 
-// trustedRealIP accepts forwarded client addresses only from a loopback
-// direct peer. Publicly reachable peers must not be allowed to forge rate
-// limit and audit metadata through X-Forwarded-For.
-func trustedRealIP(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if remoteIP(r.RemoteAddr).IsLoopback() {
-			forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0])
-			if ip := remoteIP(forwarded); ip != nil {
-				r.RemoteAddr = ip.String()
+// trustedRealIP accepts forwarded client addresses only from a loopback or
+// explicitly configured trusted proxy direct peer. Publicly reachable peers
+// must not be allowed to forge rate limit and audit metadata through
+// X-Forwarded-For.
+func trustedRealIP(trustedProxies []netip.Prefix) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			peer := remoteIP(r.RemoteAddr)
+			trusted := peer != nil && peer.IsLoopback()
+			if !trusted && peer != nil {
+				peerBytes := peer
+				if v4 := peer.To4(); v4 != nil {
+					peerBytes = v4
+				}
+				if address, ok := netip.AddrFromSlice(peerBytes); ok {
+					for _, proxy := range trustedProxies {
+						if proxy.Contains(address) {
+							trusted = true
+							break
+						}
+					}
+				}
 			}
-		}
-		next.ServeHTTP(w, r)
-	})
+			if trusted {
+				forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0])
+				if ip := remoteIP(forwarded); ip != nil {
+					r.RemoteAddr = ip.String()
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func remoteIP(address string) net.IP {
