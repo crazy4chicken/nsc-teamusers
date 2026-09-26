@@ -12,6 +12,9 @@ data/
 *.test
 *.prof
 dist/
+node_modules/
+docs/.vitepress/dist
+docs/.vitepress/cache
 tmp/
 
 # Test/coverage artifacts

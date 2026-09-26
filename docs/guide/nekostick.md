@@ -1,3 +1,8 @@
+---
+title: Nekostick deployment
+outline: 2
+---
+
 # Nekostick deployment
 
 `teamusers` is a supervised Nekostick microservice, not a standalone
@@ -42,7 +47,7 @@ following is a concrete service definition using the entity fields
     "TEAMUSERS_NOTIFICATION_SECRET": "<notification-secret>"
   },
   "StartMode": "Eager",
-  "ForwardingMode": "Preserve"
+  "ForwardingMode": "Strip"
 }
 ```
 
@@ -96,7 +101,7 @@ Routes to expose under that prefix:
 - `/users*`, `/teams*`, `/groups*`, `/roles*`, `/permissions`, `/bindings*`,
   and `/audit` for the authenticated admin plane.
 
-The complete method/path table and JSON contracts are in [api.md](api.md).
+The complete method/path table and JSON contracts are in the [API reference](/api/overview).
 `/healthz` and JWKS may be exposed only under the route policy intended for the
 host; admin routes must not be public.
 

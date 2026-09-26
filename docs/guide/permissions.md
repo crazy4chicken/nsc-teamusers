@@ -1,3 +1,8 @@
+---
+title: Administrative permission scopes
+outline: 2
+---
+
 # Administrative permission scopes
 
 Administrative access is controlled by `iam:<area>:<scope>` keys. The `any`

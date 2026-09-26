@@ -1,3 +1,8 @@
+---
+title: Operations runbook
+outline: 2
+---
+
 # Operations runbook
 
 This service is intended to run behind Nekostick on a private HTTP boundary.

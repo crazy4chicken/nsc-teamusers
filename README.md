@@ -59,7 +59,7 @@ injects `HOST=127.0.0.1` and the leased `PORT`, starts the child eagerly, and
 supervises `GET /healthz`. The API is root-relative inside the child, so
 publish it under a custom prefix such as `/iam/` and keep the default `Strip`
 forwarding mode: Nekostick removes the prefix before the request reaches the
-child. The exact registration is in [the Nekostick guide](docs/nekostick.md).
+child. The exact registration is in [the Nekostick guide](docs/guide/nekostick.md).
 
 Keep real DSNs, notification service secrets, and signing keys in Nekostick's protected
 configuration. Its service environment is stored as plaintext in PostgreSQL,
@@ -67,15 +67,13 @@ so restrict access to service definitions and backups.
 
 ## Documentation
 
-- [HTTP API reference](docs/api.md)
-- [Operations runbook](docs/operations.md)
-- [Nekostick deployment and integration](docs/nekostick.md)
-- [Authentication security notes](docs/security.md)
-- [Implementation plan](PLAN.md)
+The VitePress site is organized under `docs/`:
 
-The binary supports `run`, `status`, and `doctor`. Configuration knobs and
-CLI flag names are documented in the operations runbook and implemented in
-`internal/config`.
+- `docs/guide/` contains the getting-started, security, operations, permissions, and Nekostick guides.
+- `docs/api/` contains the API reference pages generated from the OpenAPI contract.
+- `docs/openapi.yaml` is the downloadable OpenAPI 3.1 specification.
+
+Run `pnpm docs:dev` to preview the site locally, or `pnpm docs:build` to create a production build.
 
 ## License
 

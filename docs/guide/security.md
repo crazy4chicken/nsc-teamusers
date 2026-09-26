@@ -1,3 +1,8 @@
+---
+title: Authentication security
+outline: 2
+---
+
 # Authentication security
 
 ## Token and refresh lifecycle
