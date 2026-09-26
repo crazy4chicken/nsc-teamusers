@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,6 +17,7 @@ func CreateUser(ctx context.Context, q Q, user User) (User, error) {
 	if user.ID == "" {
 		user.ID = NewID()
 	}
+	user.Username = strings.ToLower(strings.TrimSpace(user.Username))
 	return scanUser(q.QueryRow(ctx, `
 		INSERT INTO users (id, username, email, display_name, status)
 		VALUES ($1, $2, $3, $4, $5)
@@ -61,6 +63,7 @@ func ListUsers(ctx context.Context, q Q, cursor string, limit int) ([]User, stri
 }
 
 func UpdateUser(ctx context.Context, q Q, user User) (User, error) {
+	user.Username = strings.ToLower(strings.TrimSpace(user.Username))
 	return scanUser(q.QueryRow(ctx, `
 		UPDATE users
 		SET username = $2, email = $3, display_name = $4, status = $5, updated_at = now()

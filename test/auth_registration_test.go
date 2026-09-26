@@ -67,6 +67,78 @@ func TestRegistrationDuplicateGenericFailure(t *testing.T) {
 		t.Fatalf("duplicate registration leaked identity details: %s", body)
 	}
 }
+
+func TestUsernameStoredLowercase(t *testing.T) {
+	stack := newIntegrationStackWithMode(t, "open")
+	const (
+		mixedUsername = "MiXeDUser"
+		password      = "MixedUserPassword1"
+	)
+	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/register", map[string]string{
+		"username": mixedUsername,
+		"email":    "mixed-user@example.test",
+		"password": password,
+	}, "")
+	if status != http.StatusCreated {
+		t.Fatalf("mixed-case registration status = %d, want %d: %s", status, http.StatusCreated, body)
+	}
+	var registered registrationResponse
+	decodeResponse(t, body, &registered)
+
+	token := registrationToken(t, stack, registered.ID)
+	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/verify-email", map[string]string{"token": token}, "")
+	if status != http.StatusNoContent {
+		t.Fatalf("mixed-case email verification status = %d, want %d: %s", status, http.StatusNoContent, body)
+	}
+
+	pair := loginMeTestPair(t, stack, mixedUsername, password)
+	status, body = stack.jsonRequest(t, http.MethodGet, "/me", nil, pair.AccessToken)
+	if status != http.StatusOK {
+		t.Fatalf("mixed-case GET /me status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	var profile meProfileTestResponse
+	decodeResponse(t, body, &profile)
+	if profile.Username != "mixeduser" {
+		t.Fatalf("mixed-case profile username = %q, want mixeduser", profile.Username)
+	}
+
+	upperPair := loginMeTestPair(t, stack, strings.ToUpper(mixedUsername), password)
+	status, body = stack.jsonRequest(t, http.MethodGet, "/me", nil, upperPair.AccessToken)
+	if status != http.StatusOK {
+		t.Fatalf("all-caps GET /me status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	decodeResponse(t, body, &profile)
+	if profile.Username != "mixeduser" {
+		t.Fatalf("all-caps profile username = %q, want mixeduser", profile.Username)
+	}
+
+	status, body = stack.jsonRequest(t, http.MethodPatch, "/me", map[string]string{"username": "MixedCase2"}, pair.AccessToken)
+	if status != http.StatusOK {
+		t.Fatalf("mixed-case username PATCH /me status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	decodeResponse(t, body, &profile)
+	if profile.Username != "mixedcase2" {
+		t.Fatalf("patched profile username = %q, want mixedcase2", profile.Username)
+	}
+
+	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/register", map[string]string{
+		"username": "alice",
+		"email":    "alice-lower@example.test",
+		"password": password,
+	}, "")
+	if status != http.StatusCreated {
+		t.Fatalf("lowercase duplicate setup registration status = %d, want %d: %s", status, http.StatusCreated, body)
+	}
+	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/register", map[string]string{
+		"username": "ALICE",
+		"email":    "alice-upper@example.test",
+		"password": password,
+	}, "")
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("case-insensitive duplicate registration status = %d, want %d: %s", status, http.StatusUnprocessableEntity, body)
+	}
+}
+
 func TestRegistrationApprovalLifecycle(t *testing.T) {
 	stack := newIntegrationStackWithMode(t, "approval")
 	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/register", map[string]string{
