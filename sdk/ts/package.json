@@ -1,7 +1,7 @@
 {
   "name": "teamusers-sdk",
   "version": "0.1.0",
-  "description": "TypeScript verifier SDK for teamusers access tokens",
+  "description": "TypeScript SDK for teamusers: token verification, permission caching, ABAC, and middleware",
   "type": "module",
   "license": "AGPL-3.0-only",
   "exports": {

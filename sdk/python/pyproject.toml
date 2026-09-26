@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "teamusers-sdk"
 version = "0.1.0"
-description = "Python verifier SDK for teamusers access tokens"
+description = "Python SDK for teamusers: token verification, permission caching, ABAC, and middleware"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "AGPL-3.0-only"

@@ -1,9 +1,12 @@
 # Teamusers SDKs
 
-The repository ships verifier SDKs for applications that consume teamusers
-Ed25519 (`EdDSA`) access tokens. Both SDKs fetch and cache
-`/.well-known/jwks.json`, require issuer `teamusers`, validate expiration and
-the expected audience, and expose the subject kind and permission version.
+The repository ships full client SDKs for applications that consume teamusers
+Ed25519 (`EdDSA`) access tokens. All three SDKs verify tokens against the
+cached `/.well-known/jwks.json` document (issuer `teamusers`, expiration,
+exactly-one audience, subject kind, permission version) and provide local
+permission caches with `perm_ver` invalidation, wildcard/deny permission
+matching, ABAC condition evaluation, auth middleware helpers, and optional
+NATS-driven cache invalidation.
 
 - [TypeScript SDK](ts/README.md): `pnpm add teamusers-sdk`
 - [Python SDK](python/README.md): `python -m pip install teamusers-sdk`
