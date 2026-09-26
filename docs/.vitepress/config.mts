@@ -8,7 +8,25 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'API Reference', link: '/api/reference/authentication' },
+      {
+        text: 'API Reference',
+        items: [
+          { text: 'Overview', link: '/api/overview' },
+          { text: 'Authentication', link: '/api/reference/authentication' },
+          { text: 'Self-service', link: '/api/reference/self-service' },
+          { text: 'Users', link: '/api/reference/users' },
+          { text: 'Teams', link: '/api/reference/teams' },
+          { text: 'Groups', link: '/api/reference/groups' },
+          { text: 'Roles', link: '/api/reference/roles' },
+          { text: 'Permissions', link: '/api/reference/permissions' },
+          { text: 'Bindings', link: '/api/reference/bindings' },
+          { text: 'Audit', link: '/api/reference/audit' },
+          { text: 'Sessions', link: '/api/reference/sessions' },
+          { text: 'Invitations', link: '/api/reference/invitations' },
+          { text: 'Authorization', link: '/api/reference/authorization' },
+          { text: 'Health', link: '/api/reference/health' }
+        ]
+      },
       {
         text: 'GitHub',
         link: 'https://github.com/crazy4chicken/nsc-teamusers'

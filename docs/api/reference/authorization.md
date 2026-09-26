@@ -1,6 +1,6 @@
 ---
 title: Authorization API Reference
+layout: page
+sidebar: false
 ---
-Explore service-only endpoints for evaluating effective authorization grants.
-
 <ApiReference spec="/specs/authorization.yaml" />

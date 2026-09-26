@@ -1,6 +1,6 @@
 ---
 title: Roles API Reference
+layout: page
+sidebar: false
 ---
-Explore administrative endpoints for managing roles.
-
 <ApiReference spec="/specs/roles.yaml" />

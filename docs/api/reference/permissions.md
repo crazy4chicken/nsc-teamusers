@@ -1,6 +1,6 @@
 ---
 title: Permissions API Reference
+layout: page
+sidebar: false
 ---
-Explore administrative endpoints for managing permissions.
-
 <ApiReference spec="/specs/permissions.yaml" />

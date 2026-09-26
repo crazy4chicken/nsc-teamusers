@@ -1,6 +1,6 @@
 ---
 title: Bindings API Reference
+layout: page
+sidebar: false
 ---
-Explore administrative endpoints for assigning roles and permissions.
-
 <ApiReference spec="/specs/bindings.yaml" />

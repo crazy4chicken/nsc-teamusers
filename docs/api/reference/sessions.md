@@ -1,6 +1,6 @@
 ---
 title: Sessions API Reference
+layout: page
+sidebar: false
 ---
-Explore administrative endpoints for listing and revoking user sessions.
-
 <ApiReference spec="/specs/sessions.yaml" />

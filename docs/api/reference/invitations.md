@@ -1,6 +1,6 @@
 ---
 title: Invitations API Reference
+layout: page
+sidebar: false
 ---
-Explore administrative endpoints for creating and managing invitations.
-
 <ApiReference spec="/specs/invitations.yaml" />

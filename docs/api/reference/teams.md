@@ -1,6 +1,6 @@
 ---
 title: Teams API Reference
+layout: page
+sidebar: false
 ---
-Explore administrative endpoints for managing teams and team membership.
-
 <ApiReference spec="/specs/teams.yaml" />

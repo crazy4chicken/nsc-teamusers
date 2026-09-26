@@ -1,6 +1,6 @@
 ---
 title: Authentication API Reference
+layout: page
+sidebar: false
 ---
-Explore authentication endpoints, token flows, and account recovery operations.
-
 <ApiReference spec="/specs/authentication.yaml" />

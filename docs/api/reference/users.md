@@ -1,6 +1,6 @@
 ---
 title: Users API Reference
+layout: page
+sidebar: false
 ---
-Explore administrative endpoints for managing user accounts.
-
 <ApiReference spec="/specs/users.yaml" />

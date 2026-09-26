@@ -1,6 +1,6 @@
 ---
 title: Groups API Reference
+layout: page
+sidebar: false
 ---
-Explore administrative endpoints for managing groups and group membership.
-
 <ApiReference spec="/specs/groups.yaml" />
