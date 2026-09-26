@@ -189,6 +189,34 @@ func newIntegrationStackWithModeAndConfig(t *testing.T, registrationMode string,
 	return stack
 }
 
+// completeForcedPasswordChange performs the forced first-login flow: login with
+// the provisioned password (expects 403 + change_token), then POST /me/password
+// with the change token to set newPassword.
+func completeForcedPasswordChange(t *testing.T, stack *integrationStack, username, provisionedPassword, newPassword string) {
+	t.Helper()
+	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
+		"username": username,
+		"password": provisionedPassword,
+	}, "")
+	if status != http.StatusForbidden || !strings.Contains(string(body), "password_change_required") {
+		t.Fatalf("provisioned login = %d %s, want password_change_required 403", status, body)
+	}
+	var challenge struct {
+		ChangeToken string `json:"change_token"`
+	}
+	decodeResponse(t, body, &challenge)
+	if challenge.ChangeToken == "" {
+		t.Fatal("provisioned login response has no change_token")
+	}
+	status, body = stack.jsonRequest(t, http.MethodPost, "/me/password", map[string]string{
+		"current_password": provisionedPassword,
+		"new_password":     newPassword,
+	}, challenge.ChangeToken)
+	if status != http.StatusOK {
+		t.Fatalf("forced password change = %d %s, want 200", status, body)
+	}
+}
+
 func newIntegrationDatabase(t *testing.T) *integrationDatabase {
 	t.Helper()
 	adminDSN := strings.TrimSpace(os.Getenv(testPostgresEnv))

@@ -468,6 +468,7 @@ func (s *Service) changePassword(w http.ResponseWriter, r *http.Request) {
 	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
 		credential.Hash = newHash
 		credential.RotatedAt = &rotatedAt
+		credential.MustChange = false
 		if _, err := store.UpdateCredential(ctx, tx, credential); err != nil {
 			return err
 		}

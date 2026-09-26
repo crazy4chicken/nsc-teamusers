@@ -6,15 +6,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/crypto/argon2"
 
 	"teamusers/internal/config"
+	"teamusers/internal/passwd"
 	"teamusers/internal/store"
 )
 
@@ -86,14 +85,15 @@ func (h *adminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 		}
 		created = user
 		if password != "" {
-			hash, err := hashPassword(password)
+			hash, err := passwd.Hash(password)
 			if err != nil {
 				return err
 			}
 			if _, err := store.CreateCredential(ctx, tx, store.Credential{
-				UserID: user.ID,
-				Kind:   "password",
-				Hash:   hash,
+				UserID:     user.ID,
+				Kind:       "password",
+				Hash:       hash,
+				MustChange: true,
 			}); err != nil {
 				return err
 			}
@@ -291,22 +291,6 @@ func (h *adminHandler) registrationMode() string {
 	}
 }
 
-func hashPassword(password string) (string, error) {
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return "", err
-	}
-	const (
-		memory      = 64 * 1024
-		iterations  = 3
-		parallelism = 2
-		keyLength   = 32
-	)
-	key := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, keyLength)
-	encoding := base64.RawStdEncoding
-	return "$argon2id$v=19$m=" + strconv.FormatUint(memory, 10) + ",t=" + strconv.FormatUint(iterations, 10) + ",p=" + strconv.FormatUint(uint64(parallelism), 10) + "$" + encoding.EncodeToString(salt) + "$" + encoding.EncodeToString(key), nil
-}
-
 type createCredentialRequest struct {
 	Kind     string `json:"kind"`
 	Password string `json:"password,omitempty"`
@@ -347,7 +331,7 @@ func (h *adminHandler) createUserCredential(w http.ResponseWriter, r *http.Reque
 	if request.Kind == "service" {
 		plaintext = secret
 	}
-	hash, err := hashPassword(plaintext)
+	hash, err := passwd.Hash(plaintext)
 	if err != nil {
 		WriteStoreProblem(w, r, err)
 		return
@@ -359,7 +343,7 @@ func (h *adminHandler) createUserCredential(w http.ResponseWriter, r *http.Reque
 			return err
 		}
 		user = loaded
-		credential := store.Credential{UserID: id, Kind: request.Kind, Hash: hash}
+		credential := store.Credential{UserID: id, Kind: request.Kind, Hash: hash, MustChange: request.Kind == "password"}
 		if _, err := store.UpdateCredential(ctx, tx, credential); err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				return err

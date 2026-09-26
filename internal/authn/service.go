@@ -141,10 +141,23 @@ func (s *Service) Routes() chi.Router {
 }
 
 // Middleware verifies an access JWT, checks that its subject remains active,
-// and injects the HTTP API subject used by the admin plane.
+// and injects the HTTP API subject used by the admin plane. Only POST
+// /me/password additionally accepts a password_change token.
 func (s *Service) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && r.URL.Path == "/me/password" {
+				if raw, ok := bearerToken(r.Header.Get("Authorization")); ok {
+					if userID, err := s.parsePasswordChangeToken(raw); err == nil {
+						user, err := store.GetUser(r.Context(), s.q, userID)
+						if err == nil && user.Status == "active" {
+							subject := httpapi.Subject{UserID: user.ID, Kind: "user", PermVer: user.PermVer}
+							next.ServeHTTP(w, r.WithContext(httpapi.ContextWithSubject(r.Context(), subject)))
+							return
+						}
+					}
+				}
+			}
 			claims, _, err := s.authenticateBearer(r, "")
 			if err != nil {
 				writeUnauthorized(w, r)
@@ -264,9 +277,10 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if _, err := store.CreateCredential(ctx, tx, store.Credential{
-			UserID: created.ID,
-			Kind:   "password",
-			Hash:   passwordHash,
+			UserID:     created.ID,
+			Kind:       "password",
+			Hash:       passwordHash,
+			MustChange: false,
 		}); err != nil {
 			return err
 		}
@@ -389,9 +403,10 @@ func (s *Service) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if _, err := store.CreateCredential(ctx, tx, store.Credential{
-			UserID: userID,
-			Kind:   "password",
-			Hash:   passwordHash,
+			UserID:     userID,
+			Kind:       "password",
+			Hash:       passwordHash,
+			MustChange: false,
 		}); err != nil {
 			return err
 		}
@@ -526,11 +541,12 @@ func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		credential, err := store.GetCredential(ctx, tx, userID, "password")
 		if errors.Is(err, pgx.ErrNoRows) {
 			_, err = store.CreateCredential(ctx, tx, store.Credential{
-				UserID: userID, Kind: "password", Hash: newHash, RotatedAt: &rotatedAt,
+				UserID: userID, Kind: "password", Hash: newHash, MustChange: false, RotatedAt: &rotatedAt,
 			})
 		} else if err == nil {
 			credential.Hash = newHash
 			credential.RotatedAt = &rotatedAt
+			credential.MustChange = false
 			_, err = store.UpdateCredential(ctx, tx, credential)
 		}
 		if err != nil {
@@ -658,6 +674,15 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	if user.Status != "active" {
 		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
 		writeUnauthorized(w, r)
+		return
+	}
+	if credential.MustChange {
+		changeToken, err := s.signPasswordChangeToken(user.ID)
+		if err != nil {
+			writeInternal(w, r)
+			return
+		}
+		writePasswordChangeRequired(w, changeToken)
 		return
 	}
 	_, err := store.GetCredential(r.Context(), s.q, user.ID, "totp")
@@ -1271,6 +1296,21 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeUnauthorized(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteProblem(w, r, http.StatusUnauthorized, "Unauthorized", "authentication failed")
+}
+
+func writePasswordChangeRequired(w http.ResponseWriter, changeToken string) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(struct {
+		Type        string `json:"type"`
+		Title       string `json:"title"`
+		Status      int    `json:"status"`
+		Detail      string `json:"detail"`
+		ChangeToken string `json:"change_token"`
+	}{
+		Type: "about:blank", Title: "password_change_required", Status: http.StatusForbidden,
+		Detail: "password_change_required", ChangeToken: changeToken,
+	})
 }
 
 func writeInternal(w http.ResponseWriter, r *http.Request) {

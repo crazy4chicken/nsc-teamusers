@@ -171,7 +171,8 @@ func TestAdminUserCSVImport(t *testing.T) {
 	if response.Results[2].Row != 4 || response.Results[2].OK || response.Results[2].Error != "duplicate_username" {
 		t.Fatalf("duplicate CSV row = %+v", response.Results[2])
 	}
-	_ = loginUser(t, stack, "imported", "imported-password1")
+	completeForcedPasswordChange(t, stack, "imported", "imported-password1", "imported-final-password1")
+	_ = loginUser(t, stack, "imported", "imported-final-password1")
 	imported := getBatchUser(t, stack, adminToken, response.Results[0].ID)
 	if imported.Status != "active" {
 		t.Fatalf("imported user status = %q, want active", imported.Status)

@@ -119,9 +119,10 @@ func TestAdminUsersEndpoints(t *testing.T) {
 	if status != http.StatusUnauthorized {
 		t.Fatalf("login with rotated-out password status = %d, want %d: %s", status, http.StatusUnauthorized, body)
 	}
+	completeForcedPasswordChange(t, stack, "alice", "NewAlicePassword1", "AliceFinalPassword1")
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
 		"username": "alice",
-		"password": "NewAlicePassword1",
+		"password": "AliceFinalPassword1",
 	}, "")
 	if status != http.StatusOK {
 		t.Fatalf("login with rotated password status = %d, want %d: %s", status, http.StatusOK, body)

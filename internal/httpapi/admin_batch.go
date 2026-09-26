@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"teamusers/internal/config"
+	"teamusers/internal/passwd"
 	"teamusers/internal/store"
 )
 
@@ -243,7 +244,7 @@ func (h *adminHandler) importUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		seen[key] = struct{}{}
 
-		hash, err := hashPassword(record.Password)
+		hash, err := passwd.Hash(record.Password)
 		if err != nil {
 			result.Error = "operation_failed"
 			results = append(results, result)
@@ -262,9 +263,10 @@ func (h *adminHandler) importUsers(w http.ResponseWriter, r *http.Request) {
 			}
 			created = user
 			if _, err := store.CreateCredential(ctx, tx, store.Credential{
-				UserID: user.ID,
-				Kind:   "password",
-				Hash:   hash,
+				UserID:     user.ID,
+				Kind:       "password",
+				Hash:       hash,
+				MustChange: true,
 			}); err != nil {
 				return err
 			}

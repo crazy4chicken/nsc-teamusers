@@ -96,15 +96,15 @@ func DeleteUser(ctx context.Context, q Q, id string) error {
 
 func CreateCredential(ctx context.Context, q Q, credential Credential) (Credential, error) {
 	return scanCredential(q.QueryRow(ctx, `
-		INSERT INTO credentials (user_id, kind, hash, rotated_at)
-		VALUES ($1, $2, $3, $4)
-		RETURNING user_id, kind, hash, created_at, rotated_at`,
-		credential.UserID, credential.Kind, credential.Hash, credential.RotatedAt))
+		INSERT INTO credentials (user_id, kind, hash, must_change, rotated_at)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING user_id, kind, hash, must_change, created_at, rotated_at`,
+		credential.UserID, credential.Kind, credential.Hash, credential.MustChange, credential.RotatedAt))
 }
 
 func GetCredential(ctx context.Context, q Q, userID, kind string) (Credential, error) {
 	return scanCredential(q.QueryRow(ctx, `
-		SELECT user_id, kind, hash, created_at, rotated_at
+		SELECT user_id, kind, hash, must_change, created_at, rotated_at
 		FROM credentials WHERE user_id = $1 AND kind = $2
 		ORDER BY created_at DESC, hash LIMIT 1`, userID, kind))
 }
@@ -115,11 +115,11 @@ func ListCredentials(ctx context.Context, q Q, userID, cursor string, limit int)
 	var err error
 	if cursor == "" {
 		rows, err = q.Query(ctx, `
-			SELECT user_id, kind, hash, created_at, rotated_at
+			SELECT user_id, kind, hash, must_change, created_at, rotated_at
 			FROM credentials WHERE user_id = $1 ORDER BY kind, hash LIMIT $2`, userID, limit)
 	} else {
 		rows, err = q.Query(ctx, `
-			SELECT user_id, kind, hash, created_at, rotated_at
+			SELECT user_id, kind, hash, must_change, created_at, rotated_at
 			FROM credentials WHERE user_id = $1 AND (kind, hash) > ($2, '') ORDER BY kind, hash LIMIT $3`, userID, cursor, limit)
 	}
 	if err != nil {
@@ -147,11 +147,11 @@ func ListCredentials(ctx context.Context, q Q, userID, cursor string, limit int)
 func ConsumeBackupCredential(ctx context.Context, q Q, userID, digest string) (bool, error) {
 	var credential Credential
 	err := q.QueryRow(ctx, `
-		SELECT user_id, kind, hash, created_at, rotated_at
+		SELECT user_id, kind, hash, must_change, created_at, rotated_at
 		FROM credentials
 		WHERE user_id = $1 AND kind = 'backup_codes'
 		FOR UPDATE`, userID).Scan(
-		&credential.UserID, &credential.Kind, &credential.Hash,
+		&credential.UserID, &credential.Kind, &credential.Hash, &credential.MustChange,
 		&credential.CreatedAt, &credential.RotatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -191,10 +191,10 @@ func ConsumeBackupCredential(ctx context.Context, q Q, userID, digest string) (b
 
 func UpdateCredential(ctx context.Context, q Q, credential Credential) (Credential, error) {
 	return scanCredential(q.QueryRow(ctx, `
-		UPDATE credentials SET hash = $3, rotated_at = $4
+		UPDATE credentials SET hash = $3, must_change = $4, rotated_at = $5
 		WHERE user_id = $1 AND kind = $2
-		RETURNING user_id, kind, hash, created_at, rotated_at`,
-		credential.UserID, credential.Kind, credential.Hash, credential.RotatedAt))
+		RETURNING user_id, kind, hash, must_change, created_at, rotated_at`,
+		credential.UserID, credential.Kind, credential.Hash, credential.MustChange, credential.RotatedAt))
 }
 
 // ReplaceBackupCodes atomically replaces the single backup-code credential
@@ -205,7 +205,7 @@ func ReplaceBackupCodes(ctx context.Context, q Q, userID, encodedDigests string)
         VALUES ($1, 'backup_codes', $2, now())
         ON CONFLICT (user_id, kind) DO UPDATE
         SET hash = EXCLUDED.hash, rotated_at = now()
-        RETURNING user_id, kind, hash, created_at, rotated_at`, userID, encodedDigests))
+        RETURNING user_id, kind, hash, must_change, created_at, rotated_at`, userID, encodedDigests))
 }
 
 // ActivateTOTPCredential atomically promotes one pending TOTP credential.
@@ -213,7 +213,7 @@ func ActivateTOTPCredential(ctx context.Context, q Q, userID string) (Credential
 	return scanCredential(q.QueryRow(ctx, `
 		UPDATE credentials SET kind = 'totp', rotated_at = now()
 		WHERE user_id = $1 AND kind = 'totp_pending'
-		RETURNING user_id, kind, hash, created_at, rotated_at`, userID))
+		RETURNING user_id, kind, hash, must_change, created_at, rotated_at`, userID))
 }
 
 func DeleteCredential(ctx context.Context, q Q, userID, kind string) error {
@@ -259,7 +259,7 @@ func scanUser(row pgx.Row) (User, error) {
 func scanCredential(row pgx.Row) (Credential, error) {
 	var credential Credential
 	if err := row.Scan(
-		&credential.UserID, &credential.Kind, &credential.Hash,
+		&credential.UserID, &credential.Kind, &credential.Hash, &credential.MustChange,
 		&credential.CreatedAt, &credential.RotatedAt,
 	); err != nil {
 		return Credential{}, err

@@ -24,11 +24,12 @@ type User struct {
 
 // Credential mirrors the credentials table.
 type Credential struct {
-	UserID    string     `json:"user_id"`
-	Kind      string     `json:"kind"`
-	Hash      string     `json:"hash"`
-	CreatedAt time.Time  `json:"created_at"`
-	RotatedAt *time.Time `json:"rotated_at,omitempty"`
+	UserID     string     `json:"user_id"`
+	Kind       string     `json:"kind"`
+	Hash       string     `json:"hash"`
+	MustChange bool       `json:"must_change"`
+	CreatedAt  time.Time  `json:"created_at"`
+	RotatedAt  *time.Time `json:"rotated_at,omitempty"`
 }
 
 // Team mirrors the teams table.
