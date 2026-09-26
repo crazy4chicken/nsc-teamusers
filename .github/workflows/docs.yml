@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - 'docs/**'
+      - 'cmd/genspec/**'
+      - 'internal/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
