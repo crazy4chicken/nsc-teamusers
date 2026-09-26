@@ -76,7 +76,7 @@ VitePress uses the `/nsc-teamusers/` base path for both GitHub Pages and local p
 - `docs/guide/` contains the getting-started, security, operations, permissions, and Nekostick guides.
 - `docs/api/overview.md` documents cross-cutting conventions (authentication classes, problem+json, pagination, rate limiting).
 - `docs/api/reference/` is generated at VitePress build time from the canonical OpenAPI document; do not hand-edit the generated reference output.
-- `docs/public/openapi.yaml` is generated from the Go handlers and `doc.go` metadata; regenerate it with `go run ./cmd/genspec`. VitePress derives the native reference pages from this file, and the apidocs drift test enforces synchronization.
+- `docs/public/openapi.yaml` is generated from the Go handlers and `doc.go` metadata and is not committed; `pnpm docs:dev`/`docs:build` regenerate it via `go run ./cmd/genspec` before VitePress derives the native reference pages from it.
 
 Run `pnpm docs:dev` to preview the site locally, or `pnpm docs:build` to create a production build.
 

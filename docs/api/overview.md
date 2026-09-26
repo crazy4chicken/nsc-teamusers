@@ -100,4 +100,4 @@ Authentication endpoints are rate-limited by client IP and, for credential looku
 
 ## Contract source
 
-Go emits the single canonical OpenAPI 3.1 document from the handlers and `doc.go` metadata. Run `go run ./cmd/genspec` to regenerate `docs/public/openapi.yaml`; VitePress parses that file at build time to derive the native pages under `docs/api/reference/`. The `internal/apidocs` drift test enforces synchronization, so endpoint details remain in code rather than hand-edited pages.
+Go emits the single canonical OpenAPI 3.1 document from the handlers and `doc.go` metadata. The YAML is generated on demand by `go run ./cmd/genspec` (wired into `pnpm docs:dev`/`docs:build` as a pre-step) and is not committed; VitePress parses it at build time to derive the native pages under `docs/api/reference/`, so endpoint details remain in code rather than hand-edited pages.

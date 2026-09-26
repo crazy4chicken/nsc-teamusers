@@ -8,6 +8,8 @@ data/
 
 # Built binaries and artifacts
 /teamusers
+/genspec
+docs/public/openapi.yaml
 *.exe
 *.test
 *.prof
