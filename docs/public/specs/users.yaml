@@ -1,0 +1,1269 @@
+openapi: 3.1.0
+info:
+  title: Teamusers API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Nekostick /iam Strip forwarding
+tags:
+  - Users
+paths:
+  /users/:
+    get:
+      tags:
+        - Users
+      summary: List users
+      description: Use from an administrator console to page through all users. Requires an active user bearer with iam:users:any; cursor is an opaque ULID returned by the previous page.
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+              example:
+                items:
+                  - created_at: "2026-01-01T00:00:00Z"
+                    display_name: Alice Example
+                    email: alice@example.test
+                    email_verified_at: "2026-01-01T00:00:00Z"
+                    failed_logins: 0
+                    id: 01J8Z3USER000000000000001
+                    perm_ver: 3
+                    status: active
+                    updated_at: "2026-01-01T00:00:00Z"
+                    username: alice
+                next_cursor: ""
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: limit must be a positive integer
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+    post:
+      tags:
+        - Users
+      summary: Create a user
+      description: Use from an administrator or provisioning workflow to create an active user. Password and initial_password are optional; password wins when both are supplied.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                display_name:
+                  type: string
+                email:
+                  anyOf:
+                    - type: string
+                    - type: "null"
+                initial_password:
+                  type: string
+                password:
+                  type: string
+                username:
+                  type: string
+              required:
+                - username
+                - email
+                - display_name
+                - password
+                - initial_password
+              type: object
+            example:
+              display_name: Alice Example
+              email: alice@example.test
+              password: AtLeastTwelve1
+              username: alice
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                properties:
+                  approved_at:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  approved_by:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                  created_at:
+                    format: date-time
+                    type: string
+                  display_name:
+                    type: string
+                  email:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                  email_verified_at:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  failed_logins:
+                    type: integer
+                  id:
+                    type: string
+                  locked_until:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  perm_ver:
+                    type: integer
+                  status:
+                    type: string
+                  updated_at:
+                    format: date-time
+                    type: string
+                  username:
+                    type: string
+                required:
+                  - id
+                  - username
+                  - display_name
+                  - status
+                  - perm_ver
+                  - failed_logins
+                  - created_at
+                  - updated_at
+                type: object
+              example:
+                created_at: "2026-01-01T00:00:00Z"
+                display_name: Alice Example
+                email: alice@example.test
+                email_verified_at: "2026-01-01T00:00:00Z"
+                failed_logins: 0
+                id: 01J8Z3USER000000000000001
+                perm_ver: 3
+                status: active
+                updated_at: "2026-01-01T00:00:00Z"
+                username: alice
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: request body must be valid JSON
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "409":
+          description: Conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Conflict
+                status: 409
+                detail: the resource already exists
+        "422":
+          description: Weak Password
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Weak Password
+                status: 422
+                detail: weak_password
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /users/batch:
+    post:
+      tags:
+        - Users
+      summary: Enable or disable users in batches
+      description: Use for administrative bulk status changes. Up to 500 IDs are processed independently; each result records success or invalid_id, not_found, or operation_failed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                ids:
+                  items:
+                    type: string
+                  type: array
+                op:
+                  type: string
+              required:
+                - ids
+                - op
+              type: object
+            example:
+              ids:
+                - 01J8Z3USER000000000000001
+                - 01J8Z3USER000000000000002
+              op: disable
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+              example:
+                results:
+                  - id: 01J8Z3USER000000000000001
+                    ok: true
+                  - error: not_found
+                    id: 01J8Z3USER000000000000002
+                    ok: false
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: request body must be valid JSON
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "422":
+          description: Invalid Operation; Too Many Items
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              examples:
+                op must be disable or enable:
+                  value:
+                    type: about:blank
+                    title: Invalid Operation
+                    status: 422
+                    detail: op must be disable or enable
+                a maximum of 500 ids is allowed:
+                  value:
+                    type: about:blank
+                    title: Too Many Items
+                    status: 422
+                    detail: a maximum of 500 ids is allowed
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /users/import:
+    post:
+      tags:
+        - Users
+      summary: Import users from CSV
+      description: Use for bulk provisioning from an administrator export. Send text/csv with exactly username,email,display_name,password columns and at most 500 data rows; each row is reported independently.
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+              example:
+                results:
+                  - id: 01J8Z3USER000000000000001
+                    ok: true
+                    row: 2
+                    username: alice
+                  - error: weak_password
+                    ok: false
+                    row: 3
+                    username: bob
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: request body must be valid JSON
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "415":
+          description: Unsupported Media Type
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unsupported Media Type
+                status: 415
+                detail: Content-Type must be text/csv
+        "422":
+          description: Invalid CSV
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid CSV
+                status: 422
+                detail: CSV header must be username,email,display_name,password
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /users/{id}:
+    delete:
+      tags:
+        - Users
+      summary: Delete a user
+      description: Use for an administrative hard deletion. Cascaded records are removed and the operation is audited; prefer account erasure for self-service privacy requests.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+    get:
+      tags:
+        - Users
+      summary: Get a user
+      description: Use to retrieve one administrative user record by ULID. Requires iam:users:any.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                properties:
+                  approved_at:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  approved_by:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                  created_at:
+                    format: date-time
+                    type: string
+                  display_name:
+                    type: string
+                  email:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                  email_verified_at:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  failed_logins:
+                    type: integer
+                  id:
+                    type: string
+                  locked_until:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  perm_ver:
+                    type: integer
+                  status:
+                    type: string
+                  updated_at:
+                    format: date-time
+                    type: string
+                  username:
+                    type: string
+                required:
+                  - id
+                  - username
+                  - display_name
+                  - status
+                  - perm_ver
+                  - failed_logins
+                  - created_at
+                  - updated_at
+                type: object
+              example:
+                created_at: "2026-01-01T00:00:00Z"
+                display_name: Alice Example
+                email: alice@example.test
+                email_verified_at: "2026-01-01T00:00:00Z"
+                failed_logins: 0
+                id: 01J8Z3USER000000000000001
+                perm_ver: 3
+                status: active
+                updated_at: "2026-01-01T00:00:00Z"
+                username: alice
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+    patch:
+      tags:
+        - Users
+      summary: Update a user
+      description: Use for administrative profile or status changes. At least one of username, email, display_name, and status is required; status may be active or disabled.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                display_name:
+                  anyOf:
+                    - type: string
+                    - type: "null"
+                email:
+                  anyOf:
+                    - type: string
+                    - type: "null"
+                status:
+                  anyOf:
+                    - type: string
+                    - type: "null"
+                username:
+                  anyOf:
+                    - type: string
+                    - type: "null"
+              required:
+                - username
+                - email
+                - display_name
+                - status
+              type: object
+            example:
+              display_name: Alice Smith
+              status: active
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                properties:
+                  approved_at:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  approved_by:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                  created_at:
+                    format: date-time
+                    type: string
+                  display_name:
+                    type: string
+                  email:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                  email_verified_at:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  failed_logins:
+                    type: integer
+                  id:
+                    type: string
+                  locked_until:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  perm_ver:
+                    type: integer
+                  status:
+                    type: string
+                  updated_at:
+                    format: date-time
+                    type: string
+                  username:
+                    type: string
+                required:
+                  - id
+                  - username
+                  - display_name
+                  - status
+                  - perm_ver
+                  - failed_logins
+                  - created_at
+                  - updated_at
+                type: object
+              example:
+                created_at: "2026-01-01T00:00:00Z"
+                display_name: Alice Smith
+                email: alice@example.test
+                failed_logins: 0
+                id: 01J8Z3USER000000000000001
+                perm_ver: 3
+                status: active
+                updated_at: "2026-01-01T00:00:00Z"
+                username: alice
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: request body must be valid JSON
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /users/{id}/approve:
+    post:
+      tags:
+        - Users
+      summary: Approve a pending user
+      description: Use in approval registration mode after the user has verified email. The administrator's user bearer is recorded as approver; unverified accounts return email_not_verified.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                properties:
+                  approved_at:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  approved_by:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                  created_at:
+                    format: date-time
+                    type: string
+                  display_name:
+                    type: string
+                  email:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                  email_verified_at:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  failed_logins:
+                    type: integer
+                  id:
+                    type: string
+                  locked_until:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  perm_ver:
+                    type: integer
+                  status:
+                    type: string
+                  updated_at:
+                    format: date-time
+                    type: string
+                  username:
+                    type: string
+                required:
+                  - id
+                  - username
+                  - display_name
+                  - status
+                  - perm_ver
+                  - failed_logins
+                  - created_at
+                  - updated_at
+                type: object
+              example:
+                approved_at: "2026-01-02T00:00:00Z"
+                approved_by: 01J8Z3ADMIN000000000000001
+                created_at: "2026-01-01T00:00:00Z"
+                display_name: Alice Example
+                email: alice@example.test
+                email_verified_at: "2026-01-01T00:00:00Z"
+                failed_logins: 0
+                id: 01J8Z3USER000000000000001
+                perm_ver: 1
+                status: active
+                updated_at: "2026-01-02T00:00:00Z"
+                username: alice
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "422":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 422
+                detail: email_not_verified
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /users/{id}/credentials:
+    post:
+      tags:
+        - Users
+      summary: Create or rotate a user credential
+      description: Use to provision a password credential or a service credential. Service secrets are generated and returned exactly once; password hashes are never returned.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                kind:
+                  type: string
+                password:
+                  type: string
+              required:
+                - kind
+                - password
+              type: object
+            example:
+              kind: password
+              password: AtLeastTwelve1
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+              example:
+                kind: password
+                user_id: 01J8Z3USER000000000000001
+                username: alice
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: kind must be password or service
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "422":
+          description: Weak Password
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Weak Password
+                status: 422
+                detail: weak_password
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /users/{id}/disable:
+    post:
+      tags:
+        - Users
+      summary: Disable a user
+      description: Use as a dedicated administrative lock switch. It resets lockout state, revokes sessions, invalidates permissions, and emits the same lifecycle events as a disabled status update.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                properties:
+                  approved_at:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  approved_by:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                  created_at:
+                    format: date-time
+                    type: string
+                  display_name:
+                    type: string
+                  email:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                  email_verified_at:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  failed_logins:
+                    type: integer
+                  id:
+                    type: string
+                  locked_until:
+                    anyOf:
+                      - format: date-time
+                        type: string
+                      - type: "null"
+                  perm_ver:
+                    type: integer
+                  status:
+                    type: string
+                  updated_at:
+                    format: date-time
+                    type: string
+                  username:
+                    type: string
+                required:
+                  - id
+                  - username
+                  - display_name
+                  - status
+                  - perm_ver
+                  - failed_logins
+                  - created_at
+                  - updated_at
+                type: object
+              example:
+                created_at: "2026-01-01T00:00:00Z"
+                display_name: Alice Example
+                email: alice@example.test
+                failed_logins: 0
+                id: 01J8Z3USER000000000000001
+                perm_ver: 4
+                status: disabled
+                updated_at: "2026-01-01T00:00:00Z"
+                username: alice
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /users/{id}/totp:
+    delete:
+      tags:
+        - Users
+      summary: Reset a user's TOTP
+      description: Use for administrative recovery when a user loses MFA access. It deletes active, pending, and backup-code credentials without requiring the user's TOTP code.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+components:
+  schemas:
+    ProblemDetails:
+      type: object
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+      required:
+        - type
+        - title
+        - status
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: EdDSA JWT

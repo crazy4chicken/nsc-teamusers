@@ -1,0 +1,350 @@
+openapi: 3.1.0
+info:
+  title: Teamusers API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Nekostick /iam Strip forwarding
+tags:
+  - Sessions
+paths:
+  /me/sessions:
+    get:
+      tags:
+        - Sessions
+      summary: List the current user's sessions
+      description: Use in account security settings to show active refresh sessions. Returned IDs are opaque token digests and only contain created_at and expires_at.
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                items:
+                  properties:
+                    created_at:
+                      format: date-time
+                      type: string
+                    expires_at:
+                      format: date-time
+                      type: string
+                    id:
+                      type: string
+                  required:
+                    - id
+                    - created_at
+                    - expires_at
+                  type: object
+                type: array
+              example:
+                - created_at: "2026-01-01T00:00:00Z"
+                  expires_at: "2026-01-31T00:00:00Z"
+                  id: 8d7e5b3a0f6f4e1d...
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /me/sessions/{id}:
+    delete:
+      tags:
+        - Sessions
+      summary: Revoke one own session
+      description: Use when a user signs out another browser or device. Foreign, expired, revoked, or unknown IDs all return the same 404 response.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /users/{id}/sessions:
+    delete:
+      tags:
+        - Sessions
+      summary: Revoke every session for a user
+      description: Use for incident response or after an administrative password reset. It revokes all refresh sessions for the target user and returns no body.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+    get:
+      tags:
+        - Sessions
+      summary: List a user's sessions
+      description: Use for administrative security review. Requires iam:sessions:any and returns only active session IDs and timestamps, never client metadata or refresh tokens.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                items:
+                  properties:
+                    created_at:
+                      format: date-time
+                      type: string
+                    expires_at:
+                      format: date-time
+                      type: string
+                    id:
+                      type: string
+                  required:
+                    - id
+                    - created_at
+                    - expires_at
+                  type: object
+                type: array
+              example:
+                - created_at: "2026-01-01T00:00:00Z"
+                  expires_at: "2026-01-31T00:00:00Z"
+                  id: 8d7e5b3a0f6f4e1d...
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /users/{id}/sessions/{sid}:
+    delete:
+      tags:
+        - Sessions
+      summary: Revoke one user's session
+      description: Use to revoke one device session during security review. The session must belong to the path user; foreign IDs return not_found.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+components:
+  schemas:
+    ProblemDetails:
+      type: object
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+      required:
+        - type
+        - title
+        - status
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: EdDSA JWT

@@ -1,0 +1,573 @@
+openapi: 3.1.0
+info:
+  title: Teamusers API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Nekostick /iam Strip forwarding
+tags:
+  - Roles
+paths:
+  /roles/:
+    get:
+      tags:
+        - Roles
+      summary: List roles
+      description: Use to page through platform or team roles. team_id optionally filters by team; omitted or null-scoped roles are platform roles.
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+              example:
+                items:
+                  - id: 01J8Z3ROLE000000000000001
+                    name: operator
+                    team_id: 01J8Z3TEAM000000000000001
+                next_cursor: ""
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: limit must be a positive integer
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+    post:
+      tags:
+        - Roles
+      summary: Create a role
+      description: Use to define a platform-wide or team-scoped role. team_id may be a ULID or JSON null.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                name:
+                  type: string
+                team_id: true
+              required:
+                - team_id
+                - name
+              type: object
+            example:
+              name: operator
+              team_id: 01J8Z3TEAM000000000000001
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  team_id:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                required:
+                  - id
+                  - name
+                type: object
+              example:
+                id: 01J8Z3ROLE000000000000001
+                name: operator
+                team_id: 01J8Z3TEAM000000000000001
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: request body must be valid JSON
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "409":
+          description: Conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Conflict
+                status: 409
+                detail: the resource already exists
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /roles/{id}:
+    delete:
+      tags:
+        - Roles
+      summary: Delete a role
+      description: Use to remove a role and all of its bindings. Affected users' permission versions are invalidated.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+    get:
+      tags:
+        - Roles
+      summary: Get a role
+      description: Use to retrieve one role and its scope before binding or changing permissions.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  team_id:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                required:
+                  - id
+                  - name
+                type: object
+              example:
+                id: 01J8Z3ROLE000000000000001
+                name: operator
+                team_id: 01J8Z3TEAM000000000000001
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+    patch:
+      tags:
+        - Roles
+      summary: Update a role
+      description: Use to rename a role or change its team scope. At least one field is required; team-scoped administrators cannot change team_id outside their scope.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                name:
+                  anyOf:
+                    - type: string
+                    - type: "null"
+                team_id: true
+              required:
+                - team_id
+                - name
+              type: object
+            example:
+              name: senior-operator
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  team_id:
+                    anyOf:
+                      - type: string
+                      - type: "null"
+                required:
+                  - id
+                  - name
+                type: object
+              example:
+                id: 01J8Z3ROLE000000000000001
+                name: senior-operator
+                team_id: 01J8Z3TEAM000000000000001
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: request body must be valid JSON
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /roles/{id}/permissions:
+    put:
+      tags:
+        - Roles
+      summary: Set permissions on a role
+      description: Use to replace the complete permission set of a role. permission_keys is canonical; permissions is accepted as a legacy alias when permission_keys is absent. Every key must already be registered.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                permission_keys:
+                  items:
+                    type: string
+                  type: array
+                permissions:
+                  items:
+                    type: string
+                  type: array
+              required:
+                - permission_keys
+                - permissions
+              type: object
+            example:
+              permission_keys:
+                - orders:read:team
+                - orders:update:own
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+              example:
+                permissions:
+                  - orders:read:team
+                  - orders:update:own
+                role_id: 01J8Z3ROLE000000000000001
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: request body must be valid JSON
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "422":
+          description: Invalid Permission; Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              examples:
+                permission must use resource:action:scope grammar:
+                  value:
+                    type: about:blank
+                    title: Invalid Permission
+                    status: 422
+                    detail: permission must use resource:action:scope grammar
+                'permission is not registered: orders:read:team':
+                  value:
+                    type: about:blank
+                    title: Invalid Request
+                    status: 422
+                    detail: 'permission is not registered: orders:read:team'
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+components:
+  schemas:
+    ProblemDetails:
+      type: object
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+      required:
+        - type
+        - title
+        - status
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: EdDSA JWT

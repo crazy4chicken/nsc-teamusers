@@ -18,6 +18,7 @@
   "packageManager": "pnpm@12.6.0",
   "type": "module",
   "devDependencies": {
+    "@scalar/api-reference": "~1.72.0",
     "vitepress": "^1.6.4"
   }
 }

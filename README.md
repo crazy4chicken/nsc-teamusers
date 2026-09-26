@@ -70,8 +70,9 @@ so restrict access to service definitions and backups.
 The VitePress site is organized under `docs/`:
 
 - `docs/guide/` contains the getting-started, security, operations, permissions, and Nekostick guides.
-- `docs/api/` contains the hand-written API guide pages (use cases, concepts, curl flows) that accompany the specification.
-- `docs/public/openapi.yaml` is the downloadable OpenAPI 3.1 specification.
+- `docs/api/overview.md` documents cross-cutting conventions (authentication classes, problem+json, pagination, rate limiting).
+- `docs/api/reference/` renders the per-area interactive API reference from the generated specifications (Scalar viewer).
+- `docs/public/openapi.yaml` (plus per-tag files in `docs/public/specs/`) is generated from the Go handlers and `doc.go` metadata; regenerate with `go run ./cmd/genspec`. The apidocs drift test enforces that the committed generated specification stays synchronized.
 
 Run `pnpm docs:dev` to preview the site locally, or `pnpm docs:build` to create a production build.
 

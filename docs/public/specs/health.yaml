@@ -1,0 +1,81 @@
+openapi: 3.1.0
+info:
+  title: Teamusers API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Nekostick /iam Strip forwarding
+tags:
+  - Health
+paths:
+  /healthz:
+    get:
+      tags:
+        - Health
+      summary: Check liveness
+      description: Use this inexpensive unauthenticated probe to determine whether the HTTP process is alive. Load balancers and orchestrators call it without credentials.
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+              example:
+                status: ok
+      security: []
+  /readyz:
+    get:
+      tags:
+        - Health
+      summary: Check readiness
+      description: Use this unauthenticated probe before routing traffic. It checks database readiness and returns not_ready while dependencies are unavailable.
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+              example:
+                status: ready
+        "503":
+          description: Service Unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Service Unavailable
+                status: 503
+                detail: not_ready
+      security: []
+components:
+  schemas:
+    ProblemDetails:
+      type: object
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+      required:
+        - type
+        - title
+        - status
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: EdDSA JWT

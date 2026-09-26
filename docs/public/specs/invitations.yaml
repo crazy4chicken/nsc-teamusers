@@ -1,0 +1,274 @@
+openapi: 3.1.0
+info:
+  title: Teamusers API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Nekostick /iam Strip forwarding
+tags:
+  - Invitations
+paths:
+  /invitations/:
+    post:
+      tags:
+        - Invitations
+      summary: Create an invitation
+      description: Use from an administrator provisioning workflow to create an invited user and send a one-time invitation token. Username and email must be unique; the plaintext token is emitted only through notification delivery.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                display_name:
+                  type: string
+                email:
+                  type: string
+                username:
+                  type: string
+              required:
+                - email
+                - username
+                - display_name
+              type: object
+            example:
+              display_name: Alice Example
+              email: alice@example.test
+              username: alice
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+              example:
+                id: 01J8Z3USER000000000000001
+                status: invited
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: request body must be valid JSON
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "422":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 422
+                detail: username or email already exists
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /invitations/{userID}:
+    delete:
+      tags:
+        - Invitations
+      summary: Cancel an invitation
+      description: Use when an invitation must be withdrawn before acceptance. The target must remain invited; cancellation deletes the user and cascaded records.
+      parameters:
+        - name: userID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "422":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 422
+                detail: account is not invited
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /invitations/{userID}/resend:
+    post:
+      tags:
+        - Invitations
+      summary: Resend an invitation
+      description: Use when an invited user did not receive the original message. The previous invitation token is invalidated and a fresh seven-day token is emitted through notifications.
+      parameters:
+        - name: userID
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "422":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 422
+                detail: account is not invited
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+components:
+  schemas:
+    ProblemDetails:
+      type: object
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+      required:
+        - type
+        - title
+        - status
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: EdDSA JWT

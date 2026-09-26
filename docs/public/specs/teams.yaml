@@ -1,0 +1,490 @@
+openapi: 3.1.0
+info:
+  title: Teamusers API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Nekostick /iam Strip forwarding
+tags:
+  - Teams
+paths:
+  /teams/:
+    get:
+      tags:
+        - Teams
+      summary: List teams
+      description: Use from an administrator console to page through teams. Requires iam:teams:any.
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+              example:
+                items:
+                  - created_at: "2026-01-01T00:00:00Z"
+                    id: 01J8Z3TEAM000000000000001
+                    name: Acme
+                    slug: acme
+                    status: active
+                next_cursor: ""
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: limit must be a positive integer
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+    post:
+      tags:
+        - Teams
+      summary: Create a team
+      description: Use when provisioning a new tenant or workspace. Slug and name are required; status defaults to active.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                status:
+                  type: string
+              required:
+                - slug
+                - name
+                - status
+              type: object
+            example:
+              name: Acme
+              slug: acme
+              status: active
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                properties:
+                  created_at:
+                    format: date-time
+                    type: string
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  slug:
+                    type: string
+                  status:
+                    type: string
+                required:
+                  - id
+                  - slug
+                  - name
+                  - status
+                  - created_at
+                type: object
+              example:
+                created_at: "2026-01-01T00:00:00Z"
+                id: 01J8Z3TEAM000000000000001
+                name: Acme
+                slug: acme
+                status: active
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: request body must be valid JSON
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "409":
+          description: Conflict
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Conflict
+                status: 409
+                detail: the resource already exists
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+  /teams/{id}:
+    delete:
+      tags:
+        - Teams
+      summary: Delete a team
+      description: Use to remove a team and its dependent administrative records. The operation invalidates affected permission versions and is audited.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+    get:
+      tags:
+        - Teams
+      summary: Get a team
+      description: Use to retrieve one team by ULID for an administrative view or downstream provisioning step.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                properties:
+                  created_at:
+                    format: date-time
+                    type: string
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  slug:
+                    type: string
+                  status:
+                    type: string
+                required:
+                  - id
+                  - slug
+                  - name
+                  - status
+                  - created_at
+                type: object
+              example:
+                created_at: "2026-01-01T00:00:00Z"
+                id: 01J8Z3TEAM000000000000001
+                name: Acme
+                slug: acme
+                status: active
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+    patch:
+      tags:
+        - Teams
+      summary: Update a team
+      description: Use to rename or change a team's slug/status. At least one field is required; status must be active or disabled.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                name:
+                  anyOf:
+                    - type: string
+                    - type: "null"
+                slug:
+                  anyOf:
+                    - type: string
+                    - type: "null"
+                status:
+                  anyOf:
+                    - type: string
+                    - type: "null"
+              required:
+                - slug
+                - name
+                - status
+              type: object
+            example:
+              name: Acme Europe
+              status: active
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                properties:
+                  created_at:
+                    format: date-time
+                    type: string
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  slug:
+                    type: string
+                  status:
+                    type: string
+                required:
+                  - id
+                  - slug
+                  - name
+                  - status
+                  - created_at
+                type: object
+              example:
+                created_at: "2026-01-01T00:00:00Z"
+                id: 01J8Z3TEAM000000000000001
+                name: Acme Europe
+                slug: acme
+                status: active
+        "400":
+          description: Invalid Request
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Invalid Request
+                status: 400
+                detail: request body must be valid JSON
+        "401":
+          description: Unauthorized
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Unauthorized
+                status: 401
+                detail: authentication failed
+        "403":
+          description: Forbidden
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Forbidden
+                status: 403
+                detail: insufficient_permissions
+        "404":
+          description: Not Found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Not Found
+                status: 404
+                detail: the requested resource was not found
+        "500":
+          description: Internal Server Error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: about:blank
+                title: Internal Server Error
+                status: 500
+                detail: authentication service unavailable
+      security:
+        - bearerAuth: []
+components:
+  schemas:
+    ProblemDetails:
+      type: object
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+      required:
+        - type
+        - title
+        - status
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: EdDSA JWT
