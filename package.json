@@ -1,16 +1,13 @@
 {
-  "name": "nsc-teamusers",
+  "name": "teamusers",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Standalone IAM microservice - docs tooling",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "license": "AGPL-3.0-only",
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
