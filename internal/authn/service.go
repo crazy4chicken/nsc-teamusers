@@ -1056,8 +1056,13 @@ func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Req
 func (s *Service) signAccessToken(user store.User, team, kind string) (string, error) {
 	now := s.now()
 	token := jwt.New()
+	audience := strings.TrimSpace(s.cfg.TokenAudience)
+	if audience == "" {
+		audience = issuer
+	}
 	claims := map[string]interface{}{
 		"iss":      issuer,
+		"aud":      audience,
 		"sub":      user.ID,
 		"kind":     kind,
 		"perm_ver": user.PermVer,
@@ -1083,7 +1088,6 @@ func (s *Service) signAccessToken(user store.User, team, kind string) (string, e
 	}
 	return string(signed), nil
 }
-
 func (s *Service) parseAccessToken(raw string) (tokenClaims, error) {
 	set := s.publicSet()
 	token, err := jwt.Parse([]byte(raw), jwt.WithKeySet(set), jwt.WithValidate(true))
@@ -1092,6 +1096,14 @@ func (s *Service) parseAccessToken(raw string) (tokenClaims, error) {
 	}
 	if token.Issuer() != issuer || token.Subject() == "" || token.Expiration().IsZero() || !token.Expiration().After(s.now()) {
 		return tokenClaims{}, errors.New("invalid access token claims")
+	}
+	audience := strings.TrimSpace(s.cfg.TokenAudience)
+	if audience == "" {
+		audience = issuer
+	}
+	audiences := token.Audience()
+	if len(audiences) != 1 || audiences[0] != audience {
+		return tokenClaims{}, errors.New("invalid access token audience")
 	}
 	team := ""
 	if value, present := token.Get("team"); present {

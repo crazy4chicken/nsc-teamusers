@@ -12,11 +12,12 @@ import (
 
 // Claims contains the identity claims carried by a verified access token.
 type Claims struct {
-	Subject string
-	Team    string
-	Kind    string
-	PermVer int64
-	Expiry  time.Time
+	Subject  string
+	Team     string
+	Kind     string
+	PermVer  int64
+	Audience string
+	Expiry   time.Time
 }
 
 // Subject is the subject portion of an authorization condition context.

@@ -17,6 +17,7 @@ import (
 )
 
 const defaultIssuer = "teamusers"
+const defaultAudience = "teamusers"
 
 // Option configures any SDK client. Options that do not apply to a specific
 // constructor are ignored by that constructor.
@@ -60,6 +61,21 @@ func WithIssuer(issuer string) Option {
 // WithExpectedIssuer is an alias for WithIssuer.
 func WithExpectedIssuer(issuer string) Option {
 	return WithIssuer(issuer)
+}
+
+// WithAudience overrides the expected JWT audience. The service default is
+// "teamusers".
+func WithAudience(audience string) Option {
+	return func(target any) {
+		if value, ok := target.(*Verifier); ok {
+			value.audience = strings.TrimSpace(audience)
+		}
+	}
+}
+
+// WithExpectedAudience is an alias for WithAudience.
+func WithExpectedAudience(audience string) Option {
+	return WithAudience(audience)
 }
 
 // WithJWKSMinRefreshInterval controls the minimum background refresh interval
@@ -125,6 +141,7 @@ type Verifier struct {
 	issuerBaseURL  string
 	jwksURL        string
 	issuer         string
+	audience       string
 	httpClient     *http.Client
 	jwksMinRefresh time.Duration
 	cache          *jwk.Cache
@@ -144,6 +161,7 @@ func NewVerifier(issuerBaseURL string, opts ...VerifierOption) *Verifier {
 		issuerBaseURL:  base,
 		jwksURL:        jwksURL,
 		issuer:         defaultIssuer,
+		audience:       defaultAudience,
 		httpClient:     http.DefaultClient,
 		jwksMinRefresh: time.Hour,
 		cacheContext:   cacheContext,
@@ -157,6 +175,9 @@ func NewVerifier(issuerBaseURL string, opts ...VerifierOption) *Verifier {
 	}
 	if verifier.issuer == "" {
 		verifier.issuer = defaultIssuer
+	}
+	if verifier.audience == "" {
+		verifier.audience = defaultAudience
 	}
 	if err == nil {
 		verifier.cache = jwk.NewCache(cacheContext)
@@ -186,7 +207,7 @@ func (v *Verifier) Close() error {
 }
 
 // Verify validates an access token, including EdDSA signature, issuer,
-// expiration, subject, kind, and permission version claims.
+// audience, expiration, subject, kind, and permission version claims.
 func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 	if v == nil {
 		return Claims{}, errors.New("nil verifier")
@@ -225,6 +246,10 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 	if token.Issuer() != v.issuer {
 		return Claims{}, errors.New("invalid access token issuer")
 	}
+	audiences := token.Audience()
+	if len(audiences) != 1 || audiences[0] != v.audience {
+		return Claims{}, errors.New("invalid access token audience")
+	}
 	expiry := token.Expiration()
 	if expiry.IsZero() || !expiry.After(time.Now()) {
 		return Claims{}, errors.New("access token is expired")
@@ -249,7 +274,7 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 			return Claims{}, errors.New("invalid access token team")
 		}
 	}
-	return Claims{Subject: subject, Team: team, Kind: kind, PermVer: permVer, Expiry: expiry}, nil
+	return Claims{Subject: subject, Team: team, Kind: kind, PermVer: permVer, Audience: audiences[0], Expiry: expiry}, nil
 }
 
 func normalizeIssuerURL(raw string) (string, string, error) {

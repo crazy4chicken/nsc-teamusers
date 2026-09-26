@@ -36,6 +36,18 @@ func TestParseAccessTokenClaims(t *testing.T) {
 				"iat": now, "exp": now.Add(time.Minute),
 			})
 		}, wantErr: true},
+		{name: "wrong audience", mutate: func(raw string) string {
+			return signJWTClaims(t, service, map[string]any{
+				"iss": "teamusers", "aud": "other-service", "sub": "user-1", "kind": "user", "perm_ver": int64(1),
+				"iat": now, "exp": now.Add(time.Minute),
+			})
+		}, wantErr: true},
+		{name: "missing audience", mutate: func(raw string) string {
+			return signJWTClaims(t, service, map[string]any{
+				"iss": "teamusers", "sub": "user-1", "kind": "user", "perm_ver": int64(1),
+				"iat": now, "exp": now.Add(time.Minute),
+			})
+		}, wantErr: true},
 		{name: "wrong algorithm", mutate: func(raw string) string {
 			return replaceJWTHeaderAlgorithm(t, raw, "RS256")
 		}, wantErr: true},
@@ -115,6 +127,49 @@ func TestMFAAndAccessTokenPurposesDoNotCrossAuthenticate(t *testing.T) {
 	}
 	if _, err := service.parseMFAToken(accessToken); err == nil {
 		t.Fatal("access token was accepted as an MFA token")
+	}
+}
+
+func TestParseMFATokenAudience(t *testing.T) {
+	now := time.Now().UTC()
+	service := newJWTTestService(t, now)
+	valid, err := service.signMFAToken("mfa-user")
+	if err != nil {
+		t.Fatalf("sign valid MFA token: %v", err)
+	}
+	if userID, err := service.parseMFAToken(valid); err != nil || userID != "mfa-user" {
+		t.Fatalf("parse valid MFA token = %q, %v", userID, err)
+	}
+	key := service.keys[service.activeKid]
+	for _, tt := range []struct {
+		name string
+		aud  any
+	}{
+		{name: "wrong audience", aud: "other-service"},
+		{name: "missing audience", aud: nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			claims := map[string]any{
+				"iss": issuer, "sub": "mfa-user", "purpose": "mfa",
+				"iat": now, "exp": now.Add(time.Minute),
+			}
+			if tt.aud != nil {
+				claims["aud"] = tt.aud
+			}
+			token := jwt.New()
+			for name, value := range claims {
+				if err := token.Set(name, value); err != nil {
+					t.Fatalf("set MFA claim %q: %v", name, err)
+				}
+			}
+			raw, err := jwt.Sign(token, jwt.WithKey(jwa.EdDSA, key.private))
+			if err != nil {
+				t.Fatalf("sign MFA token: %v", err)
+			}
+			if _, err := service.parseMFAToken(string(raw)); err == nil {
+				t.Fatalf("parseMFAToken accepted %s token", tt.name)
+			}
+		})
 	}
 }
 

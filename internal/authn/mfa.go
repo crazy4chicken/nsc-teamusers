@@ -97,8 +97,13 @@ func (s *Service) loginMFA(w http.ResponseWriter, r *http.Request) {
 func (s *Service) signMFAToken(userID string) (string, error) {
 	now := s.now()
 	token := jwt.New()
+	audience := strings.TrimSpace(s.cfg.TokenAudience)
+	if audience == "" {
+		audience = issuer
+	}
 	claims := map[string]any{
 		"iss":     issuer,
+		"aud":     audience,
 		"sub":     userID,
 		"purpose": "mfa",
 		"iat":     now,
@@ -120,7 +125,6 @@ func (s *Service) signMFAToken(userID string) (string, error) {
 	}
 	return string(signed), nil
 }
-
 func (s *Service) parseMFAToken(raw string) (string, error) {
 	if raw == "" {
 		return "", errors.New("missing MFA token")
@@ -131,6 +135,14 @@ func (s *Service) parseMFAToken(raw string) (string, error) {
 	}
 	if token.Issuer() != issuer || token.Subject() == "" || token.Expiration().IsZero() || !token.Expiration().After(s.now()) {
 		return "", errors.New("invalid MFA token claims")
+	}
+	audience := strings.TrimSpace(s.cfg.TokenAudience)
+	if audience == "" {
+		audience = issuer
+	}
+	audiences := token.Audience()
+	if len(audiences) != 1 || audiences[0] != audience {
+		return "", errors.New("invalid MFA token audience")
 	}
 	purpose, ok := stringClaim(token, "purpose")
 	if !ok || purpose != "mfa" {

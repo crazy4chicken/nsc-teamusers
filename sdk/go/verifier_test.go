@@ -51,14 +51,14 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 
 	now := time.Now().UTC()
 	valid := signSDKTestToken(t, privateKey, map[string]any{
-		"iss": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+		"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
 		"iat": now, "exp": now.Add(5 * time.Minute),
 	})
 	claims, err := verifier.Verify(t.Context(), valid)
 	if err != nil {
 		t.Fatalf("verify valid SDK token: %v", err)
 	}
-	if claims.Subject != "sdk-user" || claims.Kind != "user" || claims.PermVer != 2 {
+	if claims.Subject != "sdk-user" || claims.Kind != "user" || claims.PermVer != 2 || claims.Audience != "teamusers" {
 		t.Fatalf("verified SDK claims = %+v", claims)
 	}
 
@@ -70,6 +70,20 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 			name: "wrong issuer",
 			token: signSDKTestToken(t, privateKey, map[string]any{
 				"iss": "other", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+				"iat": now, "exp": now.Add(5 * time.Minute),
+			}),
+		},
+		{
+			name: "wrong audience",
+			token: signSDKTestToken(t, privateKey, map[string]any{
+				"iss": "teamusers", "aud": "other", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+				"iat": now, "exp": now.Add(5 * time.Minute),
+			}),
+		},
+		{
+			name: "missing audience",
+			token: signSDKTestToken(t, privateKey, map[string]any{
+				"iss": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
 				"iat": now, "exp": now.Add(5 * time.Minute),
 			}),
 		},
