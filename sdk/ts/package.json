@@ -20,6 +20,14 @@
   "dependencies": {
     "jose": "^6.2.12"
   },
+  "peerDependencies": {
+    "nats": "^2.29.0"
+  },
+  "peerDependenciesMeta": {
+    "nats": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^26.6.2",
     "typescript": "^7.0.2"

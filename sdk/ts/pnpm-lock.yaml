@@ -11,6 +11,9 @@ importers:
       jose:
         specifier: ^6.2.12
         version: 6.2.12
+      nats:
+        specifier: ^2.29.0
+        version: 2.29.3
     devDependencies:
       '@types/node':
         specifier: ^26.6.2
@@ -147,6 +150,18 @@ packages:
   jose@6.2.12:
     resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
 
+  nats@2.29.3:
+    resolution: {integrity: sha512-tOQCRCwC74DgBTk4pWZ9V45sk4d7peoE2njVprMRCBXrhJ5q5cYM7i6W+Uvw2qUrcfOSnuisrX7bEx3b3Wx4QA==}
+    engines: {node: '>= 14.0.0'}
+    deprecated: Package moved. Use @nats-io/transport-node from https://github.com/nats-io/nats.js
+
+  nkeys.js@1.1.0:
+    resolution: {integrity: sha512-tB/a0shZL5UZWSwsoeyqfTszONTt4k2YS0tuQioMOD180+MbombYVgzDUYHlx+gejYK6rgf08n/2Df99WY0Sxg==}
+    engines: {node: '>=10.0.0'}
+
+  tweetnacl@1.0.3:
+    resolution: {integrity: sha512-6rt+RN7aOi1nGMyC4Xa5DdYiukl2UWCbcJft7YhxReBGQD7OAM8Pbxw6YMo4r2diNEA8FEmu32YOn9rhaiE5yw==}
+
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
     engines: {node: '>=16.20.0'}
@@ -222,6 +237,16 @@ snapshots:
     optional: true
 
   jose@6.2.12: {}
+
+  nats@2.29.3:
+    dependencies:
+      nkeys.js: 1.1.0
+
+  nkeys.js@1.1.0:
+    dependencies:
+      tweetnacl: 1.0.3
+
+  tweetnacl@1.0.3: {}
 
   typescript@7.0.2:
     optionalDependencies:
