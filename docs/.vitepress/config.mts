@@ -1,9 +1,11 @@
 import { defineConfig } from 'vitepress'
 
+const base = '/nsc-teamusers/'
+
 export default defineConfig({
   title: 'Teamusers',
   description: 'Standalone IAM microservice',
-  base: '/nsc-teamusers/',
+  base,
   cleanUrls: true,
   lastUpdated: true,
   themeConfig: {
@@ -51,7 +53,7 @@ export default defineConfig({
                 { text: 'Health', link: '/api/reference/health' }
               ]
             },
-            { text: 'Download OpenAPI 3.1 specification', link: '/openapi.yaml' }
+            { text: 'Download OpenAPI 3.1 specification', link: `${base}openapi.yaml` }
           ]
         }
       ]
