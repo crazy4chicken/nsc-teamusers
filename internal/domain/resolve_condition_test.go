@@ -35,32 +35,18 @@ func TestResolvePrecedence(t *testing.T) {
 		{Resource: "orders", Action: "delete", Scope: "own"},
 	}
 
-	withoutDeny := Resolve(grants, requests)
-	if !withoutDeny[0].Allowed || withoutDeny[0].Grant.Scope != "own" {
-		t.Fatalf("own request = %#v, want own allow", withoutDeny[0])
+	resolved := Resolve(grants, requests)
+	if resolved[0].Allowed || !resolved[0].Denied || resolved[0].Grant.Scope != "*" {
+		t.Fatalf("explicit deny should beat narrower allow = %#v", resolved[0])
 	}
-	if !withoutDeny[1].Allowed || withoutDeny[1].Grant.Scope != "team" || withoutDeny[1].Grant.Deny {
-		t.Fatalf("team request without deny = %#v, want team allow", withoutDeny[1])
+	if resolved[1].Allowed || !resolved[1].Denied || resolved[1].Grant.Scope != "team" {
+		t.Fatalf("explicit team deny = %#v, want denied", resolved[1])
 	}
-	if !withoutDeny[2].Allowed || withoutDeny[2].Grant.Scope != "any" {
-		t.Fatalf("any request = %#v, want any allow", withoutDeny[2])
+	if resolved[2].Allowed || !resolved[2].Denied || resolved[2].Grant.Scope != "*" {
+		t.Fatalf("wildcard deny should match any scope = %#v", resolved[2])
 	}
-	if !withoutDeny[3].Allowed || withoutDeny[3].Grant.Action != "delete" {
-		t.Fatalf("delete request = %#v, want exact delete allow", withoutDeny[3])
-	}
-
-	withDeny := Resolve(grants, requests, true)
-	if withDeny[0].Allowed || !withDeny[0].Denied || withDeny[0].Grant.Scope != "*" {
-		t.Fatalf("explicit deny should beat narrower allow = %#v", withDeny[0])
-	}
-	if withDeny[1].Allowed || !withDeny[1].Denied || withDeny[1].Grant.Scope != "team" {
-		t.Fatalf("explicit team deny = %#v, want denied", withDeny[1])
-	}
-	if withDeny[2].Allowed || !withDeny[2].Denied || withDeny[2].Grant.Scope != "*" {
-		t.Fatalf("wildcard deny should match any scope = %#v", withDeny[2])
-	}
-	if !withDeny[3].Allowed || withDeny[3].Grant.Action != "delete" {
-		t.Fatalf("unrelated deny should not affect delete = %#v", withDeny[3])
+	if !resolved[3].Allowed || resolved[3].Grant.Action != "delete" {
+		t.Fatalf("unrelated deny should not affect delete = %#v", resolved[3])
 	}
 }
 

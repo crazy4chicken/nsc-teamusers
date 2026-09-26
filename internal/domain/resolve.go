@@ -34,11 +34,10 @@ type Resolution struct {
 // GrantSet is a collection of grants that can resolve requested permissions.
 type GrantSet []Permission
 
-// Resolve resolves requests against grants. Deny rows are ignored unless the
-// optional denyEnabled argument is present and true. Results retain request
-// order and contain one entry per request.
-func Resolve(grants []Permission, requests []Permission, denyEnabled ...bool) []Resolution {
-	enableDeny := len(denyEnabled) > 0 && denyEnabled[0]
+// Resolve resolves requests against grants. Explicit deny grants always
+// participate in resolution and take precedence over matching allows. Results
+// retain request order and contain one entry per request.
+func Resolve(grants []Permission, requests []Permission) []Resolution {
 	resolutions := make([]Resolution, len(requests))
 	for i, request := range requests {
 		resolution := Resolution{Request: request}
@@ -49,9 +48,6 @@ func Resolve(grants []Permission, requests []Permission, denyEnabled ...bool) []
 		var best Permission
 		for _, grant := range grants {
 			if grant.Validate() != nil {
-				continue
-			}
-			if grant.Deny && !enableDeny {
 				continue
 			}
 			if request.Deny && grant.Deny != request.Deny {
@@ -76,14 +72,8 @@ func Resolve(grants []Permission, requests []Permission, denyEnabled ...bool) []
 }
 
 // Resolve resolves requests using this grant set.
-func (g GrantSet) Resolve(requests []Permission, denyEnabled ...bool) []Resolution {
-	return Resolve([]Permission(g), requests, denyEnabled...)
-}
-
-// ResolveWithDeny is the explicit form of Resolve for callers that want the
-// v1.1 deny switch to be visible at the call site.
-func ResolveWithDeny(grants []Permission, requests []Permission, denyEnabled bool) []Resolution {
-	return Resolve(grants, requests, denyEnabled)
+func (g GrantSet) Resolve(requests []Permission) []Resolution {
+	return Resolve([]Permission(g), requests)
 }
 
 func matchPermissionSegments(grant, request Permission) bool {

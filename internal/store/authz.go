@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // ListDirectRoleBindings returns active direct user bindings that are either
@@ -128,6 +129,61 @@ func ListUnconditionalRolePermissions(ctx context.Context, q Q, userID string, n
 	}
 	return permissions, nil
 
+}
+
+// ConditionalRolePermission is a permission key carried by a non-empty role
+// binding condition. A nil TeamID denotes a platform binding.
+type ConditionalRolePermission struct {
+	TeamID    *string
+	Key       string
+	Condition string
+}
+
+// ListConditionalRolePermissions returns active conditional grants inherited
+// by the user's direct and group bindings. The caller evaluates each condition
+// against the request-specific authorization context.
+func ListConditionalRolePermissions(ctx context.Context, q Q, userID string, now time.Time) ([]ConditionalRolePermission, error) {
+	rows, err := q.Query(ctx, `
+		SELECT DISTINCT b.team_id, rp.permission_key, b.condition
+		FROM role_permissions rp
+		JOIN role_bindings b ON b.role_id = rp.role_id
+		WHERE b.condition IS NOT NULL
+		  AND btrim(b.condition) <> ''
+		  AND (b.expires_at IS NULL OR b.expires_at > $2)
+		  AND (
+			(b.subject_kind = 'user' AND b.subject_id = $1 AND (
+				b.team_id IS NULL OR EXISTS (
+					SELECT 1 FROM memberships m
+					WHERE m.user_id = $1 AND m.team_id = b.team_id
+					  AND (m.expires_at IS NULL OR m.expires_at > $2)
+				)
+			))
+			OR (b.subject_kind = 'group' AND EXISTS (
+				SELECT 1 FROM memberships m
+				WHERE m.user_id = $1 AND m.group_id = b.subject_id
+				  AND (m.expires_at IS NULL OR m.expires_at > $2)
+				  AND (b.team_id IS NULL OR b.team_id = m.team_id)
+			))
+		  )
+		ORDER BY b.team_id NULLS FIRST, rp.permission_key, b.condition`, userID, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	grants := make([]ConditionalRolePermission, 0)
+	for rows.Next() {
+		var grant ConditionalRolePermission
+		var teamID pgtype.Text
+		if err := rows.Scan(&teamID, &grant.Key, &grant.Condition); err != nil {
+			return nil, err
+		}
+		grant.TeamID = textPointer(teamID)
+		grants = append(grants, grant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return grants, nil
 }
 
 // TeamRolePermissions groups unconditional role permissions by the team scope

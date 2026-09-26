@@ -9,9 +9,9 @@ const denyPrefix = "!"
 
 // Permission is a resource/action/scope authorization key.
 //
-// A deny permission uses Deny=true and is serialized with a leading "!". The
-// deny bit is parsed and retained now so the v1.1 evaluation switch can be
-// enabled without changing the stored key format.
+// A deny permission uses Deny=true and is serialized with a leading "!".
+// Deny permissions participate in resolution with the same segment grammar as
+// allow permissions.
 type Permission struct {
 	Resource string
 	Action   string

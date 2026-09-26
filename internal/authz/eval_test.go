@@ -68,7 +68,7 @@ func TestEvaluateSet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := evaluate(tt.ctx, tt.set, requested, tt.values, false)
+			got := evaluate(tt.ctx, tt.set, requested, tt.values)
 			if got.Allow != tt.wantAllow || got.Reason != tt.wantReason {
 				t.Fatalf("evaluate() = %#v, want allow=%v reason=%q", got, tt.wantAllow, tt.wantReason)
 			}

@@ -14,7 +14,7 @@ var DocOperations = []apidocs.Operation{
 		Path:        "/authz/check",
 		Tag:         "Authorization",
 		Summary:     "Evaluate a permission",
-		Description: "Use from a trusted application service to make a single authorization decision for a user and resource context. The caller must use a service-kind bearer token; condition failures fail closed.",
+		Description: "Use from a trusted application service to make a single authorization decision for a user and resource context. The caller must use a service-kind bearer token; deny keys prefixed with ! take precedence over matching allows, and condition failures fail closed.",
 		Security:    "service",
 		Request:     checkRequest{},
 		RequestExample: map[string]any{

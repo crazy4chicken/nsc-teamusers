@@ -41,19 +41,17 @@ func (g Grant) ConditionSource() string {
 
 // Resolver expands role bindings into effective grants.
 type Resolver struct {
-	Q           store.Q
-	DenyEnabled bool
-	Logger      *slog.Logger
-	Now         func() time.Time
+	Q      store.Q
+	Logger *slog.Logger
+	Now    func() time.Time
 }
 
-// NewResolver constructs a resolver with deny rows disabled, as required for
-// the v1.0 authorization surface.
+// NewResolver constructs a resolver with deny rows enabled.
 func NewResolver(q store.Q) *Resolver {
 	return &Resolver{Q: q, Logger: slog.Default(), Now: time.Now}
 }
 
-// Resolve resolves one user's effective set using the default deny switch.
+// Resolve resolves one user's effective set, including deny rows.
 func Resolve(ctx context.Context, q store.Q, userID string) (*Set, error) {
 	return NewResolver(q).Resolve(ctx, userID)
 }
@@ -123,9 +121,6 @@ func (r *Resolver) Resolve(ctx context.Context, userID string) (*Set, error) {
 			if err != nil {
 				logger.Warn("skipping role permission with invalid key",
 					"binding_id", binding.ID, "role_id", binding.RoleID, "permission", key, "error", err)
-				continue
-			}
-			if permission.Deny && !r.DenyEnabled {
 				continue
 			}
 			set.Grants = append(set.Grants, Grant{

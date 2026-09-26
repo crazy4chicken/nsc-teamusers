@@ -118,7 +118,7 @@ func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 		},
 		Request: domain.Request{Time: now},
 	}
-	result := evaluate(r.Context(), set, requested, values, h.resolver.DenyEnabled)
+	result := evaluate(r.Context(), set, requested, values)
 	if errors.Is(resolveErr, ErrUserDisabled) {
 		result = evaluationResult{Matched: []string{}, Reason: "user disabled"}
 	}
@@ -162,7 +162,7 @@ type evaluationResult struct {
 // evaluate is the pure in-memory portion shared by the remote check and unit
 // tests. Condition errors are treated as false so one broken grant cannot
 // widen access.
-func evaluate(ctx context.Context, set *Set, requested domain.Permission, values domain.Context, denyEnabled bool) evaluationResult {
+func evaluate(ctx context.Context, set *Set, requested domain.Permission, values domain.Context) evaluationResult {
 	result := evaluationResult{Matched: make([]string, 0), Reason: "no matching grant"}
 	if set == nil {
 		return result
@@ -171,15 +171,11 @@ func evaluate(ctx context.Context, set *Set, requested domain.Permission, values
 	matchedPermissions := make([]domain.Permission, 0, len(set.Grants))
 	seenKeys := make(map[string]struct{}, len(set.Grants))
 	for _, grant := range set.Grants {
-		if grant.Permission.Deny && !denyEnabled {
-			continue
-		}
 		matches := domain.Match(grant.Permission, requested)
-		if !matches && denyEnabled && grant.Permission.Deny && !requested.Deny {
-			// domain.Match intentionally requires equal deny bits. For the
-			// opt-in v1.1 deny path, domain.Resolve supplies the precedence
-			// hook that lets a deny row compete with an allow request.
-			resolution := domain.Resolve([]domain.Permission{grant.Permission}, []domain.Permission{requested}, true)
+		if !matches && grant.Permission.Deny && !requested.Deny {
+			// domain.Match keeps deny and allow keys distinct. A deny row is
+			// nevertheless a candidate for an allow request during resolution.
+			resolution := domain.Resolve([]domain.Permission{grant.Permission}, []domain.Permission{requested})
 			matches = len(resolution) == 1 && resolution[0].Matched
 		}
 		if !matches {
@@ -205,12 +201,10 @@ func evaluate(ctx context.Context, set *Set, requested domain.Permission, values
 		}
 		return result
 	}
-	if denyEnabled {
-		resolution := domain.Resolve(matchedPermissions, []domain.Permission{requested}, true)
-		if len(resolution) == 1 && resolution[0].Matched && !resolution[0].Allowed {
-			result.Reason = "permission denied"
-			return result
-		}
+	resolution := domain.Resolve(matchedPermissions, []domain.Permission{requested})
+	if len(resolution) == 1 && resolution[0].Matched && !resolution[0].Allowed {
+		result.Reason = "permission denied"
+		return result
 	}
 	result.Allow = true
 	result.Reason = "permission granted"
