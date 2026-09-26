@@ -15,7 +15,7 @@ The per-area API reference pages are native VitePress pages derived at build tim
 
 The local base URL is `http://localhost:8080`. The service listens on the configured address and does not terminate TLS; deploy TLS at the reverse-proxy boundary. When Nekostick publishes teamusers with Strip mode, use `https://<host>/iam` as the external base URL. Nekostick removes `/iam` before forwarding, so requests sent to `https://<host>/iam/auth/login` arrive at teamusers as `/auth/login`.
 
-Download the machine-readable contract from [`/openapi.yaml`](/openapi.yaml), or fetch it from the published documentation host:
+Download the machine-readable contract from [`openapi.yaml`](../openapi.yaml), or fetch it from the published documentation host:
 
 ```sh
 curl -fsS https://<docs-host>/openapi.yaml -o openapi.yaml
@@ -31,7 +31,10 @@ curl -i http://localhost:8080/readyz
 
 ## Authentication classes
 
-Access tokens are EdDSA JWTs issued by `teamusers`. They include `iss`, `sub`, `kind` (`user` or `service`), `perm_ver`, `iat`, `exp`, and an optional `team`. The access lifetime is ten minutes. Refresh tokens are opaque, rotated, and stored only as digests.
+Access tokens are EdDSA JWTs issued by `teamusers`. They include `iss`, `aud`,
+`sub`, `kind` (`user` or `service`), `perm_ver`, `iat`, `exp`, and an optional
+`team`. The access lifetime is ten minutes. Refresh tokens are opaque, rotated,
+and stored only as digests.
 
 | Caller | Header | Typical endpoints |
 | --- | --- | --- |
@@ -41,6 +44,13 @@ Access tokens are EdDSA JWTs issued by `teamusers`. They include `iss`, `sub`, `
 | Admin subject | User bearer plus `iam:<area>:any` (or an allowed team grant) | `/users*`, `/teams*`, `/groups*`, `/roles*`, `/permissions*`, `/bindings*`, `/audit`, `/invitations*` |
 
 A token becomes unusable when its user is inactive or its `perm_ver` no longer matches the database. Service tokens are not accepted by `/me` or the admin plane.
+
+Administrator-provisioned password credentials require a first-login change.
+`POST /auth/login` returns `403 password_change_required` with a ten-minute
+`change_token` instead of an access/refresh pair. Send it as the bearer token
+to `POST /me/password` with the current and new passwords; only that endpoint
+accepts this token. A successful change clears the requirement and revokes all
+refresh sessions, so the user must sign in again.
 
 ## JSON and problem+json
 
@@ -57,6 +67,21 @@ Successful JSON responses use `Content-Type: application/json`. Failures use RFC
 ```
 
 `type`, `title`, and `status` are always present. `detail` contains a stable error code where the handler defines one (`invalid_token`, `weak_password`, `account_locked`, `mfa_not_enrolled`, `insufficient_permissions`, and so on). `instance` is the request ID when middleware created one. Authentication and database failures intentionally use generic details. See [security](../guide/security.md) and the [permissions guide](../guide/permissions.md) for threat-model and authorization guidance.
+
+## Idempotency for POST requests
+
+All `POST` endpoints honor the optional `Idempotency-Key` header. The service
+fingerprints the raw request body and retains the completed status and response
+for 24 hours. A retry with the same key and body returns the identical status
+and body with `Idempotency-Replayed: true`; `GET` and other non-`POST` requests
+ignore the header.
+
+When a key is already associated with a different body, the service returns
+`422` with detail `idempotency_conflict`. A matching request that is still
+executing returns `409` with detail `idempotency_in_progress`. `429` and `5xx`
+responses, and responses larger than 64 KiB, are not retained. The key scope is
+the SHA-256 digest of the raw `Authorization` header when present, otherwise
+the resolved client IP.
 
 ## Cursor pagination
 

@@ -19,6 +19,7 @@ default**. The supported environment variables are:
 | `TEAMUSERS_CONNECTION_STRING` | empty | PostgreSQL DSN; required by `run` and `doctor`. |
 | `TEAMUSERS_LISTEN_ADDRESS` | `127.0.0.1` | HTTP bind address. |
 | `TEAMUSERS_LISTEN_PORT` | `0` | HTTP port; `0` asks the OS for an ephemeral port. |
+| `TEAMUSERS_TRUSTED_PROXIES` | empty | Comma-separated CIDRs or IP addresses whose forwarded client addresses are trusted. |
 | `TEAMUSERS_NODE_ID` | empty | Optional node label for deployment metadata. |
 | `TEAMUSERS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
 | `TEAMUSERS_KEY_DIR` | `./data/keys` | Ed25519 private/public keys and the `ACTIVE` marker. |
@@ -197,12 +198,20 @@ The following is the contract consumers must implement:
 
 Password changes replace the Argon2id password credential and revoke every
 refresh session for that user, including the session used by the password-change
-request. The response tells the caller to sign in again; an already-issued access
-JWT remains subject to the normal ten-minute and active-user checks. Users can
-inspect active sessions with `GET /me/sessions` and revoke one with
-`DELETE /me/sessions/{id}`. Administrators can list or revoke sessions through
-the corresponding `/users/{id}/sessions` endpoints. Session IDs are opaque
-SHA-256 refresh-token digests and never reveal the plaintext token.
+request. Administrator-provisioned password credentials are marked
+`must_change`; the first valid password login returns `403 password_change_required`
+with a ten-minute `password_change` token rather than tokens for API access. The
+client must send that token as the bearer on `POST /me/password` together with
+the current and replacement passwords. Only that endpoint accepts the token.
+Registration, invitation acceptance, and password-reset completion do not set
+`must_change`. A successful change clears
+the flag, revokes all refresh sessions, and requires a fresh login. An
+already-issued access JWT remains subject to the normal ten-minute and
+active-user checks. Users can inspect active sessions with `GET /me/sessions`
+and revoke one with `DELETE /me/sessions/{id}`. Administrators can list or
+revoke sessions through the corresponding `/users/{id}/sessions` endpoints.
+Session IDs are opaque SHA-256 refresh-token digests and never reveal the
+plaintext token.
 
 - **`perm_ver`:** mutations that affect a user's effective permissions bump the
   user's monotonic `perm_ver`; the value is copied into new access JWTs and the
@@ -239,6 +248,21 @@ increments `failed_logins`; reaching `TEAMUSERS_LOCKOUT_THRESHOLD` sets
 account_locked` before password verification. A successful password-only login
 or MFA completion resets both fields. Disabling a user through the admin API
 also resets the fields. After the duration elapses, the user can try again.
+
+## Idempotency keys
+
+Every `POST` accepts an optional `Idempotency-Key` header. When supplied, the
+service fingerprints the raw request body and keeps the completed status and
+response for 24 hours. A retry with the same key and body replays the original
+response and sets `Idempotency-Replayed: true`; reusing a key with a different
+body returns `422` with detail `idempotency_conflict`. A request whose matching
+key is still running returns `409` with detail `idempotency_in_progress`.
+
+The key scope is the SHA-256 digest of the raw `Authorization` header when one
+is present, otherwise the resolved client IP. Claims are cleaned up
+opportunistically when keyed requests arrive. Responses larger than 64 KiB,
+`429` responses, and `5xx` responses are not retained, so clients may retry
+those requests with the same key.
 
 ## Bulk admin operations
 

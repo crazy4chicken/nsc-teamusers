@@ -84,7 +84,7 @@ var DocOperations = []apidocs.Operation{
 		Path:        "/auth/login",
 		Tag:         "Authentication",
 		Summary:     "Sign in with a password",
-		Description: "Use when an end user needs an access and refresh token pair. A valid account with TOTP enabled receives an MFA challenge instead; clients then call POST /auth/login/mfa.",
+		Description: "Use when an end user needs an access and refresh token pair. Administrator-provisioned passwords instead return 403 password_change_required with a ten-minute change_token accepted only by POST /me/password; that endpoint still verifies the current password. A valid account with TOTP enabled receives an MFA challenge instead; clients then call POST /auth/login/mfa.",
 		Request:     loginRequest{},
 		RequestExample: map[string]any{
 			"username": "alice",
@@ -101,6 +101,7 @@ var DocOperations = []apidocs.Operation{
 			{Status: 400, Code: "request body must be valid JSON", Title: "Invalid Request"},
 			{Status: 401, Code: "authentication failed", Title: "Unauthorized"},
 			{Status: 403, Code: "account_pending", Title: "account_pending"},
+			{Status: 403, Code: "password_change_required", Title: "password_change_required"},
 			{Status: 423, Code: "account_locked", Title: "account_locked"},
 			{Status: 429, Code: "authentication temporarily busy", Title: "Too Many Requests"},
 			{Status: 500, Code: "authentication service unavailable", Title: "Internal Server Error"},

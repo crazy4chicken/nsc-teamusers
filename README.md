@@ -69,6 +69,10 @@ so restrict access to service definitions and backups.
 
 The VitePress site is organized under `docs/`:
 
+The published documentation is available at <https://crazy4chicken.github.io/nsc-teamusers/>.
+
+VitePress uses the `/nsc-teamusers/` base path for both GitHub Pages and local previews.
+
 - `docs/guide/` contains the getting-started, security, operations, permissions, and Nekostick guides.
 - `docs/api/overview.md` documents cross-cutting conventions (authentication classes, problem+json, pagination, rate limiting).
 - `docs/api/reference/` is generated at VitePress build time from the canonical OpenAPI document; do not hand-edit the generated reference output.

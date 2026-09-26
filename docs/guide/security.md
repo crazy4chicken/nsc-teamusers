@@ -7,11 +7,16 @@ outline: 2
 
 ## Token and refresh lifecycle
 
-Access tokens are self-contained JWTs and are not revoked individually. Once
-issued, an access token remains usable until its ten-minute TTL expires, even
-when its refresh-token family is logged out or rotated. Administrative
-permission changes increment `users.perm_ver`; middleware rejects access tokens
-whose `perm_ver` no longer matches the current user row.
+Access tokens are self-contained JWTs and are not revoked individually. Each
+token carries the configured `aud` claim (default `teamusers`) and remains
+usable until its ten-minute TTL expires, even when its refresh-token family is
+logged out or rotated. Administrative permission changes increment
+`users.perm_ver`; middleware rejects access tokens whose `perm_ver` no longer
+matches the current user row.
+
+Audience enforcement rejects tokens issued before the audience claim was
+deployed, but the ten-minute TTL means old tokens expire quickly after deploy;
+no token migration is needed.
 
 Refresh tokens are opaque, stored only as SHA-256 digests, and rotate
 atomically. Presenting a rotated token triggers refresh-token reuse detection
@@ -79,6 +84,16 @@ and notification were committed, so audit records do not turn the public
 request endpoint into an account-existence oracle. Reset completion is audited
 against the recovered user.
 
+Administrator-provisioned password credentials carry a `must_change` flag. A
+successful password login for such an account returns `403 password_change_required`
+and a ten-minute EdDSA `password_change` token instead of issuing an access or
+refresh token. The token is accepted only by
+`POST /me/password`, which still verifies the current password; all other
+endpoints reject it. Registration, invitation acceptance, and password-reset
+completion clear the flag. A successful forced change clears the flag and
+revokes every refresh session, so the user must sign in again with the new
+password.
+
 ## Invitation tokens
 
 Invitation tokens are 32-byte random values rendered as base64url text. Only
@@ -127,6 +142,10 @@ The token is valid for 24 hours; only its SHA-256 digest is stored in
 Confirmation is bound to the bearer subject, sets `email_verified_at`, and
 records only opaque user IDs in the audit target.
 
+Changing an email address does not revoke any existing sessions. This is deliberate:
+an email change is not treated as a credential-compromise event. A password change
+or password reset, by contrast, revokes all existing sessions.
+
 `DELETE /me` is an erasure operation rather than a physical row deletion.
 Foreign keys and append-only audit records need the stable user ULID for
 referential history, so the service replaces the username and email with
@@ -167,12 +186,14 @@ authentication problem.
 
 ## Trusted client address
 
-The service uses `X-Forwarded-For` only when the direct TCP peer is loopback.
-For any non-loopback peer, the direct `RemoteAddr` is authoritative and the
-forwarded header is ignored. A deployment that needs forwarded client
-addresses must terminate its trusted proxy on the local host; accepting
-forwarded headers from arbitrary peers would make IP rate limits and audit
-metadata attacker-controlled.
+The service uses `X-Forwarded-For` when the direct TCP peer is loopback or
+matches one of the CIDRs or IP addresses configured in
+`TEAMUSERS_TRUSTED_PROXIES`. In either case, only the first address in the
+header is used. For any other peer, the direct `RemoteAddr` is authoritative
+and the forwarded header is ignored. The default trusted-proxy list is empty,
+so deployments using a non-loopback proxy must configure its fixed addresses;
+accepting forwarded headers from arbitrary peers would make IP rate limits and
+audit metadata attacker-controlled.
 
 ## Signing keys
 

@@ -393,7 +393,7 @@ paths:
       tags:
         - Authentication
       summary: Sign in with a password
-      description: Use when an end user needs an access and refresh token pair. A valid account with TOTP enabled receives an MFA challenge instead; clients then call POST /auth/login/mfa.
+      description: Use when an end user needs an access and refresh token pair. Administrator-provisioned passwords instead return 403 password_change_required with a ten-minute change_token accepted only by POST /me/password; that endpoint still verifies the current password. A valid account with TOTP enabled receives an MFA challenge instead; clients then call POST /auth/login/mfa.
       requestBody:
         required: true
         content:
@@ -460,16 +460,24 @@ paths:
                 status: 401
                 detail: authentication failed
         "403":
-          description: account_pending
+          description: account_pending; password_change_required
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
-              example:
-                type: about:blank
-                title: account_pending
-                status: 403
-                detail: account_pending
+              examples:
+                account_pending:
+                  value:
+                    type: about:blank
+                    title: account_pending
+                    status: 403
+                    detail: account_pending
+                password_change_required:
+                  value:
+                    type: about:blank
+                    title: password_change_required
+                    status: 403
+                    detail: password_change_required
         "423":
           description: account_locked
           content:
@@ -1178,7 +1186,7 @@ paths:
       tags:
         - Authorization
       summary: Evaluate a permission
-      description: Use from a trusted application service to make a single authorization decision for a user and resource context. The caller must use a service-kind bearer token; condition failures fail closed.
+      description: Use from a trusted application service to make a single authorization decision for a user and resource context. The caller must use a service-kind bearer token; deny keys prefixed with ! take precedence over matching allows, and condition failures fail closed.
       requestBody:
         required: true
         content:
@@ -3523,7 +3531,7 @@ paths:
       tags:
         - Self-service
       summary: Change the current password
-      description: Use when a signed-in user rotates their password. The current password is verified, the replacement must satisfy policy, and every refresh session (including the current one) is revoked.
+      description: Use when a signed-in user rotates their password. The current password is verified, the replacement must satisfy policy, and every refresh session (including the current one) is revoked. A first-login change_token from POST /auth/login is accepted as the bearer in place of an access token.
       requestBody:
         required: true
         content:
@@ -4081,7 +4089,7 @@ paths:
       tags:
         - Permissions
       summary: Register or update a permission
-      description: Use when an application service introduces a permission key. Keys must follow resource:action:scope grammar; registration is an upsert and increments the global permission registry version.
+      description: Use when an application service introduces a permission key. Keys must follow resource:action:scope grammar, with an optional ! deny prefix; registration is an upsert and increments the global permission registry version.
       requestBody:
         required: true
         content:
@@ -4632,7 +4640,7 @@ paths:
       tags:
         - Roles
       summary: Set permissions on a role
-      description: Use to replace the complete permission set of a role. permission_keys is canonical; permissions is accepted as a legacy alias when permission_keys is absent. Every key must already be registered.
+      description: Use to replace the complete permission set of a role. permission_keys is canonical; permissions is accepted as a legacy alias when permission_keys is absent. Every key must already be registered, including the optional ! deny prefix; deny rows take precedence during authorization.
       parameters:
         - name: id
           in: path

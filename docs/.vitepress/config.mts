@@ -3,6 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'Teamusers',
   description: 'Standalone IAM microservice',
+  base: '/nsc-teamusers/',
   cleanUrls: true,
   lastUpdated: true,
   themeConfig: {

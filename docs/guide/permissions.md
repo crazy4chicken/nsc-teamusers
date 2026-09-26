@@ -23,8 +23,34 @@ therefore cannot use a team grant to access those areas; it needs the matching
 
 The middleware checks `iam:<area>:any` first. If that grant does not resolve,
 it checks `iam:<area>:team` only for the team that owns the target resource.
-Role bindings must be active and unconditional for these checks, and the
-binding's team must match the target team.
+Unconditional bindings are checked on the fast path. Active bindings with a
+condition are then evaluated against the request context before the same
+`:any`/`:team` resolution is repeated.
+
+Admin conditions receive this context:
+
+- `subject.id` and `subject.kind` (`user`)
+- `resource.team_id` for the resolved target team and an empty `resource.owner_id`
+- `request.time` for the current request time
+
+A condition that evaluates false, fails to compile, or returns an evaluation
+error is ignored (fail-closed). Conditions on group bindings follow the same
+active-membership and team-scope rules as unconditional bindings. A target
+resource is resolved before a team grant is evaluated; unknown targets return
+`404`, and a request without a target cannot use a `:team` grant.
+
+## Deny permissions
+
+Prefix a permission key with `!` to create an explicit deny, for example
+`!iam:teams:any` or `!orders:delete:team`. Deny keys use the same grammar as
+allow keys and are stored with the `!` prefix. A matching deny is evaluated in
+the same grant set as its allow keys and always wins, even when a matching
+allow is also present. Wildcards continue to match only within one permission
+segment. This applies to `/authz/check` and to administrative `:any` and
+`:team` middleware checks.
+
+Permission keys must be registered exactly as they are assigned, including the
+`!` prefix.
 
 ## Team-scoped role mutation restrictions
 
