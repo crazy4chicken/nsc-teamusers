@@ -214,7 +214,7 @@ GET  /healthz /readyz                Nekostick supervision
 /audit            GET (filterable, paginated)
 ```
 
-Conventions: `Id`-prefixed ULIDs, RFC 9457 problem+json errors, cursor
+Conventions: bare ULID identifiers, RFC 9457 problem+json errors, cursor
 pagination, `Idempotency-Key` honored on all POSTs, admin endpoints themselves
 gated through the same permission engine (dogfooding, keys under
 `iam:*`).
