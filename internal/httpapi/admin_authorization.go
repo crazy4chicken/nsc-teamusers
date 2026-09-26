@@ -16,33 +16,33 @@ import (
 )
 
 type roleCreateRequest struct {
-	TeamID json.RawMessage `json:"team_id"`
+	TeamID json.RawMessage `json:"team_id,omitempty"`
 	Name   string          `json:"name"`
 }
 
 type rolePatchRequest struct {
-	TeamID json.RawMessage `json:"team_id"`
-	Name   *string         `json:"name"`
+	TeamID json.RawMessage `json:"team_id,omitempty"`
+	Name   *string         `json:"name,omitempty"`
 }
 
 type setRolePermissionsRequest struct {
-	PermissionKeys []string `json:"permission_keys"`
-	Permissions    []string `json:"permissions"`
+	PermissionKeys []string `json:"permission_keys,omitempty"`
+	Permissions    []string `json:"permissions,omitempty"`
 }
 
 type permissionRequest struct {
 	Key          string `json:"key"`
-	Description  string `json:"description"`
+	Description  string `json:"description,omitempty"`
 	RegisteredBy string `json:"registered_by"`
 }
 
 type bindingRequest struct {
-	TeamID      *string    `json:"team_id"`
+	TeamID      *string    `json:"team_id,omitempty"`
 	RoleID      string     `json:"role_id"`
 	SubjectKind string     `json:"subject_kind"`
 	SubjectID   string     `json:"subject_id"`
-	Condition   *string    `json:"condition"`
-	ExpiresAt   *time.Time `json:"expires_at"`
+	Condition   *string    `json:"condition,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 }
 
 func (h *adminHandler) listRoles(w http.ResponseWriter, r *http.Request) {

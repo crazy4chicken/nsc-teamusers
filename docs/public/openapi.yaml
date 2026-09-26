@@ -245,8 +245,6 @@ paths:
               properties:
                 token:
                   type: string
-              required:
-                - token
               type: object
             example:
               token: eyJhbGciOiJFZERTQSIs...
@@ -337,7 +335,6 @@ paths:
               required:
                 - token
                 - password
-                - display_name
               type: object
             example:
               display_name: Alice Example
@@ -671,8 +668,6 @@ paths:
               properties:
                 username:
                   type: string
-              required:
-                - username
               type: object
             example:
               username: alice
@@ -1048,7 +1043,6 @@ paths:
                 - username
                 - email
                 - password
-                - display_name
               type: object
             example:
               display_name: Alice Example
@@ -1202,13 +1196,7 @@ paths:
                           type: string
                         team_id:
                           type: string
-                      required:
-                        - owner_id
-                        - team_id
-                        - attrs
                       type: object
-                  required:
-                    - resource
                   type: object
                 permission:
                   type: string
@@ -1217,7 +1205,6 @@ paths:
               required:
                 - subject
                 - permission
-                - context
               type: object
             example:
               context:
@@ -1494,12 +1481,9 @@ paths:
                     - type: string
                     - type: "null"
               required:
-                - team_id
                 - role_id
                 - subject_kind
                 - subject_id
-                - condition
-                - expires_at
               type: object
             example:
               condition: resource.team_id == subject.team_id
@@ -2045,9 +2029,6 @@ paths:
                   anyOf:
                     - type: string
                     - type: "null"
-              required:
-                - team_id
-                - name
               type: object
             example:
               name: platform-backend
@@ -2157,7 +2138,6 @@ paths:
                   type: string
               required:
                 - user_id
-                - expires_at
               type: object
             example:
               user_id: 01J8Z3USER000000000000001
@@ -2247,7 +2227,6 @@ paths:
                   type: string
               required:
                 - user_id
-                - expires_at
               type: object
             example:
               expires_at: "2026-02-01T00:00:00Z"
@@ -2359,8 +2338,6 @@ paths:
                   items:
                     type: string
                   type: array
-              required:
-                - user_ids
               type: object
             example:
               user_ids:
@@ -2554,7 +2531,6 @@ paths:
               required:
                 - email
                 - username
-                - display_name
               type: object
             example:
               display_name: Alice Example
@@ -4120,7 +4096,6 @@ paths:
                   type: string
               required:
                 - key
-                - description
                 - registered_by
               type: object
             example:
@@ -4321,7 +4296,6 @@ paths:
                   type: string
                 team_id: true
               required:
-                - team_id
                 - name
               type: object
             example:
@@ -4570,9 +4544,6 @@ paths:
                     - type: string
                     - type: "null"
                 team_id: true
-              required:
-                - team_id
-                - name
               type: object
             example:
               name: senior-operator
@@ -4682,9 +4653,6 @@ paths:
                   items:
                     type: string
                   type: array
-              required:
-                - permission_keys
-                - permissions
               type: object
             example:
               permission_keys:
@@ -4867,7 +4835,6 @@ paths:
               required:
                 - slug
                 - name
-                - status
               type: object
             example:
               name: Acme
@@ -5139,10 +5106,6 @@ paths:
                   anyOf:
                     - type: string
                     - type: "null"
-              required:
-                - slug
-                - name
-                - status
               type: object
             example:
               name: Acme Europe
@@ -5333,10 +5296,6 @@ paths:
                   type: string
               required:
                 - username
-                - email
-                - display_name
-                - password
-                - initial_password
               type: object
             example:
               display_name: Alice Example
@@ -5499,7 +5458,6 @@ paths:
                 op:
                   type: string
               required:
-                - ids
                 - op
               type: object
             example:
@@ -5899,11 +5857,6 @@ paths:
                   anyOf:
                     - type: string
                     - type: "null"
-              required:
-                - username
-                - email
-                - display_name
-                - status
               type: object
             example:
               display_name: Alice Smith
@@ -6197,7 +6150,6 @@ paths:
                   type: string
               required:
                 - kind
-                - password
               type: object
             example:
               kind: password

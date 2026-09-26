@@ -38,17 +38,17 @@ func NewRouter(q store.Q, authMW func(http.Handler) http.Handler) chi.Router {
 type checkRequest struct {
 	Subject    string       `json:"subject"`
 	Permission string       `json:"permission"`
-	Context    checkContext `json:"context"`
+	Context    checkContext `json:"context,omitempty"`
 }
 
 type checkContext struct {
-	Resource checkResource `json:"resource"`
+	Resource checkResource `json:"resource,omitempty"`
 }
 
 type checkResource struct {
-	OwnerID string         `json:"owner_id"`
-	TeamID  string         `json:"team_id"`
-	Attrs   map[string]any `json:"attrs"`
+	OwnerID string         `json:"owner_id,omitempty"`
+	TeamID  string         `json:"team_id,omitempty"`
+	Attrs   map[string]any `json:"attrs,omitempty"`
 }
 
 type checkResponse struct {

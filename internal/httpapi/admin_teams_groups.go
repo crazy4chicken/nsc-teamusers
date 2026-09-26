@@ -16,13 +16,13 @@ import (
 type teamCreateRequest struct {
 	Slug   string `json:"slug"`
 	Name   string `json:"name"`
-	Status string `json:"status"`
+	Status string `json:"status,omitempty"`
 }
 
 type teamPatchRequest struct {
-	Slug   *string `json:"slug"`
-	Name   *string `json:"name"`
-	Status *string `json:"status"`
+	Slug   *string `json:"slug,omitempty"`
+	Name   *string `json:"name,omitempty"`
+	Status *string `json:"status,omitempty"`
 }
 
 type groupCreateRequest struct {
@@ -31,13 +31,13 @@ type groupCreateRequest struct {
 }
 
 type groupPatchRequest struct {
-	TeamID *string `json:"team_id"`
-	Name   *string `json:"name"`
+	TeamID *string `json:"team_id,omitempty"`
+	Name   *string `json:"name,omitempty"`
 }
 
 type membershipRequest struct {
 	UserID    string     `json:"user_id"`
-	ExpiresAt *time.Time `json:"expires_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 func (h *adminHandler) listTeams(w http.ResponseWriter, r *http.Request) {

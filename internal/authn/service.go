@@ -194,7 +194,7 @@ type verifyEmailRequest struct {
 }
 
 type passwordResetRequest struct {
-	Login string `json:"login,omitempty"`
+	Login string `json:"login"`
 }
 
 type passwordResetConfirmRequest struct {

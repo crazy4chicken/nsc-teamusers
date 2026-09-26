@@ -24,7 +24,7 @@ const invitationTokenTTL = 7 * 24 * time.Hour
 type invitationRequest struct {
 	Email       string `json:"email"`
 	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 func (h *adminHandler) createInvitation(w http.ResponseWriter, r *http.Request) {
