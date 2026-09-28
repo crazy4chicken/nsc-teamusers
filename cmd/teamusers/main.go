@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
@@ -219,76 +221,190 @@ func bootstrapAdmin(ctx context.Context, q store.Q, username string) (bootstrapA
 	}
 	result := bootstrapAdminResult{Username: user.Username}
 	err = store.WithAdminTx(ctx, q, func(ctx context.Context, tx store.Tx) error {
-		for _, permission := range bootstrapAdminPermissions {
-			tag, err := tx.Exec(ctx, `
-                INSERT INTO permissions (key, description, registered_by)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (key) DO NOTHING`, permission.key, permission.description, "teamusers-bootstrap-admin")
-			if err != nil {
-				return err
-			}
-			result.PermissionsAdded += int(tag.RowsAffected())
-		}
-		if result.PermissionsAdded > 0 {
-			if _, err := store.BumpPermissionRegistryPermVer(ctx, tx); err != nil {
-				return err
-			}
-		}
-
-		var roleID string
-		err := tx.QueryRow(ctx, `
-            SELECT id FROM roles
-            WHERE team_id IS NULL AND name = $1
-            ORDER BY id LIMIT 1`, "iam-admin").Scan(&roleID)
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			roleID = store.NewID()
-			if _, err := tx.Exec(ctx, `
-                INSERT INTO roles (id, team_id, name) VALUES ($1, NULL, $2)`, roleID, "iam-admin"); err != nil {
-				return err
-			}
-			result.RoleCreated = true
-		case err != nil:
-			return err
-		}
-
-		for _, permission := range bootstrapAdminPermissions {
-			tag, err := tx.Exec(ctx, `
-                INSERT INTO role_permissions (role_id, permission_key)
-                VALUES ($1, $2)
-                ON CONFLICT (role_id, permission_key) DO NOTHING`, roleID, permission.key)
-			if err != nil {
-				return err
-			}
-			result.RolePermissionsAdded += int(tag.RowsAffected())
-		}
-
-		var bound bool
-		if err := tx.QueryRow(ctx, `
-            SELECT EXISTS(
-                SELECT 1 FROM role_bindings
-                WHERE role_id = $1 AND subject_kind = 'user' AND subject_id = $2
-            )`, roleID, user.ID).Scan(&bound); err != nil {
-			return err
-		}
-		if !bound {
-			if _, err := tx.Exec(ctx, `
-                INSERT INTO role_bindings (id, team_id, role_id, subject_kind, subject_id)
-                VALUES ($1, NULL, $2, 'user', $3)`, store.NewID(), roleID, user.ID); err != nil {
-				return err
-			}
-			result.BindingCreated = true
-		}
-		if result.RolePermissionsAdded > 0 || result.BindingCreated {
-			_, err := store.BumpUserPermVer(ctx, tx, user.ID)
-			return err
-		}
-		return nil
+		return provisionAdminRole(ctx, tx, user, &result)
 	})
 	if err != nil {
 		return bootstrapAdminResult{}, fmt.Errorf("bootstrap-admin: provision %q: %w", username, err)
 	}
 	return result, nil
+}
+
+// provisionAdminRole ensures the iam-admin role holds every bootstrap
+// permission and binds the user to it. It runs inside the caller's
+// transaction so account creation and role binding can commit atomically.
+func provisionAdminRole(ctx context.Context, tx store.Tx, user store.User, result *bootstrapAdminResult) error {
+	for _, permission := range bootstrapAdminPermissions {
+		tag, err := tx.Exec(ctx, `
+            INSERT INTO permissions (key, description, registered_by)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (key) DO NOTHING`, permission.key, permission.description, "teamusers-bootstrap-admin")
+		if err != nil {
+			return err
+		}
+		result.PermissionsAdded += int(tag.RowsAffected())
+	}
+	if result.PermissionsAdded > 0 {
+		if _, err := store.BumpPermissionRegistryPermVer(ctx, tx); err != nil {
+			return err
+		}
+	}
+
+	var roleID string
+	err := tx.QueryRow(ctx, `
+        SELECT id FROM roles
+        WHERE team_id IS NULL AND name = $1
+        ORDER BY id LIMIT 1`, "iam-admin").Scan(&roleID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		roleID = store.NewID()
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO roles (id, team_id, name) VALUES ($1, NULL, $2)`, roleID, "iam-admin"); err != nil {
+			return err
+		}
+		result.RoleCreated = true
+	case err != nil:
+		return err
+	}
+
+	for _, permission := range bootstrapAdminPermissions {
+		tag, err := tx.Exec(ctx, `
+            INSERT INTO role_permissions (role_id, permission_key)
+            VALUES ($1, $2)
+            ON CONFLICT (role_id, permission_key) DO NOTHING`, roleID, permission.key)
+		if err != nil {
+			return err
+		}
+		result.RolePermissionsAdded += int(tag.RowsAffected())
+	}
+
+	var bound bool
+	if err := tx.QueryRow(ctx, `
+        SELECT EXISTS(
+            SELECT 1 FROM role_bindings
+            WHERE role_id = $1 AND subject_kind = 'user' AND subject_id = $2
+        )`, roleID, user.ID).Scan(&bound); err != nil {
+		return err
+	}
+	if !bound {
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO role_bindings (id, team_id, role_id, subject_kind, subject_id)
+            VALUES ($1, NULL, $2, 'user', $3)`, store.NewID(), roleID, user.ID); err != nil {
+			return err
+		}
+		result.BindingCreated = true
+	}
+	if result.RolePermissionsAdded > 0 || result.BindingCreated {
+		_, err := store.BumpUserPermVer(ctx, tx, user.ID)
+		return err
+	}
+	return nil
+}
+
+// autoBootstrapAdmin creates the initial admin account when no user holds a
+// platform-scoped admin permission and no user named admin exists, printing
+// the generated temporary password to the console. The password credential is
+// marked must-change so the first login forces a rotation.
+func autoBootstrapAdmin(ctx context.Context, q store.Q, minPasswordLength int) error {
+	permissionKeys := make([]string, 0, len(bootstrapAdminPermissions))
+	for _, permission := range bootstrapAdminPermissions {
+		permissionKeys = append(permissionKeys, permission.key)
+	}
+	var hasAdmin bool
+	err := q.QueryRow(ctx, `
+        SELECT EXISTS(
+            SELECT 1
+            FROM role_bindings rb
+            JOIN role_permissions rp ON rp.role_id = rb.role_id
+            WHERE rb.team_id IS NULL
+              AND rb.subject_kind = 'user'
+              AND rp.permission_key = ANY($1)
+        )`, permissionKeys).Scan(&hasAdmin)
+	if err != nil {
+		return fmt.Errorf("check platform administrators: %w", err)
+	}
+	if hasAdmin {
+		return nil
+	}
+	if _, err := store.GetUserByUsername(ctx, q, "admin"); err == nil {
+		return nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("look up user %q: %w", "admin", err)
+	}
+
+	password, err := generateTemporaryPassword(minPasswordLength)
+	if err != nil {
+		return fmt.Errorf("generate temporary password: %w", err)
+	}
+	passwordHash, err := authn.HashPassword(password)
+	if err != nil {
+		return fmt.Errorf("hash temporary password: %w", err)
+	}
+	err = store.WithAdminTx(ctx, q, func(ctx context.Context, tx store.Tx) error {
+		user, err := store.CreateUser(ctx, tx, store.User{
+			Username:    "admin",
+			DisplayName: "Administrator",
+			Status:      "active",
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := store.CreateCredential(ctx, tx, store.Credential{
+			UserID:     user.ID,
+			Kind:       "password",
+			Hash:       passwordHash,
+			MustChange: true,
+		}); err != nil {
+			return err
+		}
+		return provisionAdminRole(ctx, tx, user, &bootstrapAdminResult{})
+	})
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			// A concurrent replica won the bootstrap race; the account exists.
+			return nil
+		}
+		return fmt.Errorf("create admin account: %w", err)
+	}
+	fmt.Fprintln(os.Stdout, "bootstrap: created the initial admin account")
+	fmt.Fprintf(os.Stdout, "bootstrap:   username: %s\n", "admin")
+	fmt.Fprintf(os.Stdout, "bootstrap:   temporary password: %s\n", password)
+	fmt.Fprintln(os.Stdout, "bootstrap: the password must be changed on first login")
+	return nil
+}
+
+// generateTemporaryPassword returns a random password that always satisfies
+// the configured policy (minimum length, at least one letter and one digit).
+// The alphabet omits look-alike characters so the password survives being
+// copied from a console.
+func generateTemporaryPassword(minPasswordLength int) (string, error) {
+	length := minPasswordLength
+	if length < 24 {
+		length = 24
+	}
+	const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"
+	limit := byte(256 / len(alphabet) * len(alphabet))
+	raw := make([]byte, length)
+	password := make([]byte, length)
+	for {
+		if _, err := rand.Read(raw); err != nil {
+			return "", err
+		}
+		n := 0
+		for _, b := range raw {
+			if b < limit {
+				password[n] = alphabet[int(b)%len(alphabet)]
+				n++
+			}
+		}
+		if n < length {
+			continue
+		}
+		candidate := string(password)
+		if config.ValidatePassword(candidate, minPasswordLength) {
+			return candidate, nil
+		}
+	}
 }
 
 func run(cfg config.Config) error {
@@ -312,6 +428,13 @@ func run(cfg config.Config) error {
 	defer pool.Close()
 	if err := pool.Ping(signalContext); err != nil {
 		return fmt.Errorf("ping PostgreSQL: %w", err)
+	}
+
+	bootstrapContext, cancelBootstrap := context.WithTimeout(signalContext, bootstrapTimeout)
+	err = autoBootstrapAdmin(bootstrapContext, pool, cfg.PasswordMinLength)
+	cancelBootstrap()
+	if err != nil {
+		return fmt.Errorf("bootstrap admin account: %w", err)
 	}
 
 	server := httpapi.NewServer(cfg, pool)
