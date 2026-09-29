@@ -23,6 +23,7 @@ export default defineConfig({
           text: 'Guide',
           items: [
             { text: 'Getting Started', link: '/guide/getting-started' },
+            { text: 'Subject targeting', link: '/guide/subjects' },
             { text: 'Authentication Security', link: '/guide/security' },
             { text: 'Operations Runbook', link: '/guide/operations' },
             { text: 'Administrative Permissions', link: '/guide/permissions' },
@@ -45,6 +46,7 @@ export default defineConfig({
                 { text: 'Groups', link: '/api/reference/groups' },
                 { text: 'Roles', link: '/api/reference/roles' },
                 { text: 'Permissions', link: '/api/reference/permissions' },
+                { text: 'Password Policies', link: '/api/reference/password-policies' },
                 { text: 'Bindings', link: '/api/reference/bindings' },
                 { text: 'Audit', link: '/api/reference/audit' },
                 { text: 'Sessions', link: '/api/reference/sessions' },

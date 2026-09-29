@@ -119,6 +119,9 @@ func UpdateRole(ctx context.Context, q Q, role Role) (Role, error) {
 }
 
 func DeleteRole(ctx context.Context, q Q, id string) error {
+	if err := DeletePasswordPoliciesForSubject(ctx, q, "role", id); err != nil {
+		return err
+	}
 	_, err := q.Exec(ctx, `DELETE FROM roles WHERE id = $1`, id)
 	return err
 }

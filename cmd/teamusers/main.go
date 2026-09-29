@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 	"teamusers/internal/config"
 	"teamusers/internal/events"
 	"teamusers/internal/httpapi"
+	"teamusers/internal/passwd"
 	"teamusers/internal/store"
 	"teamusers/migrations"
 )
@@ -53,6 +55,8 @@ var bootstrapAdminPermissions = [...]struct {
 	{key: "iam:bindings:any", description: "Manage role bindings"},
 	{key: "iam:audit:any", description: "Read the audit log"},
 	{key: "iam:sessions:any", description: "Manage user sessions"},
+	{key: "iam:policies:any", description: "Manage password policies"},
+	{key: "iam:*:any", description: "All IAM administration"},
 }
 
 type statusOutput struct {
@@ -300,11 +304,103 @@ func provisionAdminRole(ctx context.Context, tx store.Tx, user store.User, resul
 	return nil
 }
 
+// reconcileBootstrapPermissions registers every bootstrap permission and
+// restores missing permissions on the platform iam-admin role. Re-granting on
+// every restart is intentional: removals from this role are not sticky.
+func reconcileBootstrapPermissions(ctx context.Context, q store.Q) error {
+	return store.WithAdminTx(ctx, q, func(ctx context.Context, tx store.Tx) error {
+		permissionsAdded := false
+		for _, permission := range bootstrapAdminPermissions {
+			tag, err := tx.Exec(ctx, `
+				INSERT INTO permissions (key, description, registered_by)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (key) DO NOTHING`, permission.key, permission.description, "teamusers-bootstrap-admin")
+			if err != nil {
+				return err
+			}
+			permissionsAdded = permissionsAdded || tag.RowsAffected() > 0
+		}
+
+		var roleID string
+		err := tx.QueryRow(ctx, `
+			SELECT id FROM roles
+			WHERE team_id IS NULL AND name = $1
+			ORDER BY id LIMIT 1`, "iam-admin").Scan(&roleID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if permissionsAdded {
+				_, err := store.BumpPermissionRegistryPermVer(ctx, tx)
+				return err
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		rolePermissionsAdded := false
+		for _, permission := range bootstrapAdminPermissions {
+			tag, err := tx.Exec(ctx, `
+				INSERT INTO role_permissions (role_id, permission_key)
+				VALUES ($1, $2)
+				ON CONFLICT (role_id, permission_key) DO NOTHING`, roleID, permission.key)
+			if err != nil {
+				return err
+			}
+			rolePermissionsAdded = rolePermissionsAdded || tag.RowsAffected() > 0
+		}
+		if rolePermissionsAdded {
+			userIDs, err := store.ListUserIDsByRole(ctx, tx, roleID)
+			if err != nil {
+				return err
+			}
+			for _, userID := range userIDs {
+				if _, err := store.BumpUserPermVer(ctx, tx, userID); err != nil {
+					return err
+				}
+			}
+			if userIDs == nil {
+				userIDs = []string{}
+			}
+			payload, err := json.Marshal(struct {
+				Type    string    `json:"type"`
+				UserIDs []string  `json:"user_ids"`
+				TeamID  *string   `json:"team_id"`
+				At      time.Time `json:"at"`
+			}{
+				Type:    "perm.changed",
+				UserIDs: userIDs,
+				At:      time.Now().UTC(),
+			})
+			if err != nil {
+				return err
+			}
+			if _, err := store.AppendOutboxEvent(ctx, tx, store.OutboxEvent{
+				Topic:   "perm.changed",
+				Payload: json.RawMessage(payload),
+			}); err != nil {
+				return err
+			}
+			if _, err := audit.NewWriter().Append(ctx, tx, audit.Entry{
+				Action: "bootstrap.reconciled",
+				Target: roleID,
+				After:  map[string]any{"role_id": roleID},
+			}); err != nil {
+				return err
+			}
+		}
+		if permissionsAdded || rolePermissionsAdded {
+			if _, err := store.BumpPermissionRegistryPermVer(ctx, tx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // autoBootstrapAdmin creates the initial admin account when no user holds a
 // platform-scoped admin permission and no user named admin exists, printing
 // the generated temporary password to the console. The password credential is
 // marked must-change so the first login forces a rotation.
-func autoBootstrapAdmin(ctx context.Context, q store.Q, minPasswordLength int) error {
+func autoBootstrapAdmin(ctx context.Context, q store.Q) error {
 	permissionKeys := make([]string, 0, len(bootstrapAdminPermissions))
 	for _, permission := range bootstrapAdminPermissions {
 		permissionKeys = append(permissionKeys, permission.key)
@@ -331,20 +427,28 @@ func autoBootstrapAdmin(ctx context.Context, q store.Q, minPasswordLength int) e
 		return fmt.Errorf("look up user %q: %w", "admin", err)
 	}
 
-	password, err := generateTemporaryPassword(minPasswordLength)
-	if err != nil {
-		return fmt.Errorf("generate temporary password: %w", err)
-	}
-	passwordHash, err := authn.HashPassword(password)
-	if err != nil {
-		return fmt.Errorf("hash temporary password: %w", err)
-	}
+	var password string
 	err = store.WithAdminTx(ctx, q, func(ctx context.Context, tx store.Tx) error {
 		user, err := store.CreateUser(ctx, tx, store.User{
 			Username:    "admin",
 			DisplayName: "Administrator",
 			Status:      "active",
 		})
+		if err != nil {
+			return err
+		}
+		if err := provisionAdminRole(ctx, tx, user, &bootstrapAdminResult{}); err != nil {
+			return err
+		}
+		policy, err := httpapi.ResolvePasswordPolicy(ctx, tx, user.ID, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		password, err = generateTemporaryPassword(ctx, policy)
+		if err != nil {
+			return err
+		}
+		passwordHash, err := authn.HashPassword(password)
 		if err != nil {
 			return err
 		}
@@ -356,7 +460,7 @@ func autoBootstrapAdmin(ctx context.Context, q store.Q, minPasswordLength int) e
 		}); err != nil {
 			return err
 		}
-		return provisionAdminRole(ctx, tx, user, &bootstrapAdminResult{})
+		return nil
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -373,38 +477,86 @@ func autoBootstrapAdmin(ctx context.Context, q store.Q, minPasswordLength int) e
 	return nil
 }
 
-// generateTemporaryPassword returns a random password that always satisfies
-// the configured policy (minimum length, at least one letter and one digit).
-// The alphabet omits look-alike characters so the password survives being
-// copied from a console.
-func generateTemporaryPassword(minPasswordLength int) (string, error) {
-	length := minPasswordLength
+// generateTemporaryPassword returns a random password that satisfies policy.
+// It seeds one character for each required class, fills the remainder by
+// rejection sampling, and cryptographically shuffles the result. Generated
+// passwords are at least 24 runes and never exceed the 1024-rune policy limit.
+func generateTemporaryPassword(ctx context.Context, policy passwd.Policy) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if policy.MinLength < 1 {
+		return "", errors.New("password policy minimum length must be positive")
+	}
+	if policy.MinLength > 1024 {
+		return "", errors.New("password policy minimum length exceeds temporary password limit")
+	}
+	length := policy.MinLength
 	if length < 24 {
 		length = 24
 	}
-	const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"
+	const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789!@#$%^&*+-="
 	limit := byte(256 / len(alphabet) * len(alphabet))
-	raw := make([]byte, length)
 	password := make([]byte, length)
-	for {
-		if _, err := rand.Read(raw); err != nil {
+	filled := 0
+	if policy.RequireLetter {
+		password[filled] = 'a'
+		filled++
+	}
+	if policy.RequireUpper {
+		password[filled] = 'A'
+		filled++
+	}
+	if policy.RequireLower {
+		password[filled] = 'a'
+		filled++
+	}
+	if policy.RequireDigit {
+		password[filled] = '2'
+		filled++
+	}
+	if policy.RequireSymbol {
+		password[filled] = '!'
+		filled++
+	}
+	randomBytes := make([]byte, length)
+	for filled < len(password) {
+		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		n := 0
-		for _, b := range raw {
-			if b < limit {
-				password[n] = alphabet[int(b)%len(alphabet)]
-				n++
+		remaining := len(password) - filled
+		n, err := rand.Read(randomBytes[:remaining])
+		if err != nil {
+			return "", err
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		for _, b := range randomBytes[:n] {
+			if b >= limit {
+				continue
 			}
-		}
-		if n < length {
-			continue
-		}
-		candidate := string(password)
-		if config.ValidatePassword(candidate, minPasswordLength) {
-			return candidate, nil
+			password[filled] = alphabet[int(b)%len(alphabet)]
+			filled++
 		}
 	}
+	maximum := new(big.Int)
+	for i := len(password) - 1; i > 0; i-- {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		maximum.SetInt64(int64(i + 1))
+		swapIndex, err := rand.Int(rand.Reader, maximum)
+		if err != nil {
+			return "", err
+		}
+		j := int(swapIndex.Int64())
+		password[i], password[j] = password[j], password[i]
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return string(password), nil
 }
 
 func run(cfg config.Config) error {
@@ -431,10 +583,16 @@ func run(cfg config.Config) error {
 	}
 
 	bootstrapContext, cancelBootstrap := context.WithTimeout(signalContext, bootstrapTimeout)
-	err = autoBootstrapAdmin(bootstrapContext, pool, cfg.PasswordMinLength)
+	err = autoBootstrapAdmin(bootstrapContext, pool)
 	cancelBootstrap()
 	if err != nil {
 		return fmt.Errorf("bootstrap admin account: %w", err)
+	}
+	reconcileContext, cancelReconcile := context.WithTimeout(signalContext, bootstrapTimeout)
+	err = reconcileBootstrapPermissions(reconcileContext, pool)
+	cancelReconcile()
+	if err != nil {
+		return fmt.Errorf("reconcile bootstrap permissions: %w", err)
 	}
 
 	server := httpapi.NewServer(cfg, pool)

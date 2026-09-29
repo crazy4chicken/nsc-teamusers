@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"teamusers/internal/apidocs"
+	"teamusers/internal/passwd"
 	"teamusers/internal/store"
 )
 
@@ -39,6 +40,19 @@ type docProfileResponse struct {
 type docProfilePatchRequest struct {
 	Username    string `json:"username,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
+}
+
+type docPasswordPolicyPatchRequest struct {
+	Name          string `json:"name,omitempty"`
+	Priority      int    `json:"priority,omitempty"`
+	SubjectKind   string `json:"subject_kind,omitempty"`
+	SubjectID     string `json:"subject_id,omitempty"`
+	MinLength     *int   `json:"min_length,omitempty"`
+	RequireLetter *bool  `json:"require_letter,omitempty"`
+	RequireUpper  *bool  `json:"require_upper,omitempty"`
+	RequireLower  *bool  `json:"require_lower,omitempty"`
+	RequireDigit  *bool  `json:"require_digit,omitempty"`
+	RequireSymbol *bool  `json:"require_symbol,omitempty"`
 }
 
 type docPasswordChangeRequest struct {
@@ -291,6 +305,17 @@ var DocOperations = []apidocs.Operation{
 		Errors:          []apidocs.ErrorDoc{docUnauthorized, docForbidden, docNotFound, docInternal},
 	},
 	{
+		Method:          "GET",
+		Path:            "/users/{id}/password-policy",
+		Tag:             "Users",
+		Summary:         "Get a user's effective password policy",
+		Description:     "Use to inspect the resolved password requirements for one administrative user. The response contains only the merged policy and requires iam:users:any.",
+		Security:        "admin",
+		Response:        passwd.Policy{},
+		ResponseExample: map[string]any{"min_length": 12, "require_letter": true, "require_upper": false, "require_lower": false, "require_digit": true, "require_symbol": false},
+		Errors:          []apidocs.ErrorDoc{docUnauthorized, docForbidden, docNotFound, docInternal},
+	},
+	{
 		Method:          "PATCH",
 		Path:            "/users/{id}",
 		Tag:             "Users",
@@ -498,6 +523,63 @@ var DocOperations = []apidocs.Operation{
 		Tag:         "Groups",
 		Summary:     "Delete a group",
 		Description: "Use to remove a group and its memberships. Affected users' permission versions are invalidated.",
+		Security:    "admin",
+		Errors:      []apidocs.ErrorDoc{docUnauthorized, docForbidden, docNotFound, docInternal},
+	},
+	{
+		Method:          "GET",
+		Path:            "/policies/password",
+		Tag:             "Password Policies",
+		Summary:         "List password policies",
+		Description:     "Use to page through password policies targeting users, teams, groups, or roles. Requires iam:policies:any.",
+		Security:        "admin",
+		Response:        map[string]any{},
+		ResponseExample: map[string]any{"items": []any{map[string]any{"id": "01J8Z3POLICY00000000000001", "name": "team baseline", "priority": 100, "subject_kind": "team", "subject_id": "01J8Z3TEAM000000000000001", "min_length": 12}}, "next_cursor": ""},
+		Errors:          []apidocs.ErrorDoc{docInvalidPage, docUnauthorized, docForbidden, docInternal},
+	},
+	{
+		Method:          "POST",
+		Path:            "/policies/password",
+		Tag:             "Password Policies",
+		Summary:         "Create a password policy",
+		Description:     "Use to create a password policy for an existing user, team, group, or role. When policies overlap, higher priority wins independently for each field; an unset field falls through to lower-priority policies and then to the built-in default.",
+		Security:        "admin",
+		Request:         passwordPolicyCreateRequest{},
+		RequestExample:  map[string]any{"name": "team baseline", "priority": 100, "subject_kind": "team", "subject_id": "01J8Z3TEAM000000000000001", "min_length": 12, "require_letter": true, "require_digit": true},
+		Response:        store.PasswordPolicy{},
+		ResponseExample: map[string]any{"id": "01J8Z3POLICY00000000000001", "name": "team baseline", "priority": 100, "subject_kind": "team", "subject_id": "01J8Z3TEAM000000000000001", "min_length": 12, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"},
+		Errors:          []apidocs.ErrorDoc{docInvalidRequest, docUnauthorized, docForbidden, docError(422, "subject_kind must be one of user, team, group, role", "Unprocessable Entity"), docError(422, "subject_id is required", "Unprocessable Entity"), docError(422, "subject does not exist", "Unprocessable Entity"), docError(422, "priority must be between -2147483648 and 2147483647", "Unprocessable Entity"), docError(422, "min_length must be between 1 and 1024", "Unprocessable Entity"), docInternal},
+	},
+	{
+		Method:          "GET",
+		Path:            "/policies/password/{id}",
+		Tag:             "Password Policies",
+		Summary:         "Get a password policy",
+		Description:     "Use to retrieve one password policy by ID before editing or removing it.",
+		Security:        "admin",
+		Response:        store.PasswordPolicy{},
+		ResponseExample: map[string]any{"id": "01J8Z3POLICY00000000000001", "name": "team baseline", "priority": 100, "subject_kind": "team", "subject_id": "01J8Z3TEAM000000000000001", "min_length": 12, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"},
+		Errors:          []apidocs.ErrorDoc{docUnauthorized, docForbidden, docNotFound, docInternal},
+	},
+	{
+		Method:          "PATCH",
+		Path:            "/policies/password/{id}",
+		Tag:             "Password Policies",
+		Summary:         "Update a password policy",
+		Description:     "Use to partially update a password policy. Omitted fields remain unchanged; send null for nullable policy fields to clear them. When policies overlap, higher priority wins independently for each field; an unset field falls through to lower-priority policies and then to the built-in default.",
+		Security:        "admin",
+		Request:         docPasswordPolicyPatchRequest{},
+		RequestExample:  map[string]any{"name": "strong team baseline", "min_length": 14},
+		Response:        store.PasswordPolicy{},
+		ResponseExample: map[string]any{"id": "01J8Z3POLICY00000000000001", "name": "strong team baseline", "priority": 100, "subject_kind": "team", "subject_id": "01J8Z3TEAM000000000000001", "min_length": 14, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"},
+		Errors:          []apidocs.ErrorDoc{docInvalidRequest, docUnauthorized, docForbidden, docNotFound, docError(422, "subject_kind must be one of user, team, group, role", "Unprocessable Entity"), docError(422, "subject_id is required", "Unprocessable Entity"), docError(422, "subject does not exist", "Unprocessable Entity"), docError(422, "priority must be between -2147483648 and 2147483647", "Unprocessable Entity"), docError(422, "min_length must be between 1 and 1024", "Unprocessable Entity"), docInternal},
+	},
+	{
+		Method:      "DELETE",
+		Path:        "/policies/password/{id}",
+		Tag:         "Password Policies",
+		Summary:     "Delete a password policy",
+		Description: "Use to remove a password policy. The deletion is audited and returns no body.",
 		Security:    "admin",
 		Errors:      []apidocs.ErrorDoc{docUnauthorized, docForbidden, docNotFound, docInternal},
 	},
@@ -731,6 +813,17 @@ var DocOperations = []apidocs.Operation{
 		Response:        docProfileResponse{},
 		ResponseExample: map[string]any{"id": "01J8Z3USER000000000000001", "username": "alice", "email": "alice@example.test", "display_name": "Alice Example", "status": "active", "email_verified_at": "2026-01-01T00:00:00Z", "created_at": "2026-01-01T00:00:00Z"},
 		Errors:          []apidocs.ErrorDoc{docUnauthorized, docNotFound, docInternal},
+	},
+	{
+		Method:          "GET",
+		Path:            "/me/password-policy",
+		Tag:             "Self-service",
+		Summary:         "Get the effective password policy",
+		Description:     "Use to display the password requirements currently resolved for the authenticated user. Only the merged policy is returned; the endpoint requires a user bearer.",
+		Security:        "user",
+		Response:        passwd.Policy{},
+		ResponseExample: map[string]any{"min_length": 12, "require_letter": true, "require_upper": false, "require_lower": false, "require_digit": true, "require_symbol": false},
+		Errors:          []apidocs.ErrorDoc{docUnauthorized, docInternal},
 	},
 	{
 		Method:          "PATCH",

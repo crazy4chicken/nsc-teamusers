@@ -330,6 +330,8 @@ var testBootstrapAdminPermissionKeys = []string{
 	"iam:bindings:any",
 	"iam:audit:any",
 	"iam:sessions:any",
+	"iam:policies:any",
+	"iam:*:any",
 }
 
 func bootstrapTestAdmin(t *testing.T, ctx context.Context, q store.Q, userID string) {

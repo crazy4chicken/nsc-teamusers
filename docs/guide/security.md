@@ -41,14 +41,128 @@ The route family is resolved against the caller's current role bindings on each
 request (the plane is low QPS), and a missing `iam:*` key fails closed with
 `insufficient_permissions`.
 
-The eight administrative keys are provisioned explicitly by
+The nine enumerated administrative `iam:<area>:any` keys plus the
+`iam:*:any` wildcard are provisioned explicitly by
 `teamusers bootstrap-admin --username <name>`. This command creates or
 reconciles the platform-scoped `iam-admin` role and its binding; there is no
-runtime or first-request elevation path. Keep the bootstrap database
-connection and the initial user's credential under the same out-of-band
-controls as other production secrets.
+runtime or first-request elevation path. `iam:*:any` is a platform wildcard
+covering current and future IAM areas at the `:any` scope. On every service
+startup, permission reconciliation intentionally restores the complete bootstrap
+permission set—including `iam:*:any`—on an existing platform `iam-admin` role.
+Deliberate removals from that role are therefore not sticky.
+Keep the bootstrap database connection and the initial user's credential under
+the same out-of-band controls as other production secrets.
 
-An admin can remove their own last `iam:*:any` grant; rerun `teamusers bootstrap-admin --username <name>` to restore the role and binding.
+An admin can remove their own last `iam:*:any` grant; rerun
+`teamusers bootstrap-admin --username <name>` to restore the role and binding.
+
+## Password policies
+
+Password requirements are DB-backed rules stored in PostgreSQL and managed
+through the administrative password-policy API. Each rule may set
+`min_length` (from 1 through 1024 Unicode runes), `require_letter`,
+`require_upper`, `require_lower`, `require_digit`, and `require_symbol`.
+Nullable or omitted fields are unset rather than false, so they can fall
+through during resolution. Password policies target the generic subject model;
+see [Subject targeting](/guide/subjects) for the `(subject_kind, subject_id)`
+model and its membership and role-binding traversal.
+
+A rule is a JSON record whose requirement fields are all optional. This rule
+targets the holders of one role and asks for twenty runes with every
+character class:
+
+```json
+{
+  "name": "platform administrators",
+  "priority": 100,
+  "subject_kind": "role",
+  "subject_id": "01JROLE…",
+  "min_length": 20,
+  "require_upper": true,
+  "require_lower": true,
+  "require_digit": true,
+  "require_symbol": true
+}
+```
+
+```sh
+curl --fail-with-body -sS -X POST "$IAM_BASE_URL/policies/password" \
+  -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"name":"platform administrators","priority":100,"subject_kind":"role","subject_id":"01JROLE…","min_length":20,"require_upper":true,"require_lower":true,"require_digit":true,"require_symbol":true}'
+```
+
+`PATCH /policies/password/{id}` changes individual fields; sending a
+requirement field as `null` unsets it so lower-priority rules and the default
+apply again:
+
+```sh
+curl --fail-with-body -sS -X PATCH "$IAM_BASE_URL/policies/password/01JPOLICY…" \
+  -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"require_symbol":null,"priority":200}'
+```
+
+When multiple rules match a user, rules are merged independently per field.
+The highest-priority rule that sets a field supplies that field; fields that no
+matching rule sets use the built-in default. The built-in default requires at
+least 12 Unicode runes, one letter, and one digit. It does not require an
+uppercase letter, lowercase letter, or symbol unless a matching rule sets that
+requirement.
+
+For example, when these three rules all match one user:
+
+| Rule target | Priority | Fields set |
+| --- | --- | --- |
+| Team `engineering` | 10 | `min_length: 16` |
+| User `alice` | 50 | `min_length: 24`, `require_digit: false` |
+| Role `iam-admin` | 100 | `require_symbol: true` |
+
+the resolved policy uses `min_length: 24` (the user rule outranks the team
+rule), `require_symbol: true` (only the role rule sets it),
+`require_digit: false` (explicitly relaxed by the user rule), and
+`require_letter: true` (from the built-in default, because no rule sets it).
+
+Adding or tightening a policy does not revalidate or invalidate an existing
+password. The new requirements are enforced the next time that user sets or
+changes a password.
+
+Password validation resolves the effective policy for the target user in
+invitation acceptance, password-reset completion, self-service password
+changes, administrator password-credential creation or rotation for an
+existing user, and the temporary password generated for an auto-created
+startup administrator. Public registration, CSV import, and administrative
+user creation (`password` or `initial_password`) use the built-in default
+instead. This is a documented limitation because those paths validate before
+the new user has memberships or role bindings.
+
+Frontends can pre-validate against the effective policy with authenticated
+query endpoints:
+
+- `GET /me/password-policy` accepts a user bearer or a `password_change` token
+  for users who must change their password, returning that user's resolved
+  policy for pre-validation before `POST /me/password`.
+- `GET /users/{id}/password-policy` requires `iam:users:any` and returns the
+  resolved policy for the administrative target user.
+
+```sh
+curl -fsS "$IAM_BASE_URL/me/password-policy" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+```json
+{"min_length":24,"require_letter":true,"require_upper":false,"require_lower":false,"require_digit":false,"require_symbol":true}
+```
+
+Both endpoints return only the merged policy fields, not the raw rules. The
+`iam:policies:any` permission is security-critical: policy administrators can
+create or change rules that weaken any account's password requirements. This is
+an accepted administrative risk; grant the permission only to trusted
+administrators.
+
+Invitation acceptance and password-reset confirmation validate passwords
+server-side but do not expose a policy-query endpoint for those token-based
+flows.
 
 ## TOTP and recovery credentials
 
@@ -77,9 +191,10 @@ consumption. The plaintext is carried only in the transactional notification
 outbox payload. The endpoint uses both client-IP and normalized-login buckets;
 confirmation uses a separate per-IP bucket to bound token guessing.
 
-Confirmation validates the configured password policy, replaces or creates the
-password credential, revokes every refresh session, and clears lockout state in
-one transaction. The reset-request audit action is written only when a token
+Confirmation validates the recovered user's effective password policy, replaces
+or creates the password credential, revokes every refresh session, and clears
+the `must_change` flag in one transaction. The reset-request audit action is
+written only when a token
 and notification were committed, so audit records do not turn the public
 request endpoint into an account-existence oracle. Reset completion is audited
 against the recovered user.
@@ -87,12 +202,12 @@ against the recovered user.
 Administrator-provisioned password credentials carry a `must_change` flag. A
 successful password login for such an account returns `403 password_change_required`
 and a ten-minute EdDSA `password_change` token instead of issuing an access or
-refresh token. The token is accepted only by
-`POST /me/password`, which still verifies the current password; all other
-endpoints reject it. Registration, invitation acceptance, and password-reset
-completion clear the flag. A successful forced change clears the flag and
-revokes every refresh session, so the user must sign in again with the new
-password.
+refresh token. The token is accepted by `POST /me/password`, which still verifies
+the current password, and by `GET /me/password-policy`, which lets users required
+to change their password pre-validate the effective policy. All other endpoints
+reject it. Registration, invitation acceptance, and password-reset completion
+clear the flag. A successful forced change clears the flag and revokes every
+refresh session, so the user must sign in again with the new password.
 
 ## Invitation tokens
 
@@ -105,9 +220,10 @@ cancelling an invitation deletes the user and cascaded token rows.
 
 The public acceptance endpoint is rate-limited per client IP and returns the
 generic `invalid_token` problem for unknown, expired, used, wrong-kind,
-cancelled, and already-active invitation tokens. It validates the configured
-password policy before creating the password credential. An invited account
-cannot log in before acceptance; password login returns `403 account_pending`.
+cancelled, and already-active invitation tokens. It validates the invited
+user's effective password policy before creating the password credential.
+An invited account cannot log in before acceptance; password login returns
+`403 account_pending`.
 
 Backup-code regeneration requires an authenticated user bearer, an active TOTP
 credential, and the current password. Ten new random codes replace the prior
@@ -124,12 +240,6 @@ successful login resets the counter and deadline. An attacker who can submit
 enough failures can deliberately lock a victim out (a lockout DoS); the
 per-IP limiter is a partial mitigation, not a complete defense against
 distributed sources.
-
-Passwords must meet the configured minimum Unicode length and contain at least
-one letter and one digit. The policy is enforced at registration and when an
-administrator creates or rotates a password credential; weak values are
-rejected rather than silently modified.
-
 
 ## Profile lifecycle and erasure
 

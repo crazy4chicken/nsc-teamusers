@@ -29,7 +29,6 @@ default**. The supported environment variables are:
 | `TEAMUSERS_REGISTRATION_MODE` | `closed` | Public registration mode: `closed`, `approval`, or `open`. |
 | `TEAMUSERS_LOCKOUT_THRESHOLD` | `5` | Failed password or MFA attempts before lockout. |
 | `TEAMUSERS_LOCKOUT_DURATION` | `15m` | Duration of an account lockout; parsed by `time.ParseDuration`. |
-| `TEAMUSERS_PASSWORD_MIN_LENGTH` | `12` | Minimum Unicode password length; passwords also require a letter and digit. |
 | `TEAMUSERS_WEBAUTHN_RP_ID` | `localhost` | WebAuthn relying-party ID. |
 | `TEAMUSERS_WEBAUTHN_ORIGIN` | `http://localhost` | WebAuthn browser origin. |
 
@@ -78,9 +77,27 @@ public deployment; the origin is verified during every ceremony.
 
 ### Initial identities
 
-The admin plane has no unauthenticated bootstrap endpoint. Create the first
-active user through an approved database seed or other controlled provisioning
-procedure, then grant that user the platform administrator role with the
+The admin plane has no unauthenticated bootstrap endpoint. Instead, startup
+performs an automatic bootstrap: when no user holds a platform administrative
+permission and no user named `admin` exists, the service creates an `admin`
+user with a random temporary password and prints it to stdout:
+
+```text
+bootstrap: created the initial admin account
+bootstrap:   username: admin
+bootstrap:   temporary password: xk7Qp2…
+bootstrap: the password must be changed on first login
+```
+
+Capture the password from the service log and rotate it immediately; the
+credential is marked `must_change`, so the first login returns `403
+password_change_required` and expects the change through `POST /me/password`
+with the supplied `password_change` token. On a replica fleet, exactly one
+instance wins the bootstrap race; concurrent losers detect the now-existing
+`admin` user and skip. The check reruns on every restart, so deleting every
+platform administrator brings the automatic bootstrap back.
+
+To grant platform administration to a specific existing user instead, use the
 idempotent store-direct CLI command:
 
 ```sh
@@ -88,10 +105,16 @@ export TEAMUSERS_CONNECTION_STRING='postgres://...'
 teamusers bootstrap-admin --username alice
 ```
 
-The command ensures the eight `iam:*` permission keys, the platform-scoped
-`iam-admin` role, and the user binding. It fails with a clear error when the
-username does not exist and is safe to rerun. It does not create users or grant
-administrative access at runtime.
+The command ensures the nine enumerated `iam:<area>:any` permission keys and
+the `iam:*:any` wildcard, the platform-scoped `iam-admin` role, and the user
+binding. It fails with a clear error when the username does not exist and is
+safe to rerun. `iam:*:any` is a platform wildcard covering current and future
+IAM areas at the `:any` scope. It does not create users or grant administrative
+access at runtime.
+
+On each normal service startup, permission reconciliation registers missing
+keys and restores missing grants on the existing `iam-admin` role, keeping
+upgraded deployments working.
 
 An administrator can remove their own last `iam:*:any` grant, for example by deleting their own role binding. If that happens, recover access by rerunning `teamusers bootstrap-admin --username <name>`; the idempotent command restores the platform administrator role, permissions, and binding.
 
@@ -202,7 +225,9 @@ request. Administrator-provisioned password credentials are marked
 `must_change`; the first valid password login returns `403 password_change_required`
 with a ten-minute `password_change` token rather than tokens for API access. The
 client must send that token as the bearer on `POST /me/password` together with
-the current and replacement passwords. Only that endpoint accepts the token.
+the current and replacement passwords. Only that endpoint and
+`GET /me/password-policy` (policy pre-validation before the change) accept the
+token.
 Registration, invitation acceptance, and password-reset completion do not set
 `must_change`. A successful change clears
 the flag, revokes all refresh sessions, and requires a fresh login. An

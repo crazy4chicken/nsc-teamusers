@@ -208,6 +208,8 @@ func adminPermissionArea(path string) string {
 	switch segments[0] {
 	case "invitations", "users":
 		return "users"
+	case "policies":
+		return "policies"
 	case "teams":
 		return "teams"
 	case "groups":
@@ -458,6 +460,7 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 		r.Post("/batch", h.batchUserStatus)
 		r.Post("/import", h.importUsers)
 		r.Get("/{id}", h.getUser)
+		r.Get("/{id}/password-policy", h.getUserPasswordPolicy)
 		r.Patch("/{id}", h.patchUser)
 		r.Delete("/{id}", h.deleteUser)
 		r.Post("/{id}/disable", h.disableUser)
@@ -486,6 +489,11 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 		r.Delete("/{id}/members", h.deleteMember)
 		r.Delete("/{id}/members/{userID}", h.deleteMember)
 	})
+	router.Get("/policies/password", h.listPasswordPolicies)
+	router.Post("/policies/password", h.createPasswordPolicy)
+	router.Get("/policies/password/{id}", h.getPasswordPolicy)
+	router.Patch("/policies/password/{id}", h.patchPasswordPolicy)
+	router.Delete("/policies/password/{id}", h.deletePasswordPolicy)
 	router.Route("/roles", func(r chi.Router) {
 		r.Get("/", h.listRoles)
 		r.Post("/", h.createRole)

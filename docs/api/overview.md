@@ -6,7 +6,7 @@ Use this API when an application needs a small identity and authorization servic
 
 - **Public authentication plane**: `/auth/*` and `/.well-known/jwks.json` handle registration, verification, login, token rotation, password recovery, invitations, and passkey login.
 - **Self-service plane**: `/me/*` is for the currently authenticated user. It never accepts a service subject and never exposes password hashes, TOTP seeds, backup-code digests, or passkey public-key material.
-- **Administrative plane**: `/users*`, `/teams*`, `/groups*`, `/roles*`, `/permissions*`, `/bindings*`, `/audit*`, and `/invitations*` are protected by a user bearer and the matching `iam:*` permission.
+- **Administrative plane**: `/users*`, `/teams*`, `/groups*`, `/roles*`, `/permissions*`, `/policies*`, `/bindings*`, `/audit*`, and `/invitations*` are protected by a user bearer and the matching `iam:*` permission.
 - **Service authorization plane**: `/authz/*` is service-only. It evaluates a user's effective grants for an application resource and returns a fail-closed decision.
 
 The per-area API reference pages are native VitePress pages derived at build time from the canonical OpenAPI document - for example [authentication](./reference/authentication), [self-service](./reference/self-service), and [permissions](./reference/permissions). Do not hand-edit generated reference output.

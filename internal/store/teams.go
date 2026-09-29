@@ -62,7 +62,19 @@ func UpdateTeam(ctx context.Context, q Q, team Team) (Team, error) {
 }
 
 func DeleteTeam(ctx context.Context, q Q, id string) error {
-	_, err := q.Exec(ctx, `DELETE FROM teams WHERE id = $1`, id)
+	_, err := q.Exec(ctx, `
+		DELETE FROM password_policies
+		WHERE (subject_kind = 'team' AND subject_id = $1)
+		   OR (subject_kind = 'group' AND subject_id IN (
+			SELECT id FROM groups WHERE team_id = $1
+		   ))
+		   OR (subject_kind = 'role' AND subject_id IN (
+			SELECT id FROM roles WHERE team_id = $1
+		   ))`, id)
+	if err != nil {
+		return err
+	}
+	_, err = q.Exec(ctx, `DELETE FROM teams WHERE id = $1`, id)
 	return err
 }
 
@@ -119,6 +131,9 @@ func UpdateGroup(ctx context.Context, q Q, group Group) (Group, error) {
 }
 
 func DeleteGroup(ctx context.Context, q Q, id string) error {
+	if err := DeletePasswordPoliciesForSubject(ctx, q, "group", id); err != nil {
+		return err
+	}
 	_, err := q.Exec(ctx, `DELETE FROM groups WHERE id = $1`, id)
 	return err
 }

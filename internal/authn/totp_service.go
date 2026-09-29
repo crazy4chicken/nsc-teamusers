@@ -29,6 +29,7 @@ const backupCodeAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 func (s *Service) MeRoutes() chi.Router {
 	return httpapi.NewMeRouter(s.Middleware(), httpapi.MeHandlers{
 		Profile:                   s.profile,
+		PasswordPolicy:            s.passwordPolicy,
 		PatchProfile:              s.patchProfile,
 		ChangePassword:            s.changePassword,
 		ChangeEmail:               s.changeEmail,

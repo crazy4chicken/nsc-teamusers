@@ -12,7 +12,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
-	"teamusers/internal/config"
 	"teamusers/internal/passwd"
 	"teamusers/internal/store"
 )
@@ -54,6 +53,20 @@ func (h *adminHandler) getUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, user)
 }
 
+func (h *adminHandler) getUserPasswordPolicy(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if _, err := store.GetUser(r.Context(), h.q, id); err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	policy, err := ResolvePasswordPolicy(r.Context(), h.q, id, time.Now().UTC())
+	if err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, policy)
+}
+
 func (h *adminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 	var request createUserRequest
 	if !decodeJSON(w, r, &request) {
@@ -68,7 +81,7 @@ func (h *adminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 	if password == "" {
 		password = request.InitialPassword
 	}
-	if password != "" && !config.ValidatePassword(password, h.cfg.PasswordMinLength) {
+	if password != "" && !passwd.DefaultPolicy().Validate(password) {
 		WriteProblem(w, r, http.StatusUnprocessableEntity, "weak_password", "weak_password")
 		return
 	}
@@ -324,9 +337,16 @@ func (h *adminHandler) createUserCredential(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	plaintext := request.Password
-	if request.Kind == "password" && !config.ValidatePassword(plaintext, h.cfg.PasswordMinLength) {
-		WriteProblem(w, r, http.StatusUnprocessableEntity, "weak_password", "weak_password")
-		return
+	if request.Kind == "password" {
+		policy, err := ResolvePasswordPolicy(r.Context(), h.q, id, time.Now().UTC())
+		if err != nil {
+			WriteStoreProblem(w, r, err)
+			return
+		}
+		if !policy.Validate(plaintext) {
+			WriteProblem(w, r, http.StatusUnprocessableEntity, "weak_password", "weak_password")
+			return
+		}
 	}
 	if request.Kind == "service" {
 		plaintext = secret

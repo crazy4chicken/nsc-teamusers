@@ -1,7 +1,6 @@
 package authn
 
 import (
-	"teamusers/internal/config"
 	"teamusers/internal/passwd"
 )
 
@@ -23,10 +22,4 @@ func newDummyPasswordHash() string {
 
 func passwordHashNeedsRehash(encoded string) bool {
 	return passwd.NeedsRehash(encoded)
-}
-
-// ValidatePassword applies the configured minimum length and alphanumeric
-// character-class requirements.
-func ValidatePassword(password string, minLength int) bool {
-	return config.ValidatePassword(password, minLength)
 }

@@ -28,6 +28,7 @@ import (
 	auditlog "teamusers/internal/audit"
 	"teamusers/internal/config"
 	"teamusers/internal/httpapi"
+	"teamusers/internal/passwd"
 	"teamusers/internal/store"
 )
 
@@ -141,12 +142,13 @@ func (s *Service) Routes() chi.Router {
 }
 
 // Middleware verifies an access JWT, checks that its subject remains active,
-// and injects the HTTP API subject used by the admin plane. Only POST
-// /me/password additionally accepts a password_change token.
+// and injects the HTTP API subject used by the admin plane. POST /me/password
+// and GET /me/password-policy also accept password_change tokens.
 func (s *Service) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodPost && r.URL.Path == "/me/password" {
+			if (r.Method == http.MethodPost && r.URL.Path == "/me/password") ||
+				(r.Method == http.MethodGet && r.URL.Path == "/me/password-policy") {
 				if raw, ok := bearerToken(r.Header.Get("Authorization")); ok {
 					if userID, err := s.parsePasswordChangeToken(raw); err == nil {
 						user, err := store.GetUser(r.Context(), s.q, userID)
@@ -250,7 +252,7 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "email must be a valid address")
 		return
 	}
-	if !ValidatePassword(request.Password, s.cfg.PasswordMinLength) {
+	if !passwd.DefaultPolicy().Validate(request.Password) {
 		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
 		return
 	}
@@ -395,7 +397,11 @@ func (s *Service) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		if user.Status != "invited" || user.Email == nil || !strings.EqualFold(strings.TrimSpace(*user.Email), strings.TrimSpace(invitation.Email)) {
 			return store.ErrNotFound
 		}
-		if !ValidatePassword(request.Password, s.cfg.PasswordMinLength) {
+		policy, err := httpapi.ResolvePasswordPolicy(ctx, tx, userID, s.now())
+		if err != nil {
+			return err
+		}
+		if !policy.Validate(request.Password) {
 			return errWeakInvitePassword
 		}
 		passwordHash, err := HashPassword(request.Password)
@@ -530,7 +536,11 @@ func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		userID = consumedUserID
-		if !ValidatePassword(request.NewPassword, s.cfg.PasswordMinLength) {
+		policy, err := httpapi.ResolvePasswordPolicy(ctx, tx, userID, s.now())
+		if err != nil {
+			return err
+		}
+		if !policy.Validate(request.NewPassword) {
 			return errWeakPasswordReset
 		}
 		newHash, err := HashPassword(request.NewPassword)

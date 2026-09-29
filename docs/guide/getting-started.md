@@ -59,18 +59,42 @@ write access.
 
 ## Bootstrap the first administrator
 
-`bootstrap-admin` does not create a user and has no unauthenticated HTTP
-alternative. Provision an initial active user through an approved database seed
-or another controlled provisioning process, then run the idempotent command:
+A fresh deployment needs no database seeding. On startup, when no user holds
+a platform administrative permission and no user named `admin` exists, the
+service creates an `admin` user with a random temporary password and prints it
+to the console:
+
+```text
+bootstrap: created the initial admin account
+bootstrap:   username: admin
+bootstrap:   temporary password: xk7Qp2…
+bootstrap: the password must be changed on first login
+```
+
+The temporary credential is marked `must_change`: the first password login is
+answered with `403 password_change_required` and a ten-minute
+`password_change` token, so complete the change through `POST /me/password`
+right after that first login attempt. The temporary password appears only in
+the service's stdout; treat the deployment log as secret material until the
+rotation is done.
+
+To promote an existing user to platform administrator instead, or to recover
+after the last administrative grant was removed, run the idempotent command:
 
 ```sh
 export TEAMUSERS_CONNECTION_STRING='postgres://<user>:<password>@127.0.0.1:5432/teamusers?sslmode=disable'
 ./teamusers bootstrap-admin --username alice
 ```
 
-The command ensures the eight platform `iam:*:any` permissions, the
-platform-scoped `iam-admin` role, and a binding for `alice`. It is safe to run
-again. Keep the database credentials and initial user's password under the same
+The command ensures the nine enumerated platform `iam:<area>:any` permissions
+and the `iam:*:any` wildcard, the platform-scoped `iam-admin` role, and a binding for
+`alice`. The wildcard covers current and future IAM areas at the `:any` scope.
+It is safe to run again; it never creates users, and the admin plane has no
+unauthenticated HTTP bootstrap endpoint. On normal service startup, permission
+reconciliation restores missing registrations and grants, so upgraded
+deployments continue to work with the complete set.
+
+Keep the database credentials and initial user's password under the same
 out-of-band controls as other production secrets.
 
 ## First login
@@ -92,6 +116,12 @@ admin and self-service requests. If TOTP is enabled, password login returns a
 short-lived MFA challenge; complete it at `POST /auth/login/mfa` with a current
 TOTP or one-time backup code before using the returned tokens.
 
+If the account was provisioned with a temporary password (the automatic
+bootstrap or an administrator-set password), login instead returns `403
+password_change_required` with a `password_change` token; call
+`POST /me/password` with that token as the bearer to set a new password before
+continuing.
+
 ## Configuration summary
 
 Configuration precedence is **CLI flag > environment variable > default**. The
@@ -106,6 +136,5 @@ table, production guidance, and secret-handling requirements.
 | `TEAMUSERS_LISTEN_PORT` | `0` | HTTP port; Nekostick can supply its leased `PORT`. |
 | `TEAMUSERS_KEY_DIR` | `./data/keys` | Ed25519 private keys, public JWKs, and `ACTIVE`. |
 | `TEAMUSERS_REGISTRATION_MODE` | `closed` | Public registration mode: `closed`, `approval`, or `open`. |
-| `TEAMUSERS_PASSWORD_MIN_LENGTH` | `12` | Minimum Unicode password length; a letter and digit are also required. |
 | `TEAMUSERS_WEBAUTHN_RP_ID` | `localhost` | WebAuthn relying-party ID. |
 | `TEAMUSERS_WEBAUTHN_ORIGIN` | `http://localhost` | WebAuthn browser origin. |

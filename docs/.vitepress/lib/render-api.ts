@@ -66,7 +66,7 @@ export function renderApiReferencePaths(): ApiReferencePath[] {
     .sort(compareStrings)
     .map((tag) => ({
       params: {
-        tag: tag.toLowerCase(),
+        tag: tag.toLowerCase().replaceAll(' ', '-'),
         title: `${tag} API Reference`
       },
       content: renderTag(tag, routesByTag.get(tag) ?? [])

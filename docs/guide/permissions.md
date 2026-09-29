@@ -13,11 +13,19 @@ scope is a platform grant and is valid for every administrative area. The
 - `iam:groups:any` / `iam:groups:team`
 - `iam:roles:any` / `iam:roles:team`
 - `iam:bindings:any` / `iam:bindings:team`
+- `iam:policies:any` — Manage password policies. This is security-critical:
+  granting it can weaken any account's password requirements.
+- `iam:*:any` — Platform wildcard for every current and future
+  `iam:<area>:any` permission.
 
-`users`, `audit`, `sessions`, and `permissions` are platform-only areas. Their
-`:team` keys are rejected by permission-key validation. A team-scoped admin
-therefore cannot use a team grant to access those areas; it needs the matching
-`:any` grant.
+`iam:*:any` covers future IAM areas at the `:any` scope; it does not grant
+team-scoped or other non-`:any` keys. The `iam:policies:any` risk is an
+accepted administrative trade-off, so grant it only to trusted administrators.
+
+`users`, `audit`, `sessions`, `permissions`, and `policies` are platform-only
+areas. Their `:team` keys are rejected by permission-key validation. A
+team-scoped admin therefore cannot use a team grant to access those areas; it
+needs the matching `:any` grant.
 
 ## Resolution
 

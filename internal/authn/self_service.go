@@ -15,7 +15,6 @@ import (
 
 	auditlog "teamusers/internal/audit"
 	"teamusers/internal/authz"
-	"teamusers/internal/config"
 	"teamusers/internal/httpapi"
 	"teamusers/internal/store"
 )
@@ -86,6 +85,20 @@ func (s *Service) profile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, profileResponse(user))
+}
+
+func (s *Service) passwordPolicy(w http.ResponseWriter, r *http.Request) {
+	subject, ok := httpapi.SubjectFrom(r.Context())
+	if !ok || subject.UserID == "" {
+		writeUnauthorized(w, r)
+		return
+	}
+	policy, err := httpapi.ResolvePasswordPolicy(r.Context(), s.q, subject.UserID, s.now())
+	if err != nil {
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, policy)
 }
 
 func (s *Service) patchProfile(w http.ResponseWriter, r *http.Request) {
@@ -475,7 +488,12 @@ func (s *Service) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeAuthProblem(w, r, http.StatusUnauthorized, "invalid_credentials")
 		return
 	}
-	if !config.ValidatePassword(request.NewPassword, s.cfg.PasswordMinLength) {
+	policy, err := httpapi.ResolvePasswordPolicy(r.Context(), s.q, subject.UserID, s.now())
+	if err != nil {
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	if !policy.Validate(request.NewPassword) {
 		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
 		return
 	}

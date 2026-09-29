@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 )
 
 const (
@@ -28,17 +27,15 @@ const (
 	envTokenAudience         = "TEAMUSERS_TOKEN_AUDIENCE"
 	envLockoutThreshold      = "TEAMUSERS_LOCKOUT_THRESHOLD"
 	envLockoutDuration       = "TEAMUSERS_LOCKOUT_DURATION"
-	envPasswordMinLength     = "TEAMUSERS_PASSWORD_MIN_LENGTH"
 	envWebAuthnRPID          = "TEAMUSERS_WEBAUTHN_RP_ID"
 	envWebAuthnOrigin        = "TEAMUSERS_WEBAUTHN_ORIGIN"
 	envTrustedProxies        = "TEAMUSERS_TRUSTED_PROXIES"
 
-	DefaultLockoutThreshold  = 5
-	DefaultLockoutDuration   = 15 * time.Minute
-	DefaultPasswordMinLength = 12
-	DefaultTokenAudience     = "teamusers"
-	DefaultWebAuthnRPID      = "localhost"
-	DefaultWebAuthnOrigin    = "http://localhost"
+	DefaultLockoutThreshold = 5
+	DefaultLockoutDuration  = 15 * time.Minute
+	DefaultTokenAudience    = "teamusers"
+	DefaultWebAuthnRPID     = "localhost"
+	DefaultWebAuthnOrigin   = "http://localhost"
 )
 
 // Config is the process configuration. Values are resolved in flag, env, and
@@ -57,7 +54,6 @@ type Config struct {
 	TokenAudience         string         `json:"token_audience"`
 	LockoutThreshold      int            `json:"lockout_threshold"`
 	LockoutDuration       time.Duration  `json:"lockout_duration"`
-	PasswordMinLength     int            `json:"password_min_length"`
 	WebAuthnRPID          string         `json:"webauthn_rp_id"`
 	WebAuthnOrigin        string         `json:"webauthn_origin"`
 	TrustedProxies        []netip.Prefix `json:"trusted_proxies,omitempty"`
@@ -86,7 +82,6 @@ func Load(args ...string) (Config, error) {
 	tokenAudience := envOrDefault(envTokenAudience, DefaultTokenAudience)
 	lockoutThreshold := envOrDefault(envLockoutThreshold, strconv.Itoa(DefaultLockoutThreshold))
 	lockoutDuration := envOrDefault(envLockoutDuration, DefaultLockoutDuration.String())
-	passwordMinLength := envOrDefault(envPasswordMinLength, strconv.Itoa(DefaultPasswordMinLength))
 	webauthnRPID := envOrDefault(envWebAuthnRPID, DefaultWebAuthnRPID)
 	webauthnOrigin := envOrDefault(envWebAuthnOrigin, DefaultWebAuthnOrigin)
 	trustedProxies := envOrDefault(envTrustedProxies, "")
@@ -104,7 +99,6 @@ func Load(args ...string) (Config, error) {
 	fs.StringVar(&tokenAudience, "token-audience", tokenAudience, "JWT token audience")
 	fs.StringVar(&lockoutThreshold, "lockout-threshold", lockoutThreshold, "failed login attempts before account lockout")
 	fs.StringVar(&lockoutDuration, "lockout-duration", lockoutDuration, "account lockout duration")
-	fs.StringVar(&passwordMinLength, "password-min-length", passwordMinLength, "minimum password length")
 	fs.StringVar(&webauthnRPID, "webauthn-rp-id", webauthnRPID, "WebAuthn relying-party ID")
 	fs.StringVar(&webauthnOrigin, "webauthn-origin", webauthnOrigin, "WebAuthn relying-party origin")
 	fs.StringVar(&trustedProxies, "trusted-proxies", trustedProxies, "comma-separated trusted proxy CIDRs or IPs")
@@ -124,10 +118,6 @@ func Load(args ...string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid lockout duration %q: %w", lockoutDuration, err)
 	}
-	minLength, err := strconv.Atoi(strings.TrimSpace(passwordMinLength))
-	if err != nil {
-		return Config{}, fmt.Errorf("invalid password minimum length %q: %w", passwordMinLength, err)
-	}
 	parsedTrustedProxies, err := parseTrustedProxies(trustedProxies)
 	if err != nil {
 		return Config{}, err
@@ -137,9 +127,6 @@ func Load(args ...string) (Config, error) {
 	}
 	if duration <= 0 {
 		return Config{}, fmt.Errorf("lockout duration must be positive, got %s", duration)
-	}
-	if minLength < 1 {
-		return Config{}, fmt.Errorf("password minimum length must be positive, got %d", minLength)
 	}
 
 	cfg := Config{
@@ -156,7 +143,6 @@ func Load(args ...string) (Config, error) {
 		TokenAudience:         strings.TrimSpace(tokenAudience),
 		LockoutThreshold:      threshold,
 		LockoutDuration:       duration,
-		PasswordMinLength:     minLength,
 		WebAuthnRPID:          strings.TrimSpace(webauthnRPID),
 		WebAuthnOrigin:        strings.TrimSpace(webauthnOrigin),
 		TrustedProxies:        parsedTrustedProxies,
@@ -175,9 +161,6 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.LockoutDuration == 0 {
 		c.LockoutDuration = DefaultLockoutDuration
-	}
-	if c.PasswordMinLength == 0 {
-		c.PasswordMinLength = DefaultPasswordMinLength
 	}
 	if strings.TrimSpace(c.TokenAudience) == "" {
 		c.TokenAudience = DefaultTokenAudience
@@ -222,9 +205,6 @@ func (c Config) Validate() error {
 	}
 	if c.LockoutDuration < 0 {
 		return fmt.Errorf("lockout duration must not be negative, got %s", c.LockoutDuration)
-	}
-	if c.PasswordMinLength < 0 {
-		return fmt.Errorf("password minimum length must not be negative, got %d", c.PasswordMinLength)
 	}
 	return nil
 }
@@ -276,24 +256,6 @@ func (c Config) SlogLevel() slog.Level {
 	default:
 		return slog.LevelInfo
 	}
-}
-
-// ValidatePassword applies the shared password policy used by registration and
-// administrative password credential changes.
-func ValidatePassword(password string, minLength int) bool {
-	if minLength < 1 || len([]rune(password)) < minLength {
-		return false
-	}
-	var hasLetter, hasDigit bool
-	for _, runeValue := range password {
-		if unicode.IsLetter(runeValue) {
-			hasLetter = true
-		}
-		if unicode.IsDigit(runeValue) {
-			hasDigit = true
-		}
-	}
-	return hasLetter && hasDigit
 }
 
 func parseTrustedProxies(raw string) ([]netip.Prefix, error) {

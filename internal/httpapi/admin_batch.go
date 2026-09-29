@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"teamusers/internal/config"
 	"teamusers/internal/passwd"
 	"teamusers/internal/store"
 )
@@ -231,7 +230,7 @@ func (h *adminHandler) importUsers(w http.ResponseWriter, r *http.Request) {
 			results = append(results, result)
 			continue
 		}
-		if !config.ValidatePassword(record.Password, h.cfg.PasswordMinLength) {
+		if !passwd.DefaultPolicy().Validate(record.Password) {
 			result.Error = "weak_password"
 			results = append(results, result)
 			continue

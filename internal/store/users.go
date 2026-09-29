@@ -93,6 +93,9 @@ func AnonymizeUser(ctx context.Context, q Q, userID, username, email string) err
 }
 
 func DeleteUser(ctx context.Context, q Q, id string) error {
+	if err := DeletePasswordPoliciesForSubject(ctx, q, "user", id); err != nil {
+		return err
+	}
 	_, err := q.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
 	return err
 }

@@ -114,3 +114,20 @@ type OutboxEvent struct {
 	Payload     json.RawMessage `json:"payload"`
 	PublishedAt *time.Time      `json:"published_at,omitempty"`
 }
+
+// PasswordPolicy mirrors the password_policies table.
+type PasswordPolicy struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Priority      int       `json:"priority"`
+	SubjectKind   string    `json:"subject_kind"`
+	SubjectID     string    `json:"subject_id"`
+	MinLength     *int      `json:"min_length,omitempty"`
+	RequireLetter *bool     `json:"require_letter,omitempty"`
+	RequireUpper  *bool     `json:"require_upper,omitempty"`
+	RequireLower  *bool     `json:"require_lower,omitempty"`
+	RequireDigit  *bool     `json:"require_digit,omitempty"`
+	RequireSymbol *bool     `json:"require_symbol,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
