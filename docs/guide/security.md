@@ -9,21 +9,24 @@ outline: 2
 
 Access tokens are self-contained JWTs and are not revoked individually. Each
 token carries the configured `aud` claim (default `teamusers`) and remains
-usable until its ten-minute TTL expires, even when its refresh-token family is
-logged out or rotated. Administrative permission changes increment
-`users.perm_ver`; middleware rejects access tokens whose `perm_ver` no longer
-matches the current user row.
+usable until the configured access-token TTL (`TEAMUSERS_ACCESS_TOKEN_TTL`,
+10 minutes by default) expires, even when its refresh-token family is logged
+out or rotated. Administrative permission changes increment `users.perm_ver`;
+middleware rejects access tokens whose `perm_ver` no longer matches the
+current user row.
 
 Audience enforcement rejects tokens issued before the audience claim was
-deployed, but the ten-minute TTL means old tokens expire quickly after deploy;
-no token migration is needed.
+deployed, while tokens otherwise expire according to the access-token TTL
+applied at issuance (10 minutes by default); no token migration is needed.
 
 Refresh tokens are opaque, stored only as SHA-256 digests, and rotate
 atomically. Presenting a rotated token triggers refresh-token reuse detection
-and revokes the complete family. Every family has a 90-day absolute cap
-(`family_not_after`); rotation is rejected after that cap, so a user must log
-in again. Ordinary refresh rows also expire after their 30-day TTL and are
-removed by the hourly reaper.
+and revokes the complete family. Every family has an absolute cap configured
+by `TEAMUSERS_SESSION_FAMILY_TTL` (90 days by default; `family_not_after`), which
+must be at least the configured refresh-token TTL
+(`TEAMUSERS_REFRESH_TOKEN_TTL`, 30 days by default). Rotation is rejected
+after that cap, so a user must log in again. Ordinary refresh rows also expire
+after the configured refresh-token TTL and are removed by the hourly reaper.
 
 Introspection deliberately has two branches. Access-token introspection
 validates the JWT and the current active user but does not consult a refresh
@@ -41,7 +44,7 @@ The route family is resolved against the caller's current role bindings on each
 request (the plane is low QPS), and a missing `iam:*` key fails closed with
 `insufficient_permissions`.
 
-The nine enumerated administrative `iam:<area>:any` keys plus the
+The ten enumerated administrative `iam:<area>:any` keys plus the
 `iam:*:any` wildcard are provisioned explicitly by
 `teamusers bootstrap-admin --username <name>`. This command creates or
 reconciles the platform-scoped `iam-admin` role and its binding; there is no
@@ -201,9 +204,10 @@ against the recovered user.
 
 Administrator-provisioned password credentials carry a `must_change` flag. A
 successful password login for such an account returns `403 password_change_required`
-and a ten-minute EdDSA `password_change` token instead of issuing an access or
-refresh token. The token is accepted by `POST /me/password`, which still verifies
-the current password, and by `GET /me/password-policy`, which lets users required
+and an EdDSA `password_change` token using the configured access-token TTL
+(10 minutes by default) instead of issuing an access or refresh token. The
+token is accepted by `POST /me/password`, which still verifies the current
+password, and by `GET /me/password-policy`, which lets users required
 to change their password pre-validate the effective policy. All other endpoints
 reject it. Registration, invitation acceptance, and password-reset completion
 clear the flag. A successful forced change clears the flag and revokes every

@@ -222,6 +222,8 @@ func adminPermissionArea(path string) string {
 		return "bindings"
 	case "audit":
 		return "audit"
+	case "keys":
+		return "keys"
 	default:
 		return ""
 	}
@@ -382,9 +384,10 @@ func adminPermissionForPath(path string) string {
 }
 
 type adminHandler struct {
-	q     store.Q
-	audit *auditlog.Writer
-	cfg   config.Config
+	q          store.Q
+	audit      *auditlog.Writer
+	cfg        config.Config
+	keyRotator keyRotator
 }
 type adminProblemError struct {
 	status int
@@ -414,12 +417,12 @@ func writeValidationError(w http.ResponseWriter, r *http.Request, err error) boo
 }
 
 // NewAdminRouter constructs the protected administrative HTTP plane.
-func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler) http.Handler, cfg config.Config) chi.Router {
+func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler) http.Handler, cfg config.Config, keyRotator keyRotator) chi.Router {
 	if audit == nil {
 		audit = auditlog.NewWriter()
 	}
 	cfg = cfg.WithDefaults()
-	h := &adminHandler{q: q, audit: audit, cfg: cfg}
+	h := &adminHandler{q: q, audit: audit, cfg: cfg, keyRotator: keyRotator}
 	router := chi.NewRouter()
 	if authMW != nil {
 		router.Use(authMW)
@@ -514,6 +517,7 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 	router.Route("/audit", func(r chi.Router) {
 		r.Get("/", h.listAudit)
 	})
+	router.Post("/keys/rotate", h.rotateSigningKey)
 	return router
 }
 

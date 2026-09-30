@@ -27,12 +27,18 @@ const (
 	envTokenAudience         = "TEAMUSERS_TOKEN_AUDIENCE"
 	envLockoutThreshold      = "TEAMUSERS_LOCKOUT_THRESHOLD"
 	envLockoutDuration       = "TEAMUSERS_LOCKOUT_DURATION"
+	envAccessTokenTTL        = "TEAMUSERS_ACCESS_TOKEN_TTL"
+	envRefreshTokenTTL       = "TEAMUSERS_REFRESH_TOKEN_TTL"
+	envSessionFamilyTTL      = "TEAMUSERS_SESSION_FAMILY_TTL"
 	envWebAuthnRPID          = "TEAMUSERS_WEBAUTHN_RP_ID"
 	envWebAuthnOrigin        = "TEAMUSERS_WEBAUTHN_ORIGIN"
 	envTrustedProxies        = "TEAMUSERS_TRUSTED_PROXIES"
 
 	DefaultLockoutThreshold = 5
 	DefaultLockoutDuration  = 15 * time.Minute
+	DefaultAccessTokenTTL   = 10 * time.Minute
+	DefaultRefreshTokenTTL  = 720 * time.Hour
+	DefaultSessionFamilyTTL = 2160 * time.Hour
 	DefaultTokenAudience    = "teamusers"
 	DefaultWebAuthnRPID     = "localhost"
 	DefaultWebAuthnOrigin   = "http://localhost"
@@ -52,6 +58,9 @@ type Config struct {
 	NotificationSecret    string         `json:"notification_secret,omitempty"`
 	RegistrationMode      string         `json:"registration_mode"`
 	TokenAudience         string         `json:"token_audience"`
+	AccessTokenTTL        time.Duration  `json:"access_token_ttl"`
+	RefreshTokenTTL       time.Duration  `json:"refresh_token_ttl"`
+	SessionFamilyTTL      time.Duration  `json:"session_family_ttl"`
 	LockoutThreshold      int            `json:"lockout_threshold"`
 	LockoutDuration       time.Duration  `json:"lockout_duration"`
 	WebAuthnRPID          string         `json:"webauthn_rp_id"`
@@ -80,6 +89,9 @@ func Load(args ...string) (Config, error) {
 	notificationSecret := envOrDefault(envNotificationSecret, "")
 	registrationMode := envOrDefault(envRegistrationMode, "closed")
 	tokenAudience := envOrDefault(envTokenAudience, DefaultTokenAudience)
+	accessTokenTTL := envOrDefault(envAccessTokenTTL, DefaultAccessTokenTTL.String())
+	refreshTokenTTL := envOrDefault(envRefreshTokenTTL, DefaultRefreshTokenTTL.String())
+	sessionFamilyTTL := envOrDefault(envSessionFamilyTTL, DefaultSessionFamilyTTL.String())
 	lockoutThreshold := envOrDefault(envLockoutThreshold, strconv.Itoa(DefaultLockoutThreshold))
 	lockoutDuration := envOrDefault(envLockoutDuration, DefaultLockoutDuration.String())
 	webauthnRPID := envOrDefault(envWebAuthnRPID, DefaultWebAuthnRPID)
@@ -97,6 +109,9 @@ func Load(args ...string) (Config, error) {
 	fs.StringVar(&notificationSecret, "notification-secret", notificationSecret, "notification service signing secret")
 	fs.StringVar(&registrationMode, "registration-mode", registrationMode, "registration mode (closed, approval, open)")
 	fs.StringVar(&tokenAudience, "token-audience", tokenAudience, "JWT token audience")
+	fs.StringVar(&accessTokenTTL, "access-token-ttl", accessTokenTTL, "access token lifetime")
+	fs.StringVar(&refreshTokenTTL, "refresh-token-ttl", refreshTokenTTL, "refresh token lifetime")
+	fs.StringVar(&sessionFamilyTTL, "session-family-ttl", sessionFamilyTTL, "session family lifetime")
 	fs.StringVar(&lockoutThreshold, "lockout-threshold", lockoutThreshold, "failed login attempts before account lockout")
 	fs.StringVar(&lockoutDuration, "lockout-duration", lockoutDuration, "account lockout duration")
 	fs.StringVar(&webauthnRPID, "webauthn-rp-id", webauthnRPID, "WebAuthn relying-party ID")
@@ -117,6 +132,18 @@ func Load(args ...string) (Config, error) {
 	duration, err := time.ParseDuration(strings.TrimSpace(lockoutDuration))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid lockout duration %q: %w", lockoutDuration, err)
+	}
+	accessTTL, err := time.ParseDuration(strings.TrimSpace(accessTokenTTL))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid access token TTL %q: %w", accessTokenTTL, err)
+	}
+	refreshTTL, err := time.ParseDuration(strings.TrimSpace(refreshTokenTTL))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid refresh token TTL %q: %w", refreshTokenTTL, err)
+	}
+	familyTTL, err := time.ParseDuration(strings.TrimSpace(sessionFamilyTTL))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid session family TTL %q: %w", sessionFamilyTTL, err)
 	}
 	parsedTrustedProxies, err := parseTrustedProxies(trustedProxies)
 	if err != nil {
@@ -141,6 +168,9 @@ func Load(args ...string) (Config, error) {
 		NotificationSecret:    notificationSecret,
 		RegistrationMode:      strings.ToLower(strings.TrimSpace(registrationMode)),
 		TokenAudience:         strings.TrimSpace(tokenAudience),
+		AccessTokenTTL:        accessTTL,
+		RefreshTokenTTL:       refreshTTL,
+		SessionFamilyTTL:      familyTTL,
 		LockoutThreshold:      threshold,
 		LockoutDuration:       duration,
 		WebAuthnRPID:          strings.TrimSpace(webauthnRPID),
@@ -161,6 +191,15 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.LockoutDuration == 0 {
 		c.LockoutDuration = DefaultLockoutDuration
+	}
+	if c.AccessTokenTTL == 0 {
+		c.AccessTokenTTL = DefaultAccessTokenTTL
+	}
+	if c.RefreshTokenTTL == 0 {
+		c.RefreshTokenTTL = DefaultRefreshTokenTTL
+	}
+	if c.SessionFamilyTTL == 0 {
+		c.SessionFamilyTTL = DefaultSessionFamilyTTL
 	}
 	if strings.TrimSpace(c.TokenAudience) == "" {
 		c.TokenAudience = DefaultTokenAudience
@@ -205,6 +244,18 @@ func (c Config) Validate() error {
 	}
 	if c.LockoutDuration < 0 {
 		return fmt.Errorf("lockout duration must not be negative, got %s", c.LockoutDuration)
+	}
+	if c.AccessTokenTTL <= 0 {
+		return fmt.Errorf("access token TTL must be positive, got %s", c.AccessTokenTTL)
+	}
+	if c.RefreshTokenTTL <= 0 {
+		return fmt.Errorf("refresh token TTL must be positive, got %s", c.RefreshTokenTTL)
+	}
+	if c.SessionFamilyTTL <= 0 {
+		return fmt.Errorf("session family TTL must be positive, got %s", c.SessionFamilyTTL)
+	}
+	if c.SessionFamilyTTL < c.RefreshTokenTTL {
+		return fmt.Errorf("session family TTL must be at least refresh token TTL, got %s < %s", c.SessionFamilyTTL, c.RefreshTokenTTL)
 	}
 	return nil
 }

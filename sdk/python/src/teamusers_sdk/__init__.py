@@ -1,11 +1,14 @@
 """Public API for the teamusers Python SDK."""
 
 from .events import (
+    KEY_ROTATION_EVENT_SUBJECT,
     NATSSubscriptionError,
     NATSUnavailableError,
     PERMISSION_EVENT_SUBJECTS,
     PermissionSubscription,
+    SubscribeKeyRotations,
     SubscribePermissions,
+    subscribe_key_rotations,
     subscribe_permissions,
 )
 from .middleware import (
@@ -122,6 +125,7 @@ __all__ = [
     "PermissionsClient",
     "PermissionsError",
     "PERMISSION_EVENT_SUBJECTS",
+    "KEY_ROTATION_EVENT_SUBJECT",
     "Request",
     "RequestContext",
     "Require",
@@ -131,6 +135,7 @@ __all__ = [
     "Subject",
     "SubjectContext",
     "SubscribePermissions",
+    "SubscribeKeyRotations",
     "TeamusersError",
     "TokenClaimsError",
     "TokenKind",
@@ -147,5 +152,6 @@ __all__ = [
     "parse_permission",
     "require",
     "subscribe_permissions",
+    "subscribe_key_rotations",
     "validate_permission_key",
 ]

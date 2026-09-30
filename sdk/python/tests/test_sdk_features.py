@@ -22,6 +22,8 @@ from teamusers_sdk import (
     TokenClaimsError,
     UnauthorizedError,
     Verifier,
+    KEY_ROTATION_EVENT_SUBJECT,
+    subscribe_key_rotations,
 )
 
 
@@ -261,6 +263,44 @@ def test_middleware_errors_and_event_invalidation():
     assert fetched == 2
     assert isinstance(subscription, PermissionSubscription)
     subscription.Close()
+
+
+
+def test_key_rotation_event_refreshes_verifier_jwks():
+    previous_jwks, previous_token = _jwks_and_token(kid="rotation-previous")
+    next_jwks, next_token = _jwks_and_token(kid="rotation-next")
+    document = previous_jwks
+    fetched = 0
+
+    def fetcher(_url):
+        nonlocal fetched
+        fetched += 1
+        return document
+
+    verifier = Verifier("https://issuer.example.com", fetcher=fetcher)
+    assert verifier.verify(previous_token).subject == "usr_1"
+    assert fetched == 1
+
+    class Source:
+        def __init__(self):
+            self.callbacks = {}
+
+        def subscribe(self, subject, callback):
+            self.callbacks[subject] = callback
+
+        def emit(self, subject, payload):
+            self.callbacks[subject](payload)
+
+    source = Source()
+    subscription = subscribe_key_rotations(verifier, source)
+    document = {"keys": previous_jwks["keys"] + next_jwks["keys"]}
+    source.emit(KEY_ROTATION_EVENT_SUBJECT, {"kid": "rotation-next"})
+
+    assert fetched == 2
+    assert verifier.verify(next_token).subject == "usr_1"
+    assert fetched == 2
+    assert subscription is not None
+    subscription.close()
 
 
 def _claims():

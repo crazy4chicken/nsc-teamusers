@@ -6,9 +6,11 @@ import {
   Claims,
   CompileCondition,
   ForbiddenError,
+  KEY_ROTATION_EVENT_SUBJECT,
   MatchKeys,
   PermissionsClient,
   Require,
+  subscribeKeyRotations,
   TokenClaimsError,
   TokenVerificationError,
   UnauthorizedError,
@@ -242,6 +244,56 @@ test("event subscription invalidates affected users", async () => {
   assert.equal(fetchCount, 1);
   await callbacks.get("iam.perm.changed")?.({ data: JSON.stringify({ user_ids: ["usr_1"] }) });
   await permissions.get("usr_1", 2);
+  assert.equal(fetchCount, 2);
+  await subscription?.close();
+});
+
+test("key rotation events refresh the verifier JWKS cache", async () => {
+  const { privateKey: previousPrivate, publicKey: previousPublic } = await generateKeyPair("EdDSA");
+  const previousJWK = await exportJWK(previousPublic);
+  previousJWK.kid = "rotation-previous";
+  previousJWK.alg = "EdDSA";
+  previousJWK.use = "sig";
+  const { privateKey: nextPrivate, publicKey: nextPublic } = await generateKeyPair("EdDSA");
+  const nextJWK = await exportJWK(nextPublic);
+  nextJWK.kid = "rotation-next";
+  nextJWK.alg = "EdDSA";
+  nextJWK.use = "sig";
+
+  let jwks: JSONWebKeySet = { keys: [previousJWK] };
+  let fetchCount = 0;
+  const verifier = new Verifier("https://issuer.example/", {
+    fetcher: async () => {
+      fetchCount += 1;
+      return { ok: true, status: 200, json: async () => jwks };
+    },
+  });
+  const tokenFor = (privateKey: typeof previousPrivate, kid: string) =>
+    new SignJWT({ kind: "user", team: "platform", perm_ver: 1 })
+      .setProtectedHeader({ alg: "EdDSA", kid })
+      .setIssuer("teamusers")
+      .setAudience("teamusers")
+      .setSubject("sdk-user")
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(privateKey);
+  await verifier.verify(await tokenFor(previousPrivate, "rotation-previous"));
+  assert.equal(fetchCount, 1);
+
+  const callbacks = new Map<string, (message: unknown) => void | Promise<void>>();
+  const source = {
+    subscribe(subject: string, callback: (message: unknown) => void | Promise<void>) {
+      callbacks.set(subject, callback);
+      return { unsubscribe() {} };
+    },
+  };
+  const subscription = await subscribeKeyRotations(verifier, source);
+  jwks = { keys: [previousJWK, nextJWK] };
+  await callbacks.get(KEY_ROTATION_EVENT_SUBJECT)?.({});
+
+  assert.equal(fetchCount, 2);
+  const claims = await verifier.verify(await tokenFor(nextPrivate, "rotation-next"));
+  assert.equal(claims.subject, "sdk-user");
   assert.equal(fetchCount, 2);
   await subscription?.close();
 });

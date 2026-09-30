@@ -141,7 +141,7 @@ func newIntegrationStackWithModeAndConfig(t *testing.T, registrationMode string,
 	authRoutes := authService.Routes()
 	meRoutes := authService.MeRoutes()
 	authzRoutes := authz.NewRouter(database.pool, authService.Middleware())
-	adminRoutes := httpapi.NewAdminRouter(database.pool, auditWriter, authService.Middleware(), cfg)
+	adminRoutes := httpapi.NewAdminRouter(database.pool, auditWriter, authService.Middleware(), cfg, authService)
 	server.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/authz/") || r.URL.Path == "/authz" {
 			authzRoutes.ServeHTTP(w, r)
@@ -331,6 +331,7 @@ var testBootstrapAdminPermissionKeys = []string{
 	"iam:audit:any",
 	"iam:sessions:any",
 	"iam:policies:any",
+	"iam:keys:any",
 	"iam:*:any",
 }
 

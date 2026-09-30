@@ -1,6 +1,7 @@
 package authn
 
 import (
+	"teamusers/internal/config"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -184,6 +185,7 @@ func newJWTTestService(t *testing.T, now time.Time) *Service {
 		t.Fatalf("create JWT test key: %v", err)
 	}
 	return &Service{
+		cfg:       config.Config{AccessTokenTTL: config.DefaultAccessTokenTTL},
 		keys:      map[string]signingKey{key.kid: key},
 		activeKid: key.kid,
 		now:       func() time.Time { return now },
@@ -227,4 +229,16 @@ func replaceJWTHeaderAlgorithm(t *testing.T, raw, algorithm string) string {
 	}
 	parts[0] = base64.RawURLEncoding.EncodeToString(header)
 	return strings.Join(parts, ".")
+}
+
+func TestNewRejectsInvalidTokenTTLAfterApplyingDefaults(t *testing.T) {
+	_, err := New(Deps{Config: config.Config{
+		ListenAddress:  "127.0.0.1",
+		LogLevel:       "info",
+		KeyDir:         t.TempDir(),
+		AccessTokenTTL: -time.Second,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "access token TTL must be positive") {
+		t.Fatalf("New() error = %v, want invalid access-token TTL rejection", err)
+	}
 }

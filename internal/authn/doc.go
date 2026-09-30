@@ -350,7 +350,7 @@ func init() {
 		authRoutes := service.Routes()
 		meRoutes := service.MeRoutes()
 		authzRoutes := authz.NewRouter(q, service.Middleware())
-		adminRoutes := httpapi.NewAdminRouter(q, auditWriter, service.Middleware(), cfg)
+		adminRoutes := httpapi.NewAdminRouter(q, auditWriter, service.Middleware(), cfg, service)
 
 		server.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {

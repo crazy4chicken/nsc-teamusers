@@ -106,12 +106,14 @@ injected) > defaults. Current env vars: `TEAMUSERS_CONNECTION_STRING`,
 `TEAMUSERS_NOTIFICATION_ENDPOINTS`, `TEAMUSERS_NOTIFICATION_SECRET`,
 `TEAMUSERS_REGISTRATION_MODE`, `TEAMUSERS_TOKEN_AUDIENCE`,
 `TEAMUSERS_TRUSTED_PROXIES`, `TEAMUSERS_WEBAUTHN_ORIGIN`,
-`TEAMUSERS_WEBAUTHN_RP_ID`, `TEAMUSERS_LOCKOUT_THRESHOLD`,
-`TEAMUSERS_LOCKOUT_DURATION`, `TEAMUSERS_LOG_LEVEL`.
+`TEAMUSERS_LOCKOUT_DURATION`, `TEAMUSERS_LOG_LEVEL`,
+`TEAMUSERS_ACCESS_TOKEN_TTL`, `TEAMUSERS_REFRESH_TOKEN_TTL`,
+`TEAMUSERS_SESSION_FAMILY_TTL` (defaults 10m/720h/2160h; family >= refresh).
 
-Known gap: token/session TTLs are constants in
-`internal/authn/service.go` (access 10 min, refresh 30 d, family max 90 d),
-not yet configurable — tracked in PLAN.md.
+Signing-key rotation: `POST /keys/rotate` (admin plane, `iam:keys:any`).
+Retired keys stay in JWKS until `rotated_at + 2*max(access, mfa,
+password-change TTL)`; multi-replica procedure is one POST + rolling restart
+(see `docs/guide/operations.md`).
 
 ## Planning docs
 

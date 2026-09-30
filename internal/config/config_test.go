@@ -1,0 +1,117 @@
+package config
+
+import (
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+func isolateLoadEnvironment(t *testing.T) {
+	t.Helper()
+	names := []string{
+		envConnectionString, envListenAddress, envListenPort, envNodeID, envLogLevel,
+		envKeyDir, envNATSURL, envNotificationEndpoints, envNotificationSecret,
+		envRegistrationMode, envTokenAudience, envLockoutThreshold, envLockoutDuration,
+		envAccessTokenTTL, envRefreshTokenTTL, envSessionFamilyTTL,
+		envWebAuthnRPID, envWebAuthnOrigin, envTrustedProxies, "HOST", "PORT",
+	}
+	type savedValue struct {
+		name  string
+		value string
+		set   bool
+	}
+	saved := make([]savedValue, 0, len(names))
+	for _, name := range names {
+		value, set := os.LookupEnv(name)
+		saved = append(saved, savedValue{name: name, value: value, set: set})
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("unset %s: %v", name, err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, entry := range saved {
+			var err error
+			if entry.set {
+				err = os.Setenv(entry.name, entry.value)
+			} else {
+				err = os.Unsetenv(entry.name)
+			}
+			if err != nil {
+				t.Errorf("restore %s: %v", entry.name, err)
+			}
+		}
+	})
+}
+
+func TestLoadUsesDefaultTokenTTLs(t *testing.T) {
+	isolateLoadEnvironment(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load default config: %v", err)
+	}
+	if cfg.AccessTokenTTL != DefaultAccessTokenTTL || cfg.RefreshTokenTTL != DefaultRefreshTokenTTL || cfg.SessionFamilyTTL != DefaultSessionFamilyTTL {
+		t.Fatalf("token TTL defaults = (%s, %s, %s), want (%s, %s, %s)", cfg.AccessTokenTTL, cfg.RefreshTokenTTL, cfg.SessionFamilyTTL, DefaultAccessTokenTTL, DefaultRefreshTokenTTL, DefaultSessionFamilyTTL)
+	}
+}
+
+func TestLoadTokenTTLFlagOverridesEnvironment(t *testing.T) {
+	isolateLoadEnvironment(t)
+	t.Setenv(envAccessTokenTTL, "2m")
+	t.Setenv(envRefreshTokenTTL, "3h")
+	t.Setenv(envSessionFamilyTTL, "4h")
+
+	cfg, err := Load("--access-token-ttl", "5m", "--session-family-ttl=6h")
+	if err != nil {
+		t.Fatalf("load token TTLs: %v", err)
+	}
+	if cfg.AccessTokenTTL != 5*time.Minute || cfg.RefreshTokenTTL != 3*time.Hour || cfg.SessionFamilyTTL != 6*time.Hour {
+		t.Fatalf("resolved token TTLs = (%s, %s, %s), want (5m, 3h, 6h)", cfg.AccessTokenTTL, cfg.RefreshTokenTTL, cfg.SessionFamilyTTL)
+	}
+}
+
+func TestLoadRejectsInvalidTokenTTLDuration(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{name: "access", args: []string{"--access-token-ttl", "not-a-duration"}, message: "invalid access token TTL"},
+		{name: "refresh", args: []string{"--refresh-token-ttl", "not-a-duration"}, message: "invalid refresh token TTL"},
+		{name: "family", args: []string{"--session-family-ttl", "not-a-duration"}, message: "invalid session family TTL"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isolateLoadEnvironment(t)
+			if _, err := Load(tt.args...); err == nil || !strings.Contains(err.Error(), tt.message) {
+				t.Fatalf("Load() error = %v, want %q", err, tt.message)
+			}
+		})
+	}
+}
+
+func TestLoadRequiresPositiveTokenTTLs(t *testing.T) {
+	isolateLoadEnvironment(t)
+	if _, err := Load("--access-token-ttl=0s"); err == nil || !strings.Contains(err.Error(), "access token TTL must be positive") {
+		t.Fatalf("Load() error = %v, want non-positive access TTL rejection", err)
+	}
+}
+
+func TestLoadRequiresSessionFamilyAtLeastRefreshTTL(t *testing.T) {
+	t.Run("rejects shorter family", func(t *testing.T) {
+		isolateLoadEnvironment(t)
+		if _, err := Load("--refresh-token-ttl=2h", "--session-family-ttl=1h"); err == nil || !strings.Contains(err.Error(), "session family TTL must be at least refresh token TTL") {
+			t.Fatalf("Load() error = %v, want shorter-family rejection", err)
+		}
+	})
+	t.Run("accepts equal lifetime", func(t *testing.T) {
+		isolateLoadEnvironment(t)
+		cfg, err := Load("--refresh-token-ttl=2h", "--session-family-ttl=2h")
+		if err != nil {
+			t.Fatalf("load equal refresh and family TTLs: %v", err)
+		}
+		if cfg.SessionFamilyTTL != cfg.RefreshTokenTTL {
+			t.Fatalf("session family TTL = %s, refresh TTL = %s", cfg.SessionFamilyTTL, cfg.RefreshTokenTTL)
+		}
+	})
+}

@@ -115,7 +115,7 @@ func (s *Service) signMFAToken(userID string) (string, error) {
 			return "", err
 		}
 	}
-	key, ok := s.keys[s.activeKid]
+	key, ok := s.activeSigningKey()
 	if !ok {
 		return "", errors.New("active signing key unavailable")
 	}

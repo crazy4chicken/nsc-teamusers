@@ -3,12 +3,18 @@
 package iam
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/nats-io/nats.go"
 )
+
+const keyRotationEventSubject = "iam.key.rotated"
+
+const keyRotationJWKSRefreshTimeout = 10 * time.Second
 
 var permissionEventSubjects = []string{
 	"iam.perm.changed",
@@ -72,4 +78,36 @@ func subscribePermissionsNATS(client *PermissionsClient, natsURL string, handler
 		return nil, errors.New("flush NATS subscriptions: " + err.Error())
 	}
 	return &PermissionSubscription{close: closeSubscriptions}, nil
+}
+
+func subscribeKeyRotationsNATS(verifier *Verifier, natsURL string) (*PermissionSubscription, error) {
+	connection, err := nats.Connect(natsURL)
+	if err != nil {
+		return nil, err
+	}
+	subscription, err := connection.Subscribe(keyRotationEventSubject, func(_ *nats.Msg) {
+		ctx, cancel := context.WithTimeout(context.Background(), keyRotationJWKSRefreshTimeout)
+		defer cancel()
+		_ = verifier.refreshJWKS(ctx)
+	})
+	if err != nil {
+		connection.Close()
+		return nil, err
+	}
+	closeSubscription := func() error {
+		var closeErr error
+		if err := subscription.Unsubscribe(); err != nil {
+			closeErr = err
+		}
+		if err := connection.Drain(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		connection.Close()
+		return closeErr
+	}
+	if err := connection.Flush(); err != nil {
+		_ = closeSubscription()
+		return nil, errors.New("flush NATS subscriptions: " + err.Error())
+	}
+	return &PermissionSubscription{close: closeSubscription}, nil
 }

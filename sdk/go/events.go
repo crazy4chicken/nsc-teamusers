@@ -40,3 +40,15 @@ func (c *Client) SubscribePermissions(natsURL string, handler func(userIDs []str
 	}
 	return c.Permissions.SubscribePermissions(natsURL, handler)
 }
+
+// SubscribeKeyRotations refreshes a verifier's JWKS cache on the iam.key.rotated
+// NATS subject. An empty URL is a guarded no-op.
+func (v *Verifier) SubscribeKeyRotations(natsURL string) (*PermissionSubscription, error) {
+	if v == nil {
+		return nil, errors.New("nil verifier")
+	}
+	if strings.TrimSpace(natsURL) == "" {
+		return nil, nil
+	}
+	return subscribeKeyRotationsNATS(v, natsURL)
+}

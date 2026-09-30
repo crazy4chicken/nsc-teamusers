@@ -17,6 +17,8 @@ PERMISSION_EVENT_SUBJECTS = (
     "iam.role.updated",
 )
 
+KEY_ROTATION_EVENT_SUBJECT = "iam.key.rotated"
+
 
 class NATSSubscriptionError(SDKError):
     """NATS could not be loaded or a subscription could not be created."""
@@ -31,7 +33,7 @@ class NATSUnavailableError(NATSSubscriptionError):
 
 
 class PermissionSubscription:
-    """A closeable permission event subscription."""
+    """A closeable SDK event subscription."""
 
     def __init__(self, closers: Sequence[Callable[[], Any]] = ()) -> None:
         self._closers = list(closers)
@@ -110,6 +112,62 @@ def SubscribePermissions(
 ) -> PermissionSubscription | None:
     return subscribe_permissions(client, source_or_url, handler)
 
+def subscribe_key_rotations(verifier: Any, source_or_url: Any) -> PermissionSubscription | None:
+    """Refresh a verifier's JWKS cache on the key-rotation subject."""
+
+    if verifier is None:
+        raise NATSSubscriptionError("verifier is unavailable")
+    if isinstance(source_or_url, str):
+        if not source_or_url.strip():
+            return None
+        try:
+            import nats  # type: ignore[import-not-found]
+        except ImportError as error:
+            raise NATSUnavailableError(
+                "NATS support requires the optional 'nats-py' extra; install teamusers-sdk[nats]"
+            ) from error
+        source = _NATSSource(nats, source_or_url.strip())
+    else:
+        if source_or_url is None:
+            raise NATSSubscriptionError("NATS subscription source is required")
+        source = source_or_url
+
+    def ignore_refresh_error(future: asyncio.Future[Any]) -> None:
+        try:
+            future.result()
+        except Exception:
+            # Verification retries a missed key through the normal refresh path.
+            pass
+
+    def on_message(*_message: Any) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                verifier.refresh_jwks()
+            except Exception:
+                # Verification retries a missed key through the normal refresh path.
+                pass
+            return
+        try:
+            future = loop.run_in_executor(None, verifier.refresh_jwks)
+        except Exception:
+            # Verification retries a missed key through the normal refresh path.
+            pass
+        else:
+            future.add_done_callback(ignore_refresh_error)
+
+    try:
+        return _subscribe_source(source, on_message, (KEY_ROTATION_EVENT_SUBJECT,))
+    except NATSSubscriptionError:
+        raise
+    except Exception as error:
+        raise NATSSubscriptionError("subscribe to key rotation events", error) from error
+
+
+def SubscribeKeyRotations(verifier: Any, source_or_url: Any) -> PermissionSubscription | None:
+    return subscribe_key_rotations(verifier, source_or_url)
+
 
 def _event_callback(client: Any, handler: Callable[[list[str]], Any] | None):
     def on_message(*message: Any) -> None:
@@ -153,14 +211,18 @@ def _decode_event(payload: Any) -> Mapping[str, Any] | None:
     return None
 
 
-def _subscribe_source(source: Any, callback: Callable[..., Any]) -> PermissionSubscription:
+def _subscribe_source(
+    source: Any,
+    callback: Callable[..., Any],
+    subjects: Sequence[str] = PERMISSION_EVENT_SUBJECTS,
+) -> PermissionSubscription:
     closers: list[Callable[[], Any]] = []
     if isinstance(source, _NATSSource):
-        return source.subscribe(callback)
+        return source.subscribe(callback, subjects)
 
     subscribe = getattr(source, "subscribe", None)
     if callable(subscribe):
-        for subject in PERMISSION_EVENT_SUBJECTS:
+        for subject in subjects:
             result = _invoke_subscribe(subscribe, subject, callback)
             closer = _closer_for(result)
             if closer is not None:
@@ -172,7 +234,7 @@ def _subscribe_source(source: Any, callback: Callable[..., Any]) -> PermissionSu
 
     if callable(source):
         try:
-            result = _invoke_factory(source, callback)
+            result = _invoke_factory(source, callback, subjects)
         except Exception as error:
             raise NATSSubscriptionError("create NATS subscription", error) from error
         if isinstance(result, PermissionSubscription):
@@ -200,7 +262,11 @@ def _invoke_subscribe(subscribe: Callable[..., Any], subject: str, callback: Cal
         return subscribe(subject, callback)
 
 
-def _invoke_factory(factory: Callable[..., Any], callback: Callable[..., Any]) -> Any:
+def _invoke_factory(
+    factory: Callable[..., Any],
+    callback: Callable[..., Any],
+    subjects: Sequence[str],
+) -> Any:
     try:
         signature = inspect.signature(factory)
         positional = [
@@ -209,10 +275,10 @@ def _invoke_factory(factory: Callable[..., Any], callback: Callable[..., Any]) -
             if parameter.kind in (parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD)
         ]
         if any(parameter.kind == parameter.VAR_POSITIONAL for parameter in signature.parameters.values()) or len(positional) >= 2:
-            return factory(PERMISSION_EVENT_SUBJECTS, callback)
+            return factory(subjects, callback)
         return factory(callback)
     except (TypeError, ValueError):
-        return factory(PERMISSION_EVENT_SUBJECTS, callback)
+        return factory(subjects, callback)
 
 
 def _closer_for(value: Any) -> Callable[[], Any] | None:
@@ -256,7 +322,11 @@ class _NATSSource:
         self._nats = nats_module
         self._url = url
 
-    def subscribe(self, callback: Callable[..., Any]) -> PermissionSubscription:
+    def subscribe(
+        self,
+        callback: Callable[..., Any],
+        subjects: Sequence[str] = PERMISSION_EVENT_SUBJECTS,
+    ) -> PermissionSubscription:
         ready = threading.Event()
         state: dict[str, Any] = {}
         stopped = threading.Event()
@@ -266,7 +336,7 @@ class _NATSSource:
                 try:
                     connection = await self._nats.connect(self._url)
                     state["connection"] = connection
-                    for subject in PERMISSION_EVENT_SUBJECTS:
+                    for subject in subjects:
                         async def on_message(message: Any, _callback: Callable[..., Any] = callback) -> None:
                             _callback(message)
 
@@ -298,11 +368,14 @@ class _NATSSource:
 
 
 __all__ = [
+    "KEY_ROTATION_EVENT_SUBJECT",
     "NATSSubscriptionError",
     "NATSUnavailableError",
     "PERMISSION_EVENT_SUBJECTS",
     "PermissionSubscription",
+    "SubscribeKeyRotations",
     "SubscribePermissions",
     "Subscription",
+    "subscribe_key_rotations",
     "subscribe_permissions",
 ]

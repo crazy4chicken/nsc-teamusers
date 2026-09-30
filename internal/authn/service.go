@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -34,9 +35,6 @@ import (
 
 const (
 	issuer           = "teamusers"
-	AccessTokenTTL   = 10 * time.Minute
-	RefreshTokenTTL  = 30 * 24 * time.Hour
-	FamilyMaxTTL     = 90 * 24 * time.Hour
 	refreshTokenSize = 32
 	argonSlots       = 4
 )
@@ -61,21 +59,27 @@ type Dependencies = Deps
 // Service owns password authentication, signing keys, and refresh-token
 // sessions.
 type Service struct {
-	cfg        config.Config
-	q          store.Q
-	pool       *pgxpool.Pool
-	keys       map[string]signingKey
-	activeKid  string
-	limiter    *loginLimiter
-	dummyHash  string
-	argonSlots chan struct{}
-	audit      *auditlog.Writer
-	webAuthn   *webauthn.WebAuthn
-	now        func() time.Time
+	cfg              config.Config
+	q                store.Q
+	pool             *pgxpool.Pool
+	keyMu            sync.RWMutex
+	rotationMu       sync.Mutex
+	pendingRotation  *preparedSigningKeyRotation
+	keys             map[string]signingKey
+	activeKid        string
+	limiter          *loginLimiter
+	dummyHash        string
+	argonSlots       chan struct{}
+	audit            *auditlog.Writer
+	webAuthn         *webauthn.WebAuthn
+	now              func() time.Time
 }
 
 func New(deps Deps) (*Service, error) {
 	deps.Config = deps.Config.WithDefaults()
+	if err := deps.Config.Validate(); err != nil {
+		return nil, err
+	}
 	if deps.Q == nil && deps.Pool == nil {
 		return nil, errors.New("authn query handle must not be nil")
 	}
@@ -87,7 +91,7 @@ func New(deps Deps) (*Service, error) {
 	if pool == nil {
 		pool, _ = q.(*pgxpool.Pool)
 	}
-	keys, activeKid, err := loadSigningKeys(deps.Config.KeyDir)
+	keys, activeKid, err := loadSigningKeys(deps.Config.KeyDir, deps.Config.AccessTokenTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -973,10 +977,10 @@ func (s *Service) issuePair(ctx context.Context, q store.Q, user store.User, kin
 	now := s.now()
 	if familyID == "" {
 		familyID = store.NewID()
-		familyNotAfter = now.Add(FamilyMaxTTL)
+		familyNotAfter = now.Add(s.cfg.SessionFamilyTTL)
 	}
 	if familyNotAfter.IsZero() {
-		familyNotAfter = now.Add(FamilyMaxTTL)
+		familyNotAfter = now.Add(s.cfg.SessionFamilyTTL)
 	}
 	if !now.Before(familyNotAfter) {
 		return tokenResponse{}, errExpiredRefresh
@@ -997,7 +1001,7 @@ func (s *Service) issuePair(ctx context.Context, q store.Q, user store.User, kin
 	if err != nil {
 		return tokenResponse{}, err
 	}
-	expiresAt := now.Add(RefreshTokenTTL)
+	expiresAt := now.Add(s.cfg.RefreshTokenTTL)
 	if expiresAt.After(familyNotAfter) {
 		expiresAt = familyNotAfter
 	}
@@ -1014,7 +1018,7 @@ func (s *Service) issuePair(ctx context.Context, q store.Q, user store.User, kin
 	}
 	return tokenResponse{
 		AccessToken: access, RefreshToken: refresh,
-		TokenType: "Bearer", ExpiresIn: int64(AccessTokenTTL / time.Second),
+		TokenType: "Bearer", ExpiresIn: int64(s.cfg.AccessTokenTTL / time.Second),
 	}, nil
 }
 func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Request) (tokenResponse, error) {
@@ -1102,7 +1106,7 @@ func (s *Service) signAccessToken(user store.User, team, kind string) (string, e
 		"kind":     kind,
 		"perm_ver": user.PermVer,
 		"iat":      now,
-		"exp":      now.Add(AccessTokenTTL),
+		"exp":      now.Add(s.cfg.AccessTokenTTL),
 		"jti":      store.NewID(),
 	}
 	if team != "" {
@@ -1113,7 +1117,7 @@ func (s *Service) signAccessToken(user store.User, team, kind string) (string, e
 			return "", fmt.Errorf("set access claim %q: %w", name, err)
 		}
 	}
-	key, ok := s.keys[s.activeKid]
+	key, ok := s.activeSigningKey()
 	if !ok {
 		return "", errors.New("active signing key unavailable")
 	}
@@ -1161,7 +1165,13 @@ func (s *Service) parseAccessToken(raw string) (tokenClaims, error) {
 
 func (s *Service) publicSet() jwk.Set {
 	set := jwk.NewSet()
+	now := s.now()
+	s.keyMu.RLock()
+	defer s.keyMu.RUnlock()
 	for _, key := range s.keys {
+		if !key.retireAt.IsZero() && !now.Before(key.retireAt) {
+			continue
+		}
 		_ = set.AddKey(key.public)
 	}
 	return set

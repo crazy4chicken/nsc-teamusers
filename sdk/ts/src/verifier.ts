@@ -224,6 +224,13 @@ export class Verifier {
   /** Release verifier resources; retained for parity with the Go SDK. */
   public close(): void {}
 
+  /** Refresh the cached JWKS, for example after an iam.key.rotated event. */
+  public async refreshJWKS(): Promise<void> {
+    if (this.configError !== undefined) throw this.configError;
+    if (this.staticKeySet !== undefined) return;
+    await this.getKeySet(true);
+  }
+
   /** Verify a compact JWT and return its typed teamusers identity claims. */
   public async verify(raw: string): Promise<Claims> {
     if (this.configError !== undefined) {

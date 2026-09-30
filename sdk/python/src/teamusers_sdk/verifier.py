@@ -186,6 +186,13 @@ class Verifier:
     def close(self) -> None:
         """Release verifier resources; retained for parity with the Go SDK."""
 
+    def refresh_jwks(self) -> None:
+        """Fetch and cache the current JWKS immediately, bypassing the cache TTL."""
+
+        if self._config_error is not None:
+            raise self._config_error
+        self._get_keys(force_refresh=True)
+
     def verify(self, raw: str) -> Claims:
         """Authenticate a compact JWT and return its typed identity claims."""
 

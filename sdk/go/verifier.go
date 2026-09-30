@@ -206,6 +206,25 @@ func (v *Verifier) Close() error {
 	return nil
 }
 
+func (v *Verifier) refreshJWKS(ctx context.Context) error {
+	if v == nil {
+		return errors.New("nil verifier")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if v.registerError != nil {
+		return fmt.Errorf("configure JWKS cache: %w", v.registerError)
+	}
+	if v.cache == nil || v.jwksURL == "" {
+		return errors.New("JWKS cache is unavailable")
+	}
+	if _, err := v.cache.Refresh(ctx, v.jwksURL); err != nil {
+		return fmt.Errorf("refresh JWKS: %w", err)
+	}
+	return nil
+}
+
 // Verify validates an access token, including EdDSA signature, issuer,
 // audience, expiration, subject, kind, and permission version claims.
 func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {

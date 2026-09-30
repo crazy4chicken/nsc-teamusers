@@ -773,6 +773,17 @@ var DocOperations = []apidocs.Operation{
 	},
 	{
 		Method:          "POST",
+		Path:            "/keys/rotate",
+		Tag:             "Keys",
+		Summary:         "Rotate the active signing key",
+		Description:     "Use during a signing-key maintenance window. The new EdDSA key signs immediately; the previous public key remains in JWKS for twice the configured access-token TTL. Requires iam:keys:any and accepts Idempotency-Key for safe retries.",
+		Security:        "admin",
+		Response:        keyRotationResponse{},
+		ResponseExample: map[string]any{"kid": "01J8Z3KEY00000000000000002", "retire_at": "2026-01-01T00:20:00Z"},
+		Errors:          []apidocs.ErrorDoc{docUnauthorized, docForbidden, docError(409, "idempotency_in_progress", "Idempotency In Progress"), docError(422, "idempotency_conflict", "Idempotency Conflict"), docInternal},
+	},
+	{
+		Method:          "POST",
 		Path:            "/invitations/",
 		Tag:             "Invitations",
 		Summary:         "Create an invitation",

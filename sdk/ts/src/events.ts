@@ -8,6 +8,8 @@ export const PERMISSION_EVENT_SUBJECTS = [
 
 export const PermissionEventSubjects = PERMISSION_EVENT_SUBJECTS;
 
+export const KEY_ROTATION_EVENT_SUBJECT = "iam.key.rotated" as const;
+
 export interface PermissionEventSource {
   subscribe(
     subject: string,
@@ -15,6 +17,10 @@ export interface PermissionEventSource {
   ): unknown;
   close?(): void | Promise<void>;
   drain?(): void | Promise<void>;
+}
+
+interface JWKSRefreshable {
+  refreshJWKS(): Promise<void>;
 }
 
 interface PermissionCache {
@@ -28,7 +34,7 @@ export class NATSDependencyError extends SDKError {
   }
 }
 
-/** Handle returned by SubscribePermissions. */
+/** Handle returned by an SDK event subscription. */
 export class PermissionSubscription {
   private closed = false;
   private readonly closer: () => void | Promise<void>;
@@ -85,14 +91,36 @@ function subscribeSource(
   source: PermissionEventSource,
   handler?: (userIDs: readonly string[]) => void | Promise<void>,
 ): PermissionSubscription {
-  const subscriptions: Array<{ unsubscribe?: () => void | Promise<void> }> = [];
   const onMessage = async (message: unknown): Promise<void> => {
     const userIDs = extractUserIDs(message);
     if (userIDs.length === 0) return;
     client.invalidate(...userIDs);
     if (handler !== undefined) await handler(userIDs);
   };
-  for (const subject of PERMISSION_EVENT_SUBJECTS) {
+  return subscribeSubjects(source, PERMISSION_EVENT_SUBJECTS, onMessage);
+}
+
+function subscribeKeyRotationSource(
+  verifier: JWKSRefreshable,
+  source: PermissionEventSource,
+): PermissionSubscription {
+  const onMessage = async (): Promise<void> => {
+    try {
+      await verifier.refreshJWKS();
+    } catch {
+      // Verification retries a missed key through the normal JWKS refresh path.
+    }
+  };
+  return subscribeSubjects(source, [KEY_ROTATION_EVENT_SUBJECT], onMessage);
+}
+
+function subscribeSubjects(
+  source: PermissionEventSource,
+  subjects: readonly string[],
+  onMessage: (message: unknown) => void | Promise<void>,
+): PermissionSubscription {
+  const subscriptions: Array<{ unsubscribe?: () => void | Promise<void> }> = [];
+  for (const subject of subjects) {
     const result = source.subscribe(subject, onMessage);
     if (isPromiseLike(result)) {
       void Promise.resolve(result).then((resolved) => {
@@ -119,6 +147,26 @@ function subscribeSource(
     }
     if (firstError !== undefined) throw firstError;
   });
+}
+
+/** Subscribe a verifier to JWKS refresh events from NATS or a framework-neutral event source. */
+export async function subscribeKeyRotations(
+  verifier: JWKSRefreshable | null | undefined,
+  sourceOrURL: unknown,
+): Promise<PermissionSubscription | null> {
+  if (verifier === null || verifier === undefined) {
+    throw new Error("nil verifier");
+  }
+  if (typeof sourceOrURL === "string") {
+    if (sourceOrURL.trim() === "") return null;
+    const source = await connectNATS(sourceOrURL.trim());
+    return subscribeKeyRotationSource(verifier, source);
+  }
+  if (sourceOrURL === null || sourceOrURL === undefined) return null;
+  if (!isPermissionEventSource(sourceOrURL)) {
+    throw new TypeError("event subscription source must provide subscribe(subject, handler)");
+  }
+  return subscribeKeyRotationSource(verifier, sourceOrURL);
 }
 
 async function connectNATS(url: string): Promise<PermissionEventSource> {

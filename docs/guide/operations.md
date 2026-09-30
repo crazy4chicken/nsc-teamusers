@@ -27,6 +27,9 @@ default**. The supported environment variables are:
 | `TEAMUSERS_NOTIFICATION_ENDPOINTS` | empty | Comma-separated notification service endpoint URLs. |
 | `TEAMUSERS_NOTIFICATION_SECRET` | empty | HMAC-SHA256 signing secret for notification service calls. |
 | `TEAMUSERS_REGISTRATION_MODE` | `closed` | Public registration mode: `closed`, `approval`, or `open`. |
+| `TEAMUSERS_ACCESS_TOKEN_TTL` | `10m` | Access-token lifetime (`--access-token-ttl`); parsed by `time.ParseDuration`. |
+| `TEAMUSERS_REFRESH_TOKEN_TTL` | `720h` | Refresh-token lifetime (`--refresh-token-ttl`); parsed by `time.ParseDuration`. |
+| `TEAMUSERS_SESSION_FAMILY_TTL` | `2160h` | Absolute session-family lifetime (`--session-family-ttl`); parsed by `time.ParseDuration` and must be at least the refresh-token TTL. |
 | `TEAMUSERS_LOCKOUT_THRESHOLD` | `5` | Failed password or MFA attempts before lockout. |
 | `TEAMUSERS_LOCKOUT_DURATION` | `15m` | Duration of an account lockout; parsed by `time.ParseDuration`. |
 | `TEAMUSERS_WEBAUTHN_RP_ID` | `localhost` | WebAuthn relying-party ID. |
@@ -105,7 +108,7 @@ export TEAMUSERS_CONNECTION_STRING='postgres://...'
 teamusers bootstrap-admin --username alice
 ```
 
-The command ensures the nine enumerated `iam:<area>:any` permission keys and
+The command ensures the ten enumerated `iam:<area>:any` permission keys and
 the `iam:*:any` wildcard, the platform-scoped `iam-admin` role, and the user
 binding. It fails with a clear error when the username does not exist and is
 safe to rerun. `iam:*:any` is a platform wildcard covering current and future
@@ -174,67 +177,89 @@ service account.
 
 ## Key rotation
 
-All replicas must read the same protected `TEAMUSERS_KEY_DIR`. The directory uses
+All replicas must use the same protected `TEAMUSERS_KEY_DIR`. The directory uses
 these files:
 
 - `ed25519-<kid>.pem`: PKCS#8 Ed25519 private key PEM, mode `0600`.
 - `ed25519-<kid>.jwk`: generated public JWK, mode `0644`.
+- `ed25519-<kid>.retire`: retired-key deadline in UTC RFC 3339 format, mode `0600`.
 - `ACTIVE`: one key ID, mode `0600`, naming the key used for new tokens.
 
-A rotation with a JWKS overlap is:
+Rotate keys at runtime with `POST /keys/rotate`. The authenticated user
+must have `iam:keys:any`; no request body is required. Include an
+`Idempotency-Key` to make a retry return the original response:
 
-1. Generate a new PKCS#8 Ed25519 private key outside the service, install it as
-   `ed25519-<new-kid>.pem` on the shared key storage, and restrict it to mode
-   `0600`. The `<new-kid>` value must be non-empty and unique.
-2. Before restarting any instance, write the new ID to a temporary file and
-   atomically rename it to `ACTIVE` (also mode `0600`). On startup the service
-   loads every `ed25519-*.pem`, derives/refreshes each public JWK, and uses the
-   marker for new signatures.
-3. Ask Nekostick to start a new child instance with the shared key directory.
-   Wait for its `/healthz` check, confirm the captured logs show the expected
-   address, and fetch `/.well-known/jwks.json`; the old and new public keys
-   must both be present while old access tokens may still be presented. Then
-   switch forwarding to the new instance and let Nekostick drain the old one.
-4. Keep the old private key and public JWK for at least twice the access-token
-   TTL (20 minutes) after the last old-key signer has drained. A longer overlap
-   is safer for disconnected SDKs. Then remove the old key on the shared
-   storage during a maintenance window and repeat the supervised restart.
+```sh
+curl --fail-with-body -sS -X POST "$IAM_BASE_URL/keys/rotate" \
+  -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
+  -H "Idempotency-Key: $CHANGE_ID"
+```
 
-The service currently does not emit a `key.rotated` outbox row automatically;
-coordinate SDK JWKS refresh through the normal JWKS cache/`kid` miss behavior.
+The response contains the new `kid` and the previous key's `retire_at`. The
+service first persists the new private key and public JWK, then commits the
+audit and `key.rotated` outbox rows in one transaction. Only after that commit
+does it persist the previous key's retirement time and new `ACTIVE` marker,
+then swap the in-memory signer. New tokens use the new key after activation;
+the previous public key remains in JWKS until `retire_at`. The retirement
+window is twice the maximum of the configured access-token lifetime
+(`TEAMUSERS_ACCESS_TOKEN_TTL`) and the fixed MFA (5-minute) and password-change
+(10-minute) token lifetimes, which is 20 minutes with the default 10-minute
+access-token TTL. After that deadline the key is omitted from JWKS; the private
+key, public JWK, and retirement metadata remain on disk. The relay publishes
+`iam.key.rotated`; its JSON payload includes the new `kid`, rotation `at`, and
+the standard outbox event fields so SDKs can refresh JWKS immediately; key-miss
+refresh remains a fallback. If post-commit activation fails, the operation
+still returns HTTP 200 with a `warning` field, logs the failure, and retains
+the prepared key files because the database transaction has committed.
+
+The default single-child deployment needs no restart. In a multi-replica
+deployment, the in-memory swap affects only the replica handling the request.
+Send one rotation request to one replica, keep application and JWKS traffic on
+that replica while rolling-restarting the others, and route traffic broadly
+after every replica has reloaded the shared key directory. Do not POST once per
+replica: each request generates another key, while already-running peers keep
+their prior in-memory JWKS. After the reload, all replicas publish the same
+overlap, so old tokens continue to verify until `retire_at`.
+
 Never copy private keys into deployment artifacts or commit them.
 
 ## Revocation semantics
 
 The following is the contract consumers must implement:
 
-- **Access JWTs:** TTL is 10 minutes. Logout and refresh rotation revoke the
-  refresh session, not already-issued access JWTs. An access JWT is accepted
-  only while its signature/expiry is valid, the user is active, and its
-  `perm_ver` equals the current user row. The middleware therefore rejects a
-  disabled user or a permission-version change without waiting for the JWT TTL.
+- **Access JWTs:** the default TTL is 10 minutes, configurable with
+  `TEAMUSERS_ACCESS_TOKEN_TTL` (`--access-token-ttl`). Logout and refresh
+  rotation revoke the refresh session, not already-issued access JWTs. An
+  access JWT is accepted only while its signature/expiry is valid, the user is
+  active, and its `perm_ver` equals the current user row. The middleware
+  therefore rejects a disabled user or a permission-version change without
+  waiting for the configured JWT TTL.
 - **Refresh token:** refresh tokens are opaque and stored as SHA-256 digests.
-  Each token has a 30-day expiry, bounded by a 90-day absolute family cap.
-  Rotation revokes the presented token. Presenting a rotated token triggers
-  reuse detection and revokes the complete family. Logout revokes the complete
-  family with reason `logout`.
+  Each token defaults to a 30-day expiry, configured with
+  `TEAMUSERS_REFRESH_TOKEN_TTL` (`--refresh-token-ttl`), bounded by a 90-day
+  default absolute family cap configured with `TEAMUSERS_SESSION_FAMILY_TTL`
+  (`--session-family-ttl`). Rotation revokes the presented token. Presenting a
+  rotated token triggers reuse detection and revokes the complete family.
+  Logout revokes the complete family with reason `logout`.
 
 Password changes replace the Argon2id password credential and revoke every
 refresh session for that user, including the session used by the password-change
 request. Administrator-provisioned password credentials are marked
-`must_change`; the first valid password login returns `403 password_change_required`
-with a ten-minute `password_change` token rather than tokens for API access. The
-client must send that token as the bearer on `POST /me/password` together with
-the current and replacement passwords. Only that endpoint and
+`must_change`; the first valid password login returns
+`403 password_change_required` with a fixed ten-minute `password_change` token
+rather than tokens for API access. The client must send that token as the
+bearer on `POST /me/password` together with the current and replacement
+passwords. Only that endpoint and
 `GET /me/password-policy` (policy pre-validation before the change) accept the
 token.
 Registration, invitation acceptance, and password-reset completion do not set
 `must_change`. A successful change clears
 the flag, revokes all refresh sessions, and requires a fresh login. An
-already-issued access JWT remains subject to the normal ten-minute and
-active-user checks. Users can inspect active sessions with `GET /me/sessions`
-and revoke one with `DELETE /me/sessions/{id}`. Administrators can list or
-revoke sessions through the corresponding `/users/{id}/sessions` endpoints.
+already-issued access JWT remains subject to the configured access-token TTL
+(10 minutes by default; `TEAMUSERS_ACCESS_TOKEN_TTL`) and active-user checks.
+Users can inspect active sessions with `GET /me/sessions` and revoke one with
+`DELETE /me/sessions/{id}`. Administrators can list or revoke sessions through
+the corresponding `/users/{id}/sessions` endpoints.
 Session IDs are opaque SHA-256 refresh-token digests and never reveal the
 plaintext token.
 

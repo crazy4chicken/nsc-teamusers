@@ -56,6 +56,7 @@ var bootstrapAdminPermissions = [...]struct {
 	{key: "iam:audit:any", description: "Read the audit log"},
 	{key: "iam:sessions:any", description: "Manage user sessions"},
 	{key: "iam:policies:any", description: "Manage password policies"},
+	{key: "iam:keys:any", description: "Rotate signing keys"},
 	{key: "iam:*:any", description: "All IAM administration"},
 }
 
@@ -610,7 +611,7 @@ func run(cfg config.Config) error {
 	authRoutes := authService.Routes()
 	meRoutes := authService.MeRoutes()
 	authzRoutes := authz.NewRouter(pool, authService.Middleware())
-	adminRoutes := httpapi.NewAdminRouter(pool, auditWriter, authService.Middleware(), cfg)
+	adminRoutes := httpapi.NewAdminRouter(pool, auditWriter, authService.Middleware(), cfg, authService)
 	server.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/authz/") || r.URL.Path == "/authz" {
 			authzRoutes.ServeHTTP(w, r)
