@@ -23,6 +23,9 @@ const (
 	envNATSURL               = "TEAMUSERS_NATS_URL"
 	envNotificationEndpoints = "TEAMUSERS_NOTIFICATION_ENDPOINTS"
 	envNotificationSecret    = "TEAMUSERS_NOTIFICATION_SECRET"
+	envAuditRetentionDays   = "TEAMUSERS_AUDIT_RETENTION_DAYS"
+	envAuditForwardEndpoints = "TEAMUSERS_AUDIT_FORWARD_ENDPOINTS"
+	envAuditForwardSecret    = "TEAMUSERS_AUDIT_FORWARD_SECRET"
 	envRegistrationMode      = "TEAMUSERS_REGISTRATION_MODE"
 	envTokenAudience         = "TEAMUSERS_TOKEN_AUDIENCE"
 	envLockoutThreshold      = "TEAMUSERS_LOCKOUT_THRESHOLD"
@@ -54,8 +57,11 @@ type Config struct {
 	LogLevel              string         `json:"log_level"`
 	KeyDir                string         `json:"key_dir"`
 	NATSURL               string         `json:"nats_url,omitempty"`
-	NotificationEndpoints []string       `json:"notification_endpoints,omitempty"`
-	NotificationSecret    string         `json:"notification_secret,omitempty"`
+	NotificationEndpoints   []string       `json:"notification_endpoints,omitempty"`
+	NotificationSecret      string         `json:"notification_secret,omitempty"`
+	AuditRetentionDays      int            `json:"audit_retention_days"`
+	AuditForwardEndpoints   []string       `json:"audit_forward_endpoints,omitempty"`
+	AuditForwardSecret      string         `json:"audit_forward_secret,omitempty"`
 	RegistrationMode      string         `json:"registration_mode"`
 	TokenAudience         string         `json:"token_audience"`
 	AccessTokenTTL        time.Duration  `json:"access_token_ttl"`
@@ -87,6 +93,9 @@ func Load(args ...string) (Config, error) {
 	natsURL := envOrDefault(envNATSURL, "")
 	notificationEndpoints := envOrDefault(envNotificationEndpoints, "")
 	notificationSecret := envOrDefault(envNotificationSecret, "")
+	auditRetentionDays := envOrDefault(envAuditRetentionDays, "0")
+	auditForwardEndpoints := envOrDefault(envAuditForwardEndpoints, "")
+	auditForwardSecret := envOrDefault(envAuditForwardSecret, "")
 	registrationMode := envOrDefault(envRegistrationMode, "closed")
 	tokenAudience := envOrDefault(envTokenAudience, DefaultTokenAudience)
 	accessTokenTTL := envOrDefault(envAccessTokenTTL, DefaultAccessTokenTTL.String())
@@ -107,6 +116,7 @@ func Load(args ...string) (Config, error) {
 	fs.StringVar(&natsURL, "nats-url", natsURL, "NATS URL")
 	fs.StringVar(&notificationEndpoints, "notification-endpoints", notificationEndpoints, "comma-separated notification service endpoint URLs")
 	fs.StringVar(&notificationSecret, "notification-secret", notificationSecret, "notification service signing secret")
+	fs.StringVar(&auditRetentionDays, "audit-retention-days", auditRetentionDays, "audit retention in whole days (0 keeps forever)")
 	fs.StringVar(&registrationMode, "registration-mode", registrationMode, "registration mode (closed, approval, open)")
 	fs.StringVar(&tokenAudience, "token-audience", tokenAudience, "JWT token audience")
 	fs.StringVar(&accessTokenTTL, "access-token-ttl", accessTokenTTL, "access token lifetime")
@@ -120,6 +130,10 @@ func Load(args ...string) (Config, error) {
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
+	}
+	auditRetentionDaysValue, err := strconv.Atoi(strings.TrimSpace(auditRetentionDays))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid audit retention days %q: %w", auditRetentionDays, err)
 	}
 	port, err := strconv.Atoi(strings.TrimSpace(listenPort))
 	if err != nil {
@@ -166,6 +180,9 @@ func Load(args ...string) (Config, error) {
 		NATSURL:               natsURL,
 		NotificationEndpoints: parseNotificationEndpoints(notificationEndpoints),
 		NotificationSecret:    notificationSecret,
+		AuditRetentionDays:    auditRetentionDaysValue,
+		AuditForwardEndpoints: parseNotificationEndpoints(auditForwardEndpoints),
+		AuditForwardSecret:    auditForwardSecret,
 		RegistrationMode:      strings.ToLower(strings.TrimSpace(registrationMode)),
 		TokenAudience:         strings.TrimSpace(tokenAudience),
 		AccessTokenTTL:        accessTTL,
@@ -242,6 +259,12 @@ func (c Config) Validate() error {
 	if c.LockoutThreshold < 0 {
 		return fmt.Errorf("lockout threshold must not be negative, got %d", c.LockoutThreshold)
 	}
+	if c.AuditRetentionDays < 0 {
+		return fmt.Errorf("audit retention days must not be negative, got %d", c.AuditRetentionDays)
+	}
+	if len(c.AuditForwardEndpoints) > 0 && strings.TrimSpace(c.AuditForwardSecret) == "" {
+		return errors.New("audit forwarding secret is required when endpoints are configured")
+	}
 	if c.LockoutDuration < 0 {
 		return fmt.Errorf("lockout duration must not be negative, got %s", c.LockoutDuration)
 	}
@@ -289,6 +312,10 @@ func (c Config) Redacted() Config {
 		redacted.NATSURL = "[redacted]"
 	}
 	redacted.NotificationEndpoints = nil
+	redacted.AuditForwardEndpoints = nil
+	if redacted.AuditForwardSecret != "" {
+		redacted.AuditForwardSecret = "[redacted]"
+	}
 	if redacted.NotificationSecret != "" {
 		redacted.NotificationSecret = "[redacted]"
 	}

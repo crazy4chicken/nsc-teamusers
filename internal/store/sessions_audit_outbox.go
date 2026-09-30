@@ -9,6 +9,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// AuditForwardTopic identifies outbox rows consumed by the audit HTTP forwarder.
+const AuditForwardTopic = "audit.forward"
+
 func CreateSession(ctx context.Context, q Q, session Session) (Session, error) {
 	if session.ID == "" {
 		session.ID = NewID()
@@ -116,6 +119,29 @@ func AppendAuditLog(ctx context.Context, q Q, entry AuditEntry) (AuditEntry, err
 		entry.TeamID, entry.ActorID, entry.Action, entry.Target, diff, entry.RequestID))
 }
 
+// AppendAuditLogWithForward inserts an audit row and its forwarding outbox row
+// atomically in one statement.
+func AppendAuditLogWithForward(ctx context.Context, q Q, entry AuditEntry) (AuditEntry, error) {
+	diff := []byte(entry.Diff)
+	if len(diff) == 0 {
+		diff = []byte(`{}`)
+	}
+	return scanAuditEntry(q.QueryRow(ctx, `
+		WITH inserted AS (
+			INSERT INTO audit_log (team_id, actor_id, action, target, diff, request_id)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			RETURNING id, team_id, actor_id, action, target, diff, request_id, at
+		), queued AS (
+			INSERT INTO outbox (topic, payload)
+			SELECT $7, to_jsonb(inserted) FROM inserted
+			RETURNING id
+		)
+		SELECT inserted.id, inserted.team_id, inserted.actor_id, inserted.action,
+			inserted.target, inserted.diff, inserted.request_id, inserted.at
+		FROM inserted CROSS JOIN queued`,
+		entry.TeamID, entry.ActorID, entry.Action, entry.Target, diff, entry.RequestID, AuditForwardTopic))
+}
+
 func ListAuditLog(ctx context.Context, q Q, teamID *string, cursor int64, limit int) ([]AuditEntry, int64, error) {
 	limit = pageLimit(limit)
 	var rows pgx.Rows
@@ -157,6 +183,36 @@ func ListAuditLog(ctx context.Context, q Q, teamID *string, cursor int64, limit 
 		return entries, entries[len(entries)-1].ID, nil
 	}
 	return entries, 0, nil
+}
+
+// StreamAuditLog visits matching audit rows in ID order without buffering the
+// result set in memory.
+func StreamAuditLog(ctx context.Context, q Q, teamID *string, visit func(AuditEntry) error) error {
+	var rows pgx.Rows
+	var err error
+	if teamID == nil {
+		rows, err = q.Query(ctx, `
+			SELECT id, team_id, actor_id, action, target, diff, request_id, at
+			FROM audit_log ORDER BY id`)
+	} else {
+		rows, err = q.Query(ctx, `
+			SELECT id, team_id, actor_id, action, target, diff, request_id, at
+			FROM audit_log WHERE team_id IS NOT DISTINCT FROM $1 ORDER BY id`, *teamID)
+	}
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		entry, err := scanAuditEntry(rows)
+		if err != nil {
+			return err
+		}
+		if err := visit(entry); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func scanAuditEntry(row pgx.Row) (AuditEntry, error) {
@@ -201,6 +257,97 @@ func FetchUnpublishedOutbox(ctx context.Context, q Q, cursor int64, limit int) (
 	if err != nil {
 		return nil, 0, err
 	}
+	defer rows.Close()
+	events := make([]OutboxEvent, 0, limit)
+	for rows.Next() {
+		event, err := scanOutboxEvent(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(events) == limit {
+		return events, events[len(events)-1].ID, nil
+	}
+	return events, 0, nil
+}
+
+func FetchUnpublishedAuditForward(ctx context.Context, q Q, cursor int64, limit int) ([]OutboxEvent, int64, error) {
+	limit = pageLimit(limit)
+	var rows pgx.Rows
+	var err error
+	if cursor <= 0 {
+		rows, err = q.Query(ctx, `
+			SELECT id, topic, payload, published_at FROM outbox
+			WHERE published_at IS NULL AND topic = $1 ORDER BY id LIMIT $2`, AuditForwardTopic, limit)
+	} else {
+		rows, err = q.Query(ctx, `
+			SELECT id, topic, payload, published_at FROM outbox
+			WHERE published_at IS NULL AND topic = $1 AND id > $2 ORDER BY id LIMIT $3`, AuditForwardTopic, cursor, limit)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	events := make([]OutboxEvent, 0, limit)
+	for rows.Next() {
+		event, err := scanOutboxEvent(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(events) == limit {
+		return events, events[len(events)-1].ID, nil
+	}
+	return events, 0, nil
+}
+
+func FetchUnpublishedOutboxByTopics(ctx context.Context, q Q, cursor int64, limit int, topics []string) ([]OutboxEvent, int64, error) {
+	limit = pageLimit(limit)
+	var rows pgx.Rows
+	var err error
+	if cursor <= 0 {
+		rows, err = q.Query(ctx, `
+			SELECT id, topic, payload, published_at FROM outbox
+			WHERE published_at IS NULL AND topic = ANY($1::text[]) ORDER BY id LIMIT $2`, topics, limit)
+	} else {
+		rows, err = q.Query(ctx, `
+			SELECT id, topic, payload, published_at FROM outbox
+			WHERE published_at IS NULL AND topic = ANY($1::text[]) AND id > $2 ORDER BY id LIMIT $3`, topics, cursor, limit)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	return scanUnpublishedOutboxRows(rows, limit)
+}
+
+func FetchUnpublishedOutboxByTopicPattern(ctx context.Context, q Q, cursor int64, limit int, pattern string) ([]OutboxEvent, int64, error) {
+	limit = pageLimit(limit)
+	var rows pgx.Rows
+	var err error
+	if cursor <= 0 {
+		rows, err = q.Query(ctx, `
+			SELECT id, topic, payload, published_at FROM outbox
+			WHERE published_at IS NULL AND topic LIKE $1 ORDER BY id LIMIT $2`, pattern, limit)
+	} else {
+		rows, err = q.Query(ctx, `
+			SELECT id, topic, payload, published_at FROM outbox
+			WHERE published_at IS NULL AND topic LIKE $1 AND id > $2 ORDER BY id LIMIT $3`, pattern, cursor, limit)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	return scanUnpublishedOutboxRows(rows, limit)
+}
+
+func scanUnpublishedOutboxRows(rows pgx.Rows, limit int) ([]OutboxEvent, int64, error) {
 	defer rows.Close()
 	events := make([]OutboxEvent, 0, limit)
 	for rows.Next() {

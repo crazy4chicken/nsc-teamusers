@@ -308,7 +308,7 @@ func provisionAdminRole(ctx context.Context, tx store.Tx, user store.User, resul
 // reconcileBootstrapPermissions registers every bootstrap permission and
 // restores missing permissions on the platform iam-admin role. Re-granting on
 // every restart is intentional: removals from this role are not sticky.
-func reconcileBootstrapPermissions(ctx context.Context, q store.Q) error {
+func reconcileBootstrapPermissions(ctx context.Context, q store.Q, auditWriter *audit.Writer) error {
 	return store.WithAdminTx(ctx, q, func(ctx context.Context, tx store.Tx) error {
 		permissionsAdded := false
 		for _, permission := range bootstrapAdminPermissions {
@@ -380,7 +380,7 @@ func reconcileBootstrapPermissions(ctx context.Context, q store.Q) error {
 			}); err != nil {
 				return err
 			}
-			if _, err := audit.NewWriter().Append(ctx, tx, audit.Entry{
+			if _, err := auditWriter.Append(ctx, tx, audit.Entry{
 				Action: "bootstrap.reconciled",
 				Target: roleID,
 				After:  map[string]any{"role_id": roleID},
@@ -583,6 +583,11 @@ func run(cfg config.Config) error {
 		return fmt.Errorf("ping PostgreSQL: %w", err)
 	}
 
+	auditWriter := audit.NewWriter()
+	if len(cfg.AuditForwardEndpoints) > 0 {
+		auditWriter = audit.NewForwardingWriter()
+	}
+
 	bootstrapContext, cancelBootstrap := context.WithTimeout(signalContext, bootstrapTimeout)
 	err = autoBootstrapAdmin(bootstrapContext, pool)
 	cancelBootstrap()
@@ -590,7 +595,7 @@ func run(cfg config.Config) error {
 		return fmt.Errorf("bootstrap admin account: %w", err)
 	}
 	reconcileContext, cancelReconcile := context.WithTimeout(signalContext, bootstrapTimeout)
-	err = reconcileBootstrapPermissions(reconcileContext, pool)
+	err = reconcileBootstrapPermissions(reconcileContext, pool, auditWriter)
 	cancelReconcile()
 	if err != nil {
 		return fmt.Errorf("reconcile bootstrap permissions: %w", err)
@@ -601,7 +606,6 @@ func run(cfg config.Config) error {
 		return fmt.Errorf("bind listen address: %w", err)
 	}
 
-	auditWriter := audit.NewWriter()
 	authService, err := authn.New(authn.Dependencies{
 		Config: cfg, Q: pool, Pool: pool, Audit: auditWriter, Context: signalContext,
 	})
@@ -627,29 +631,43 @@ func run(cfg config.Config) error {
 		}
 		adminRoutes.ServeHTTP(w, r)
 	}))
-	eventContext, cancelEvents := context.WithCancel(signalContext)
-	defer cancelEvents()
-	var eventWorkers sync.WaitGroup
-	eventWorkers.Add(2)
+	workerContext, cancelWorkers := context.WithCancel(signalContext)
+	defer cancelWorkers()
+	var backgroundWorkers sync.WaitGroup
+	backgroundWorkers.Add(2)
 	go func() {
-		defer eventWorkers.Done()
-		events.NewRelay(pool, cfg, logger).Run(eventContext)
+		defer backgroundWorkers.Done()
+		events.NewRelay(pool, cfg, logger).Run(workerContext)
 	}()
 	go func() {
-		defer eventWorkers.Done()
-		events.NewNotifier(pool, cfg, logger).Run(eventContext)
+		defer backgroundWorkers.Done()
+		events.NewNotifier(pool, cfg, logger).Run(workerContext)
 	}()
-	waitForEvents := func(waitContext context.Context) {
-		cancelEvents()
+	if len(cfg.AuditForwardEndpoints) > 0 {
+		backgroundWorkers.Add(1)
+		go func() {
+			defer backgroundWorkers.Done()
+			events.NewAuditForwarder(pool, cfg, logger).Run(workerContext)
+		}()
+	}
+	if cfg.AuditRetentionDays > 0 {
+		backgroundWorkers.Add(1)
+		go func() {
+			defer backgroundWorkers.Done()
+			runAuditLogReaper(workerContext, pool, cfg.AuditRetentionDays, logger)
+		}()
+	}
+	waitForWorkers := func(waitContext context.Context) {
+		cancelWorkers()
 		done := make(chan struct{})
 		go func() {
-			eventWorkers.Wait()
+			backgroundWorkers.Wait()
 			close(done)
 		}()
 		select {
 		case <-done:
 		case <-waitContext.Done():
-			logger.Warn("event workers did not stop before shutdown deadline")
+			logger.Warn("background workers did not stop before shutdown deadline")
 		}
 	}
 
@@ -666,20 +684,52 @@ func run(cfg config.Config) error {
 	select {
 	case err := <-serverErrors:
 		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
-		waitForEvents(shutdownContext)
+		waitForWorkers(shutdownContext)
 		cancelShutdown()
 		return err
 	case <-signalContext.Done():
 		logger.Info("shutdown requested")
 		shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
 		if err := server.Shutdown(shutdownContext); err != nil {
-			waitForEvents(shutdownContext)
+			waitForWorkers(shutdownContext)
 			cancelShutdown()
 			return fmt.Errorf("shutdown HTTP server: %w", err)
 		}
-		waitForEvents(shutdownContext)
+		waitForWorkers(shutdownContext)
 		cancelShutdown()
 		return nil
+	}
+}
+
+func runAuditLogReaper(ctx context.Context, q store.Q, retentionDays int, logger *slog.Logger) {
+	if retentionDays <= 0 {
+		return
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now().UTC()
+			cutoff := now.AddDate(0, 0, -retentionDays)
+			if cutoff.After(now) || cutoff.Year() < 1 {
+				cutoff = time.Time{}
+			}
+			deleted, err := store.DeleteExpiredAuditLog(ctx, q, cutoff)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				logger.Error("reap expired audit entries failed", "retention_days", retentionDays, "deleted", deleted, "error", err)
+				continue
+			}
+			logger.Info("reaped expired audit entries", "retention_days", retentionDays, "deleted", deleted)
+		}
 	}
 }
 

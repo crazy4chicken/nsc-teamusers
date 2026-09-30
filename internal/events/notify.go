@@ -90,7 +90,7 @@ func (d *Notifier) Run(ctx context.Context) {
 func (d *Notifier) dispatchBatch(ctx context.Context) error {
 	cursor := int64(0)
 	for {
-		events, nextCursor, err := store.FetchUnpublishedOutbox(ctx, d.q, cursor, outboxBatchSize)
+		events, nextCursor, err := store.FetchUnpublishedOutboxByTopicPattern(ctx, d.q, cursor, outboxBatchSize, "notify.%")
 		if err != nil {
 			return err
 		}

@@ -516,6 +516,7 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 	})
 	router.Route("/audit", func(r chi.Router) {
 		r.Get("/", h.listAudit)
+		r.Get("/export", h.exportAudit)
 	})
 	router.Post("/keys/rotate", h.rotateSigningKey)
 	return router

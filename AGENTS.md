@@ -108,7 +108,9 @@ injected) > defaults. Current env vars: `TEAMUSERS_CONNECTION_STRING`,
 `TEAMUSERS_TRUSTED_PROXIES`, `TEAMUSERS_WEBAUTHN_ORIGIN`,
 `TEAMUSERS_LOCKOUT_DURATION`, `TEAMUSERS_LOG_LEVEL`,
 `TEAMUSERS_ACCESS_TOKEN_TTL`, `TEAMUSERS_REFRESH_TOKEN_TTL`,
-`TEAMUSERS_SESSION_FAMILY_TTL` (defaults 10m/720h/2160h; family >= refresh).
+`TEAMUSERS_SESSION_FAMILY_TTL` (defaults 10m/720h/2160h; family >= refresh),
+`TEAMUSERS_AUDIT_RETENTION_DAYS` (default 0 = keep forever),
+`TEAMUSERS_AUDIT_FORWARD_ENDPOINTS`, `TEAMUSERS_AUDIT_FORWARD_SECRET`.
 
 Signing-key rotation: `POST /keys/rotate` (admin plane, `iam:keys:any`).
 Retired keys stay in JWKS until `rotated_at + 2*max(access, mfa,

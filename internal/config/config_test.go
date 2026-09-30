@@ -12,6 +12,7 @@ func isolateLoadEnvironment(t *testing.T) {
 	names := []string{
 		envConnectionString, envListenAddress, envListenPort, envNodeID, envLogLevel,
 		envKeyDir, envNATSURL, envNotificationEndpoints, envNotificationSecret,
+		envAuditRetentionDays, envAuditForwardEndpoints, envAuditForwardSecret,
 		envRegistrationMode, envTokenAudience, envLockoutThreshold, envLockoutDuration,
 		envAccessTokenTTL, envRefreshTokenTTL, envSessionFamilyTTL,
 		envWebAuthnRPID, envWebAuthnOrigin, envTrustedProxies, "HOST", "PORT",
@@ -114,4 +115,49 @@ func TestLoadRequiresSessionFamilyAtLeastRefreshTTL(t *testing.T) {
 			t.Fatalf("session family TTL = %s, refresh TTL = %s", cfg.SessionFamilyTTL, cfg.RefreshTokenTTL)
 		}
 	})
+}
+
+func TestAuditRetentionDaysDefaultAndFlagOverride(t *testing.T) {
+	isolateLoadEnvironment(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load default audit retention: %v", err)
+	}
+	if cfg.AuditRetentionDays != 0 {
+		t.Fatalf("default audit retention days = %d, want 0", cfg.AuditRetentionDays)
+	}
+	t.Setenv(envAuditRetentionDays, "14")
+	cfg, err = Load("--audit-retention-days=30")
+	if err != nil {
+		t.Fatalf("load overridden audit retention: %v", err)
+	}
+	if cfg.AuditRetentionDays != 30 {
+		t.Fatalf("audit retention days = %d, want 30", cfg.AuditRetentionDays)
+	}
+}
+
+func TestLoadRejectsNegativeAuditRetentionDays(t *testing.T) {
+	isolateLoadEnvironment(t)
+	if _, err := Load("--audit-retention-days=-1"); err == nil || !strings.Contains(err.Error(), "audit retention days must not be negative") {
+		t.Fatalf("Load() error = %v, want negative audit retention rejection", err)
+	}
+}
+
+func TestLoadRequiresAuditForwardSecret(t *testing.T) {
+	isolateLoadEnvironment(t)
+	t.Setenv(envAuditForwardEndpoints, "https://audit.example.test/events")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "audit forwarding secret is required") {
+		t.Fatalf("Load() error = %v, want missing audit forwarding secret rejection", err)
+	}
+}
+
+func TestRedactedHidesAuditForwardingConfig(t *testing.T) {
+	cfg := Config{
+		AuditForwardEndpoints: []string{"https://audit.example.test/events"},
+		AuditForwardSecret:   "shared secret",
+	}
+	redacted := cfg.Redacted()
+	if len(redacted.AuditForwardEndpoints) != 0 || redacted.AuditForwardSecret != "[redacted]" {
+		t.Fatalf("redacted audit forwarding config = %+v, want endpoints hidden and secret redacted", redacted)
+	}
 }

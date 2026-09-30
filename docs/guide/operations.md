@@ -26,6 +26,9 @@ default**. The supported environment variables are:
 | `TEAMUSERS_NATS_URL` | empty | NATS URL for the JetStream outbox relay. |
 | `TEAMUSERS_NOTIFICATION_ENDPOINTS` | empty | Comma-separated notification service endpoint URLs. |
 | `TEAMUSERS_NOTIFICATION_SECRET` | empty | HMAC-SHA256 signing secret for notification service calls. |
+| `TEAMUSERS_AUDIT_RETENTION_DAYS` | `0` | Whole-day audit retention window (`--audit-retention-days`); `0` keeps rows forever. |
+| `TEAMUSERS_AUDIT_FORWARD_ENDPOINTS` | empty | Comma-separated HTTP endpoints for asynchronous HMAC-signed audit-row delivery; empty disables forwarding. |
+| `TEAMUSERS_AUDIT_FORWARD_SECRET` | empty | HMAC-SHA256 signing secret; required when audit-forward endpoints are configured and redacted from status output. |
 | `TEAMUSERS_REGISTRATION_MODE` | `closed` | Public registration mode: `closed`, `approval`, or `open`. |
 | `TEAMUSERS_ACCESS_TOKEN_TTL` | `10m` | Access-token lifetime (`--access-token-ttl`); parsed by `time.ParseDuration`. |
 | `TEAMUSERS_REFRESH_TOKEN_TTL` | `720h` | Refresh-token lifetime (`--refresh-token-ttl`); parsed by `time.ParseDuration`. |
@@ -445,17 +448,74 @@ backup without the corresponding private keys cannot validate or issue tokens
 across restore boundaries; a key backup without the database cannot restore
 users or sessions.
 
-The `audit_log` is append-only by contract. Give the deployment role INSERT and
-SELECT access only; do not grant UPDATE or DELETE. Preserve it in every backup
-and export it to long-term immutable storage according to the organization's
-retention policy.
+The `audit_log` is append-only while a row is retained; application code never
+updates audit rows. `TEAMUSERS_AUDIT_RETENTION_DAYS` defaults to `0` (keep
+forever); negative values are rejected. A positive value enables an hourly
+reaper that deletes rows whose `at` is older than the configured window from
+`audit_log` and matching `audit.forward` outbox copies, whether published or
+not, in batches of at most 1,000. Unpublished copies that could not be delivered
+before the cutoff are dropped. This is destructive and irreversible; the
+deployment role needs `DELETE` on `audit_log` and `outbox` only when retention
+is enabled. Back up and export retained records according to the organization's
+recovery and compliance requirements.
 
-The `outbox` is also durable state. The relay marks rows with `published_at`
-after successful publication, but this service does not delete old published
-rows. Define and document an operator-owned retention/archive job only after
-all consumers and notification service endpoints have their required replay
-window. Never purge unpublished rows merely because they are old; investigate
-delivery or broker failures first.
+### Audit export
+
+`GET /audit/export` streams the full matching audit history as JSON Lines by
+default (`?format=jsonl`) or CSV (`?format=csv`). It accepts the same optional
+`team_id` filter as `GET /audit`; it deliberately ignores cursor pagination so
+the export includes every matching retained row. JSONL has one audit-row object
+per line, while CSV has a header and one row per audit record. The response is
+an attachment with a UTC-dated `audit-YYYY-MM-DD.jsonl` or `.csv` filename.
+This admin-plane endpoint requires `iam:audit:any`.
+
+Exports have a 10-minute request deadline. When it expires, the response still
+returns HTTP 200 and ends at a row boundary without an error signal; a successful
+status therefore does not prove completeness. Clients must compare the exported
+row count with the complete matching set from filtered, paginated `GET /audit`,
+or narrow the filters (for example, one `team_id` at a time) and re-run.
+
+```sh
+curl --fail-with-body -sS -OJ "$IAM_BASE_URL/audit/export" \
+  -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN"
+
+curl --fail-with-body -sS -G -OJ "$IAM_BASE_URL/audit/export" \
+  -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
+  --data-urlencode 'format=csv' \
+  --data-urlencode "team_id=$TEAM_ID"
+```
+
+### External audit forwarding
+
+Set `TEAMUSERS_AUDIT_FORWARD_ENDPOINTS` to a comma-separated list of trusted
+HTTP endpoints and `TEAMUSERS_AUDIT_FORWARD_SECRET` to a unique random secret
+shared with the receiver. Use HTTPS in production and keep the secret in the
+deployment secret facility; `status` and `doctor` redact both the endpoint list
+and secret. Empty endpoints disable forwarding and avoid creating forwarding
+outbox rows.
+Audit entries written while forwarding is disabled are not queued and will not
+be forwarded if forwarding is enabled later.
+
+The service queues each audit row in the existing transactional outbox and
+delivers its JSON row body asynchronously as `POST` with
+`Content-Type: application/json`. The `X-Teamusers-Signature-256` header is
+`sha256=<hex HMAC-SHA256>` over the exact request body. A receiver should
+constant-time verify the signature and use the audit row `id` for
+deduplication. Delivery is at-least-once: every configured endpoint must return
+2xx before the outbox row is acknowledged, so an endpoint that already
+accepted a row may receive it again when another endpoint fails. The dispatcher
+retries four attempts with 1s, 4s, and 15s backoff; failed rows remain pending
+for a later poll. HTTP delivery runs after the audited transaction commits, so
+endpoint failures do not block or roll back that mutation. These destinations
+receive audit diffs and must be treated as sensitive data processors.
+
+The relay and notification/audit-forward dispatchers mark rows with
+`published_at` after successful publication or delivery, but this service does
+not delete old published rows. Define and document an operator-owned
+retention/archive job only after all event consumers and notification/audit
+forward endpoints have their required replay window. Never purge unpublished
+rows merely because they are old; investigate delivery or broker failures
+first.
 
 The hourly session reaper deletes rows whose ordinary refresh TTL has elapsed;
 its successful and failed counts are visible in structured logs.
@@ -469,10 +529,12 @@ its successful and failed counts are visible in structured logs.
   sustained not-ready state and on restart loops.
 - Run `teamusers doctor` during deployment and incident triage. Its JSON
   report separates database, migration, and key-directory checks.
-- Alert on `reaped expired sessions` errors, `notification service delivery failed`,
+- Monitor `reaped expired sessions` and `reaped expired audit entries` counts; alert on
+  `reap expired audit entries failed`, `audit forward delivery failed`,
+  `audit forwarder poll failed`, `notification service delivery failed`,
   `notification notifier poll failed`, `outbox relay poll failed`, and repeated
   `publish outbox event failed` log records. Track pending/unpublished outbox
-  rows and notification retry volume.
+  rows and notification/audit-forward retry volume.
 - Alert on a new `refresh token reuse detected` warning: it indicates a
   presented rotated token and family-wide revocation, often a stolen or
   concurrently used credential.

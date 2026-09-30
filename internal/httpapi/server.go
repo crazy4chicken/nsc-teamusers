@@ -33,7 +33,7 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool) *Server {
 	router.Use(middleware.RequestID)
 	router.Use(trustedRealIP(cfg.TrustedProxies))
 	router.Use(middleware.Recoverer)
-	router.Use(middleware.Timeout(30 * time.Second))
+	router.Use(requestTimeoutMiddleware)
 	router.Use(idempotencyMiddleware(pool))
 
 	server := &Server{router: router, pool: pool}
@@ -45,6 +45,22 @@ func NewServer(cfg config.Config, pool *pgxpool.Pool) *Server {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	return server
+}
+
+func requestTimeoutMiddleware(next http.Handler) http.Handler {
+	const (
+		requestTimeout            = 30 * time.Second
+		auditExportRequestTimeout = 10 * time.Minute
+	)
+	standardTimeout := middleware.Timeout(requestTimeout)(next)
+	auditExportTimeout := middleware.Timeout(auditExportRequestTimeout)(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/audit/export" {
+			auditExportTimeout.ServeHTTP(w, r)
+			return
+		}
+		standardTimeout.ServeHTTP(w, r)
+	})
 }
 
 // Router returns the root router for mounting application routes.

@@ -26,9 +26,16 @@ var natsSubjects = map[string]string{
 	"key.rotated":   "iam.key.rotated",
 }
 
-// Relay publishes unpublished outbox events other than the `notify.` notification
-// topics to JetStream. Rows remain unpublished when a publish fails, so a later
-// poll retries them.
+var relayTopicNames = func() []string {
+	topics := make([]string, 0, len(natsSubjects))
+	for topic := range natsSubjects {
+		topics = append(topics, topic)
+	}
+	return topics
+}()
+
+// Relay publishes supported system-event outbox topics to JetStream. Notification
+// and audit-forward topics are handled by their dedicated dispatchers.
 type Relay struct {
 	q            store.Q
 	natsURL      string
@@ -85,7 +92,7 @@ func (r *Relay) Run(ctx context.Context) {
 func (r *Relay) publishBatch(ctx context.Context, conn **nats.Conn, js *nats.JetStreamContext) error {
 	cursor := int64(0)
 	for {
-		events, nextCursor, err := store.FetchUnpublishedOutbox(ctx, r.q, cursor, outboxBatchSize)
+		events, nextCursor, err := store.FetchUnpublishedOutboxByTopics(ctx, r.q, cursor, outboxBatchSize, relayTopicNames)
 		if err != nil {
 			return err
 		}

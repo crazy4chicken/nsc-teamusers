@@ -98,9 +98,10 @@ CREATE TABLE audit_log (
     at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Audit log writes are append-only by contract. The deployment role should not
--- receive UPDATE or DELETE privileges on this table; no application code issues
--- either operation.
+-- Audit log writes are append-only by contract; application code never updates
+-- audit rows and deletes only expired rows when retention is enabled.
+-- Grant the deployment role DELETE on audit_log and outbox only when retention
+-- is enabled.
 
 CREATE TABLE outbox (
     id BIGSERIAL PRIMARY KEY,

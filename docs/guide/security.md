@@ -265,18 +265,43 @@ an email change is not treated as a credential-compromise event. A password chan
 or password reset, by contrast, revokes all existing sessions.
 
 `DELETE /me` is an erasure operation rather than a physical row deletion.
-Foreign keys and append-only audit records need the stable user ULID for
+Foreign keys and retained audit records use the stable user ULID for
 referential history, so the service replaces the username and email with
 generated `deleted_<ULID>` values, clears the display name, and disables the
 row. All credential kinds and refresh sessions are deleted/revoked in the
-same transaction. Audit records retain the opaque ULID and action metadata,
-not the former profile, password, token, or credential material. This gives
-operational history without retaining directly identifying profile data.
+same transaction. While retained, audit records preserve the opaque ULID and
+action metadata, not the former profile, password, token, or credential
+material.
 
 The self-service export includes profile metadata, memberships, effective
 permission keys, active session metadata, TOTP-enabled state, and passkey
 count. It deliberately excludes credential hashes, service secrets, TOTP
 seeds, backup-code digests, and serialized passkey material.
+
+## Audit retention and forwarding
+
+Audit rows are append-only while retained; the application does not update
+them. The default `TEAMUSERS_AUDIT_RETENTION_DAYS=0` keeps rows indefinitely.
+A positive retention value opts into hourly deletion of `audit_log` rows and
+matching `audit.forward` outbox copies whose audit timestamp is older than that
+window, including unpublished copies that could not be delivered in time. Those
+rows may no longer be available to `GET /audit` or `GET /audit/export`.
+When retention is enabled, the deployment role needs `DELETE` on both
+`audit_log` and `outbox`.
+Append-only applies only within the retention window; deployments requiring
+permanent history must keep retention disabled and maintain protected backups
+or immutable archives.
+
+`GET /audit/export` requires `iam:audit:any` and exports retained audit rows.
+When external forwarding is enabled, the full row, including its diff, is sent
+to configured endpoints as an HMAC-SHA256-signed HTTP POST. HMAC authenticates
+and protects body integrity but does not encrypt it; use HTTPS, restrict
+endpoint access, and treat the signing secret and forwarded audit data as
+sensitive. Delivery is at-least-once, so receivers must deduplicate by audit
+row ID.
+
+Audit entries written while forwarding is disabled are not queued and will not
+be forwarded if forwarding is enabled later.
 
 ## Passkey and WebAuthn ceremonies
 
