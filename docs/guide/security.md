@@ -28,12 +28,36 @@ must be at least the configured refresh-token TTL
 after that cap, so a user must log in again. Ordinary refresh rows also expire
 after the configured refresh-token TTL and are removed by the hourly reaper.
 
+Session policies are stored in `session_policies` and target the platform
+default (`subject_kind = 'default'`, empty `subject_id`), a team, a group, or a
+role. Each non-null field resolves independently from the highest-priority
+matching policy; an unset `max_concurrent_sessions` or `idle_timeout_minutes`
+does not impose a limit. When a new user session would exceed its concurrent-
+session limit, the service revokes the least recently rotated active session(s)
+with `revoke_reason = 'evicted_by_policy'` and admits the new session. Rotation
+creates a replacement row with a new creation time, which determines this
+ordering. Service-account sessions are exempt from user session policies.
+`last_active_at` is initialized at session creation and updated only after a
+successful refresh. Idle expiry is checked on refresh, not on ordinary API
+requests: an idle session's refresh is rejected and the row is revoked with
+`revoke_reason = 'session_idle_expired'`. The hourly reaper remains limited to
+ordinary refresh-token expiry.
+
 Introspection deliberately has two branches. Access-token introspection
 validates the JWT and the current active user but does not consult a refresh
 session, so it follows the access-token contract above rather than refresh
 revocation state. Refresh-token introspection checks the stored session and its
 revocation/expiry state. This divergence preserves stateless access-token
 validation while retaining operational refresh-token status.
+
+The service records resolved password, passkey, and MFA authentication
+outcomes in `login_activity`, including timestamp, client IP, user agent,
+method, and result; passwords and tokens are never stored. Writes are
+best-effort and logged without blocking authentication. `GET /me/activity`
+returns cursor pages ordered by descending activity ID and filters strictly to
+the caller's `user_id`. When a failed attempt cannot be tied to a user, its
+attempted username is stored with a null `user_id` and is not exposed through
+the self-service endpoint.
 
 ## Admin-plane dogfooding
 
@@ -347,6 +371,17 @@ row ID.
 Audit entries written while forwarding is disabled are not queued and will not
 be forwarded if forwarding is enabled later.
 
+### Login activity retention
+
+Login activity is retained separately from the append-only audit log.
+`TEAMUSERS_LOGIN_ACTIVITY_RETENTION_DAYS` defaults to 90; negative values are
+rejected, and `0` disables deletion. A positive value enables hourly deletion
+of older `login_activity` rows in batches of at most 1,000. The deployment role
+needs `DELETE` on `login_activity` when retention is enabled. Stored usernames
+and user agents have control characters removed and are limited to 256 and 512
+UTF-8-safe bytes, respectively. Rate-limited requests are not recorded as
+authentication failures.
+
 ## Passkey and WebAuthn ceremonies
 
 WebAuthn ceremony sessions are stored server-side for five minutes. Finishing a
@@ -373,14 +408,16 @@ authentication problem.
 
 ## Trusted client address
 
-The service uses `X-Forwarded-For` when the direct TCP peer is loopback or
+The service uses `X-Forwarded-For` only when the direct TCP peer is loopback or
 matches one of the CIDRs or IP addresses configured in
-`TEAMUSERS_TRUSTED_PROXIES`. In either case, only the first address in the
-header is used. For any other peer, the direct `RemoteAddr` is authoritative
-and the forwarded header is ignored. The default trusted-proxy list is empty,
-so deployments using a non-loopback proxy must configure its fixed addresses;
-accepting forwarded headers from arbitrary peers would make IP rate limits and
-audit metadata attacker-controlled.
+`TEAMUSERS_TRUSTED_PROXIES`. For a trusted peer, it walks the forwarded chain
+from right to left, skips trusted proxy hops, and selects the rightmost
+non-trusted address. If the direct peer is not trusted, its `RemoteAddr` is
+authoritative and the forwarded header is ignored. The default trusted-proxy
+list is empty, so deployments using a non-loopback proxy must configure its
+fixed addresses. The trusted edge proxy must overwrite any client-supplied
+`X-Forwarded-For` with the source address it observes before forwarding; do not
+preserve or blindly append an untrusted client-provided chain.
 
 ## Signing keys
 

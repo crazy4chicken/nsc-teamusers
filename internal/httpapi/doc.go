@@ -106,6 +106,21 @@ type docExportResponse struct {
 	PasskeyCount         int                   `json:"passkey_count"`
 }
 
+type docLoginActivity struct {
+	ID        int64     `json:"id"`
+	UserID    string    `json:"user_id"`
+	At        time.Time `json:"at"`
+	IP        string    `json:"ip"`
+	UserAgent string    `json:"user_agent"`
+	Method    string    `json:"method"`
+	Result    string    `json:"result"`
+}
+
+type docLoginActivityPage struct {
+	Items      []docLoginActivity `json:"items"`
+	NextCursor int64              `json:"next_cursor"`
+}
+
 type docWebAuthnCredential struct {
 	ID       string            `json:"id"`
 	RawID    string            `json:"rawId"`
@@ -388,10 +403,10 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/users/{id}/sessions",
 		Tag:             "Sessions",
 		Summary:         "List a user's sessions",
-		Description:     "Use for administrative security review. Requires iam:sessions:any and returns only active session IDs and timestamps, never client metadata or refresh tokens.",
+		Description:     "Use for administrative security review. Requires iam:sessions:any and returns active session IDs with created_at, last_active_at, and expires_at timestamps; client metadata and refresh tokens are never returned.",
 		Security:        "admin",
 		Response:        []SessionResponse{},
-		ResponseExample: []map[string]any{{"id": "8d7e5b3a0f6f4e1d...", "created_at": "2026-01-01T00:00:00Z", "expires_at": "2026-01-31T00:00:00Z"}},
+		ResponseExample: []map[string]any{{"id": "8d7e5b3a0f6f4e1d...", "created_at": "2026-01-01T00:00:00Z", "last_active_at": "2026-01-02T12:00:00Z", "expires_at": "2026-01-31T00:00:00Z"}},
 		Errors:          []apidocs.ErrorDoc{docUnauthorized, docForbidden, docNotFound, docInternal},
 	},
 	{
@@ -850,7 +865,7 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/keys/rotate",
 		Tag:             "Keys",
 		Summary:         "Rotate the active signing key",
-		Description: "Use during a signing-key maintenance window. The new EdDSA key signs immediately; the previous public key remains in JWKS for twice the configured access-token TTL. Requires iam:keys:any, authentication within the previous ten minutes, and accepts Idempotency-Key for safe retries. Stale authentication returns 403 step_up_required.",
+		Description:     "Use during a signing-key maintenance window. The new EdDSA key signs immediately; the previous public key remains in JWKS for twice the configured access-token TTL. Requires iam:keys:any, authentication within the previous ten minutes, and accepts Idempotency-Key for safe retries. Stale authentication returns 403 step_up_required.",
 		Security:        "admin",
 		Response:        keyRotationResponse{},
 		ResponseExample: map[string]any{"kid": "01J8Z3KEY00000000000000002", "retire_at": "2026-01-01T00:20:00Z"},
@@ -976,11 +991,25 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/me/sessions",
 		Tag:             "Sessions",
 		Summary:         "List the current user's sessions",
-		Description:     "Use in account security settings to show active refresh sessions. Returned IDs are opaque token digests and only contain created_at and expires_at.",
+		Description:     "Use in account security settings to show active refresh sessions. Returned IDs are opaque token digests and each row contains created_at, last_active_at, and expires_at.",
 		Security:        "user",
 		Response:        []SessionResponse{},
-		ResponseExample: []map[string]any{{"id": "8d7e5b3a0f6f4e1d...", "created_at": "2026-01-01T00:00:00Z", "expires_at": "2026-01-31T00:00:00Z"}},
+		ResponseExample: []map[string]any{{"id": "8d7e5b3a0f6f4e1d...", "created_at": "2026-01-01T00:00:00Z", "last_active_at": "2026-01-02T12:00:00Z", "expires_at": "2026-01-31T00:00:00Z"}},
 		Errors:          []apidocs.ErrorDoc{docUnauthorized, docInternal},
+	},
+	{
+		Method:      "GET",
+		Path:        "/me/activity",
+		Tag:         "Sessions",
+		Summary:     "List the current user's login activity",
+		Description: "Use in account security settings to review this user's resolved password, passkey, and MFA login attempts. Results contain only rows whose user_id matches the bearer subject and are ordered by descending ID. The numeric cursor is non-negative (omit or use 0 for the newest page); limit must be positive (default 100, capped at 1000). A full page returns its final row's ID as next_cursor; a shorter page returns 0.",
+		Security:    "user",
+		Response:    docLoginActivityPage{},
+		ResponseExample: map[string]any{
+			"items":       []map[string]any{{"id": int64(42), "user_id": "01J8Z3USER000000000000001", "at": "2026-01-02T12:00:00Z", "ip": "203.0.113.5", "user_agent": "ExampleBrowser/1.0", "method": "password", "result": "success"}},
+			"next_cursor": int64(0),
+		},
+		Errors: []apidocs.ErrorDoc{docError(400, "cursor must be a non-negative integer", "Invalid Request"), docInvalidPage, docUnauthorized, docInternal},
 	},
 	{
 		Method:      "DELETE",

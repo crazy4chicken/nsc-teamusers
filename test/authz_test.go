@@ -257,11 +257,19 @@ func TestAuthzEndToEnd(t *testing.T) {
 		t.Fatal("non-matching ABAC check allowed a different owner")
 	}
 
+	disabledPair := loginUser(t, stack, "alice", "alice-password1")
 	status, body = stack.jsonRequest(t, http.MethodPost, "/users/"+target.ID+"/disable", nil, adminToken)
 	if status != http.StatusOK {
 		t.Fatalf("disable user status = %d, want %d: %s", status, http.StatusOK, body)
 	}
 
+	var disabledSessionReason string
+	if err := stack.database.pool.QueryRow(ctx, `SELECT revoke_reason FROM sessions WHERE id = $1`, refreshSessionID(disabledPair.RefreshToken)).Scan(&disabledSessionReason); err != nil {
+		t.Fatalf("read disabled-user session reason: %v", err)
+	}
+	if disabledSessionReason != "user_disabled" {
+		t.Fatalf("disabled-user session reason = %q, want user_disabled", disabledSessionReason)
+	}
 	status, _ = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
 		"username": "alice",
 		"password": "alice-password1",
@@ -285,6 +293,9 @@ func TestAuthzEndToEnd(t *testing.T) {
 		t.Fatal("disabled user authorization check allowed access")
 	}
 
+	if check.Reason != "user_disabled" {
+		t.Fatalf("disabled authorization reason = %q, want user_disabled", check.Reason)
+	}
 	status, _ = stack.jsonRequest(t, http.MethodGet, "/authz/permissions/unknown-user", nil, serviceToken)
 	if status != http.StatusNotFound {
 		t.Fatalf("unknown authorization user status = %d, want %d", status, http.StatusNotFound)

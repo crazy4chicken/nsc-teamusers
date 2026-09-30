@@ -66,10 +66,11 @@ is unset. No in-memory substitute is accepted.
 - **Trust boundary:** the service binds loopback/leased port and trusts
   `X-Forwarded-For`/`X-Real-IP` only from loopback or configured
   `TEAMUSERS_TRUSTED_PROXIES`. Never widen this by default.
-- **Outbox topics are a contract** with SDK subscribers:
-  `perm.changed`, `user.disabled`, `role.updated`, `key.rotated`
-  (-> `iam.*` subjects) plus `notify.*` (-> HMAC-signed HTTP). Consumers are
-  idempotent by event id; keep payloads additive-only.
+- **Outbox topics are a contract** with SDK subscribers: `perm.changed`,
+  `user.disabled`, `role.updated`, `key.rotated`, `user.created`,
+  `user.updated`, `user.deleted`, `team.created`, `team.updated` (-> `iam.*`
+  subjects) plus `notify.*` and `audit.forward` (-> HMAC-signed HTTP).
+  Consumers are idempotent by event id; keep payloads additive-only.
 
 ## Rules for changes
 
@@ -110,7 +111,9 @@ injected) > defaults. Current env vars: `TEAMUSERS_CONNECTION_STRING`,
 `TEAMUSERS_ACCESS_TOKEN_TTL`, `TEAMUSERS_REFRESH_TOKEN_TTL`,
 `TEAMUSERS_SESSION_FAMILY_TTL` (defaults 10m/720h/2160h; family >= refresh),
 `TEAMUSERS_AUDIT_RETENTION_DAYS` (default 0 = keep forever),
-`TEAMUSERS_AUDIT_FORWARD_ENDPOINTS`, `TEAMUSERS_AUDIT_FORWARD_SECRET`.
+`TEAMUSERS_AUDIT_FORWARD_ENDPOINTS`, `TEAMUSERS_AUDIT_FORWARD_SECRET`,
+`TEAMUSERS_LOGIN_ACTIVITY_RETENTION_DAYS` (default 90),
+`TEAMUSERS_PWNED_PASSWORDS_ENABLED` (HIBP breach screening, default off).
 
 Signing-key rotation: `POST /keys/rotate` (admin plane, `iam:keys:any`).
 Retired keys stay in JWKS until `rotated_at + 2*max(access, mfa,

@@ -123,6 +123,15 @@ func TestInvitationPasswordResendCancelAndActiveMismatch(t *testing.T) {
 		}
 		t.Fatalf("get cancelled invitation = %v, want no rows", err)
 	}
+	var deletedEvents int
+	if err := stack.database.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM outbox
+		WHERE topic = 'user.deleted' AND payload->>'user_id' = $1`, resend.ID).Scan(&deletedEvents); err != nil {
+		t.Fatalf("count cancelled invitation user.deleted events: %v", err)
+	}
+	if deletedEvents != 1 {
+		t.Fatalf("cancelled invitation user.deleted events = %d, want 1", deletedEvents)
+	}
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/invite/accept", map[string]string{
 		"token":    newToken,
 		"password": "Resend-password1",

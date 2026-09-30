@@ -22,7 +22,7 @@ func TestIssuePairRequiresUserAuthTime(t *testing.T) {
 }
 
 func TestSessionMetadataFromTreatsMalformedDataAsMissing(t *testing.T) {
-	metadata := sessionMetadataFrom(store.Session{ClientMeta: []byte(`{"kind":"user","auth_time":`)} )
+	metadata := sessionMetadataFrom(store.Session{ClientMeta: []byte(`{"kind":"user","auth_time":`)})
 	if metadata.Kind != "" || metadata.AuthTime != 0 || len(metadata.AMR) != 0 {
 		t.Fatalf("sessionMetadataFrom() = %+v, want empty metadata", metadata)
 	}

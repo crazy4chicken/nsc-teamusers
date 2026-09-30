@@ -10,6 +10,64 @@ export const PermissionEventSubjects = PERMISSION_EVENT_SUBJECTS;
 
 export const KEY_ROTATION_EVENT_SUBJECT = "iam.key.rotated" as const;
 
+export const USER_CREATED_EVENT_SUBJECT = "iam.user.created" as const;
+export const USER_UPDATED_EVENT_SUBJECT = "iam.user.updated" as const;
+export const USER_DELETED_EVENT_SUBJECT = "iam.user.deleted" as const;
+export const TEAM_CREATED_EVENT_SUBJECT = "iam.team.created" as const;
+export const TEAM_UPDATED_EVENT_SUBJECT = "iam.team.updated" as const;
+
+export const USER_CREATED_EVENT_KIND = "user.created" as const;
+export const USER_UPDATED_EVENT_KIND = "user.updated" as const;
+export const USER_DELETED_EVENT_KIND = "user.deleted" as const;
+export const TEAM_CREATED_EVENT_KIND = "team.created" as const;
+export const TEAM_UPDATED_EVENT_KIND = "team.updated" as const;
+
+export interface UserCreatedEvent {
+  readonly event_id: number;
+  readonly type: typeof USER_CREATED_EVENT_KIND;
+  readonly user_id: string;
+  readonly changed_fields: readonly string[];
+  readonly at: string;
+}
+
+export interface UserUpdatedEvent {
+  readonly event_id: number;
+  readonly type: typeof USER_UPDATED_EVENT_KIND;
+  readonly user_id: string;
+  readonly changed_fields: readonly string[];
+  readonly at: string;
+}
+
+export interface UserDeletedEvent {
+  readonly event_id: number;
+  readonly type: typeof USER_DELETED_EVENT_KIND;
+  readonly user_id: string;
+  readonly at: string;
+}
+
+export interface TeamCreatedEvent {
+  readonly event_id: number;
+  readonly type: typeof TEAM_CREATED_EVENT_KIND;
+  readonly team_id: string;
+  readonly changed_fields: readonly string[];
+  readonly at: string;
+}
+
+export interface TeamUpdatedEvent {
+  readonly event_id: number;
+  readonly type: typeof TEAM_UPDATED_EVENT_KIND;
+  readonly team_id: string;
+  readonly changed_fields: readonly string[];
+  readonly at: string;
+}
+
+type LifecycleEvent =
+  | UserCreatedEvent
+  | UserUpdatedEvent
+  | UserDeletedEvent
+  | TeamCreatedEvent
+  | TeamUpdatedEvent;
+
 export interface PermissionEventSource {
   subscribe(
     subject: string,
@@ -169,10 +227,134 @@ export async function subscribeKeyRotations(
   return subscribeKeyRotationSource(verifier, sourceOrURL);
 }
 
+
+/** Subscribe to user.created events without changing an SDK cache. */
+export async function subscribeUserCreated(
+  sourceOrURL: unknown,
+  handler: (event: UserCreatedEvent) => void | Promise<void>,
+): Promise<PermissionSubscription | null> {
+  return subscribeLifecycleEvent(
+    sourceOrURL,
+    USER_CREATED_EVENT_SUBJECT,
+    USER_CREATED_EVENT_KIND,
+    "user_id",
+    handler,
+  );
+}
+
+/** Subscribe to user.updated events without changing an SDK cache. */
+export async function subscribeUserUpdated(
+  sourceOrURL: unknown,
+  handler: (event: UserUpdatedEvent) => void | Promise<void>,
+): Promise<PermissionSubscription | null> {
+  return subscribeLifecycleEvent(
+    sourceOrURL,
+    USER_UPDATED_EVENT_SUBJECT,
+    USER_UPDATED_EVENT_KIND,
+    "user_id",
+    handler,
+  );
+}
+
+/** Subscribe to user.deleted events without changing an SDK cache. */
+export async function subscribeUserDeleted(
+  sourceOrURL: unknown,
+  handler: (event: UserDeletedEvent) => void | Promise<void>,
+): Promise<PermissionSubscription | null> {
+  return subscribeLifecycleEvent(
+    sourceOrURL,
+    USER_DELETED_EVENT_SUBJECT,
+    USER_DELETED_EVENT_KIND,
+    "user_id",
+    handler,
+    false,
+  );
+}
+
+/** Subscribe to team.created events without changing an SDK cache. */
+export async function subscribeTeamCreated(
+  sourceOrURL: unknown,
+  handler: (event: TeamCreatedEvent) => void | Promise<void>,
+): Promise<PermissionSubscription | null> {
+  return subscribeLifecycleEvent(
+    sourceOrURL,
+    TEAM_CREATED_EVENT_SUBJECT,
+    TEAM_CREATED_EVENT_KIND,
+    "team_id",
+    handler,
+  );
+}
+
+/** Subscribe to team.updated events without changing an SDK cache. */
+export async function subscribeTeamUpdated(
+  sourceOrURL: unknown,
+  handler: (event: TeamUpdatedEvent) => void | Promise<void>,
+): Promise<PermissionSubscription | null> {
+  return subscribeLifecycleEvent(
+    sourceOrURL,
+    TEAM_UPDATED_EVENT_SUBJECT,
+    TEAM_UPDATED_EVENT_KIND,
+    "team_id",
+    handler,
+  );
+}
+
+async function subscribeLifecycleEvent<T extends LifecycleEvent>(
+  sourceOrURL: unknown,
+  subject: string,
+  eventKind: T["type"],
+  entityIDField: "user_id" | "team_id",
+  handler: (event: T) => void | Promise<void>,
+  requireChangedFields = true,
+): Promise<PermissionSubscription | null> {
+  let source: PermissionEventSource;
+  if (typeof sourceOrURL === "string") {
+    if (sourceOrURL.trim() === "") return null;
+    source = await connectNATS(sourceOrURL.trim());
+  } else {
+    if (sourceOrURL === null || sourceOrURL === undefined) return null;
+    if (!isPermissionEventSource(sourceOrURL)) {
+      throw new TypeError("event subscription source must provide subscribe(subject, handler)");
+    }
+    source = sourceOrURL;
+  }
+  return subscribeSubjects(source, [subject], async (message) => {
+    const event = decodeLifecycleEvent<T>(message, eventKind, entityIDField, requireChangedFields);
+    if (event !== undefined) await handler(event);
+  });
+}
+
+function decodeLifecycleEvent<T extends LifecycleEvent>(
+  message: unknown,
+  eventKind: T["type"],
+  entityIDField: "user_id" | "team_id",
+  requireChangedFields: boolean,
+): T | undefined {
+  const payload = decodeMessage(message);
+  if (
+    !isObject(payload) ||
+    payload.type !== eventKind ||
+    typeof payload.event_id !== "number" ||
+    !Number.isInteger(payload.event_id) ||
+    typeof payload[entityIDField] !== "string" ||
+    payload[entityIDField] === "" ||
+    typeof payload.at !== "string"
+  ) {
+    return undefined;
+  }
+  const changedFields = payload.changed_fields;
+  if (requireChangedFields || changedFields !== undefined) {
+    if (!Array.isArray(changedFields) || !changedFields.every((field) => typeof field === "string")) {
+      return undefined;
+    }
+  }
+  return payload as unknown as T;
+}
 async function connectNATS(url: string): Promise<PermissionEventSource> {
   let moduleValue: unknown;
   try {
     // The optional peer must not be imported while the core SDK is loaded.
+
     const load = Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>;
     moduleValue = await load("nats");
   } catch (error) {

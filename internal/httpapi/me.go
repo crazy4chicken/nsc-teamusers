@@ -20,6 +20,7 @@ type MeHandlers struct {
 	DeleteProfile             http.HandlerFunc
 	ExportProfile             http.HandlerFunc
 	ListSessions              http.HandlerFunc
+	ListActivity              http.HandlerFunc
 	DeleteSession             http.HandlerFunc
 	EnrollTOTP                http.HandlerFunc
 	ConfirmTOTP               http.HandlerFunc
@@ -32,11 +33,12 @@ type MeHandlers struct {
 }
 
 // SessionResponse is the intentionally limited refresh-session representation
-// returned by self-service and administrative session endpoints.
+// returned by self-service and administrative endpoints.
 type SessionResponse struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID           string    `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	LastActiveAt time.Time `json:"last_active_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 // NewMeRouter constructs the authenticated self-service router. Only user
@@ -56,6 +58,7 @@ func NewMeRouter(authMW func(http.Handler) http.Handler, handlers MeHandlers) ch
 	router.Delete("/me", handlers.DeleteProfile)
 	router.Get("/me/export", handlers.ExportProfile)
 	router.Get("/me/sessions", handlers.ListSessions)
+	router.Get("/me/activity", handlers.ListActivity)
 	router.Delete("/me/sessions/{id}", handlers.DeleteSession)
 	router.Post("/me/totp/enroll", handlers.EnrollTOTP)
 	router.Post("/me/totp/confirm", handlers.ConfirmTOTP)

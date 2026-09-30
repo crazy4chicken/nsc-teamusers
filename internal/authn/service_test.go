@@ -1,12 +1,12 @@
 package authn
 
 import (
-	"teamusers/internal/config"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
+	"teamusers/internal/config"
 	"testing"
 	"time"
 
@@ -240,5 +240,32 @@ func TestNewRejectsInvalidTokenTTLAfterApplyingDefaults(t *testing.T) {
 	}})
 	if err == nil || !strings.Contains(err.Error(), "access token TTL must be positive") {
 		t.Fatalf("New() error = %v, want invalid access-token TTL rejection", err)
+	}
+}
+
+func TestSessionIdleExpired(t *testing.T) {
+	now := time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC)
+	timeout := 30
+	zeroTimeout := 0
+	tests := []struct {
+		name              string
+		lastActiveAt      time.Time
+		idleTimeoutMinute *int
+		want              bool
+	}{
+		{name: "no timeout", lastActiveAt: now.Add(-time.Hour)},
+		{name: "zero timeout", lastActiveAt: now.Add(-time.Hour), idleTimeoutMinute: &zeroTimeout},
+		{name: "within timeout", lastActiveAt: now.Add(-29 * time.Minute), idleTimeoutMinute: &timeout},
+		{name: "at timeout boundary", lastActiveAt: now.Add(-30 * time.Minute), idleTimeoutMinute: &timeout},
+		{name: "beyond timeout", lastActiveAt: now.Add(-30*time.Minute - time.Nanosecond), idleTimeoutMinute: &timeout, want: true},
+		{name: "future activity", lastActiveAt: now.Add(time.Minute), idleTimeoutMinute: &timeout},
+		{name: "missing activity", idleTimeoutMinute: &timeout},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := sessionIdleExpired(testCase.lastActiveAt, testCase.idleTimeoutMinute, now); got != testCase.want {
+				t.Fatalf("sessionIdleExpired() = %t, want %t", got, testCase.want)
+			}
+		})
 	}
 }

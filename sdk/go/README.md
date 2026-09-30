@@ -237,6 +237,21 @@ if subscription != nil {
 }
 ```
 
+`SubscribeUserDeleted` receives the `iam.user.deleted` envelope. Its payload
+contains `event_id`, `type`, `user_id`, and `at`; it omits `changed_fields`:
+
+```go
+subscription, err := iam.SubscribeUserDeleted(natsURL, func(event iam.UserDeletedEvent) {
+	fmt.Printf("deleted user %s in event %d\n", event.UserID, event.EventID)
+})
+if err != nil {
+	return err
+}
+if subscription != nil {
+	defer subscription.Close()
+}
+```
+
 NATS support is compiled with the `nats` build tag:
 
 ```sh

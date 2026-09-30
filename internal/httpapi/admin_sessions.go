@@ -32,10 +32,10 @@ func (h *adminHandler) deleteUserSession(w http.ResponseWriter, r *http.Request)
 	userID := chi.URLParam(r, "id")
 	sessionID := chi.URLParam(r, "sid")
 	err := h.withTx(r.Context(), func(ctx context.Context, tx store.Tx) error {
-		if _, err := store.GetUser(ctx, tx, userID); err != nil {
+		if err := store.LockSessionPolicyUser(ctx, tx, userID); err != nil {
 			return err
 		}
-		rows, err := store.DeleteSessionForUser(ctx, tx, sessionID, userID)
+		rows, err := store.DeleteSessionForUser(ctx, tx, sessionID, userID, "admin_revoked")
 		if err != nil {
 			return err
 		}
@@ -59,10 +59,10 @@ func (h *adminHandler) deleteUserSession(w http.ResponseWriter, r *http.Request)
 func (h *adminHandler) deleteAllUserSessions(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
 	err := h.withTx(r.Context(), func(ctx context.Context, tx store.Tx) error {
-		if _, err := store.GetUser(ctx, tx, userID); err != nil {
+		if err := store.LockSessionPolicyUser(ctx, tx, userID); err != nil {
 			return err
 		}
-		if err := store.DeleteAllSessionsForUser(ctx, tx, userID); err != nil {
+		if err := store.DeleteAllSessionsForUser(ctx, tx, userID, "admin_revoked"); err != nil {
 			return err
 		}
 		_, aerr := h.audit.Append(ctx, tx, h.auditEntry(r, nil, "admin.sessions.revoked", userID, nil, nil))
@@ -79,9 +79,10 @@ func sessionResponses(sessions []store.Session) []SessionResponse {
 	responses := make([]SessionResponse, 0, len(sessions))
 	for _, session := range sessions {
 		responses = append(responses, SessionResponse{
-			ID:        session.ID,
-			CreatedAt: session.CreatedAt,
-			ExpiresAt: session.ExpiresAt,
+			ID:           session.ID,
+			CreatedAt:    session.CreatedAt,
+			LastActiveAt: session.LastActiveAt,
+			ExpiresAt:    session.ExpiresAt,
 		})
 	}
 	return responses

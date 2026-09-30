@@ -89,10 +89,36 @@ type Session struct {
 	FamilyID       string          `json:"family_id"`
 	ClientMeta     json.RawMessage `json:"client_meta"`
 	CreatedAt      time.Time       `json:"created_at"`
+	LastActiveAt   time.Time       `json:"last_active_at"`
 	ExpiresAt      time.Time       `json:"expires_at"`
 	FamilyNotAfter time.Time       `json:"family_not_after"`
 	RevokedAt      *time.Time      `json:"revoked_at,omitempty"`
 	RevokeReason   *string         `json:"revoke_reason,omitempty"`
+}
+
+// SessionPolicy mirrors the session_policies table.
+type SessionPolicy struct {
+	ID                    string    `json:"id"`
+	Name                  string    `json:"name"`
+	Priority              int       `json:"priority"`
+	SubjectKind           string    `json:"subject_kind"`
+	SubjectID             string    `json:"subject_id"`
+	MaxConcurrentSessions *int      `json:"max_concurrent_sessions,omitempty"`
+	IdleTimeoutMinutes    *int      `json:"idle_timeout_minutes,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
+// LoginActivity mirrors one login_activity row.
+type LoginActivity struct {
+	ID                int64     `json:"id"`
+	UserID            *string   `json:"user_id,omitempty"`
+	AttemptedUsername string    `json:"attempted_username,omitempty"`
+	At                time.Time `json:"at"`
+	IP                string    `json:"ip"`
+	UserAgent         string    `json:"user_agent"`
+	Method            string    `json:"method"`
+	Result            string    `json:"result"`
 }
 
 // AuditEntry mirrors an append-only audit_log row.
@@ -136,13 +162,13 @@ type PasswordPolicy struct {
 
 // MFAPolicy mirrors the mfa_policies table.
 type MFAPolicy struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Priority    int       `json:"priority"`
-	SubjectKind string    `json:"subject_kind"`
-	SubjectID   string    `json:"subject_id"`
-	Required    bool      `json:"required"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	Priority       int       `json:"priority"`
+	SubjectKind    string    `json:"subject_kind"`
+	SubjectID      string    `json:"subject_id"`
+	Required       bool      `json:"required"`
 	DenyUnenrolled bool      `json:"deny_unenrolled"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }

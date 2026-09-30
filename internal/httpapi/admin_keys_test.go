@@ -19,9 +19,9 @@ import (
 )
 
 type failingBeginQuery struct {
-	beginErr    error
-	beginCalls  int
-	queryCalls  int
+	beginErr   error
+	beginCalls int
+	queryCalls int
 }
 
 func (q *failingBeginQuery) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {

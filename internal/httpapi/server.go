@@ -129,31 +129,53 @@ func (s *Server) Shutdown(ctx context.Context) error {
 func trustedRealIP(trustedProxies []netip.Prefix) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			peer := remoteIP(r.RemoteAddr)
-			trusted := peer != nil && peer.IsLoopback()
-			if !trusted && peer != nil {
-				peerBytes := peer
-				if v4 := peer.To4(); v4 != nil {
-					peerBytes = v4
-				}
-				if address, ok := netip.AddrFromSlice(peerBytes); ok {
-					for _, proxy := range trustedProxies {
-						if proxy.Contains(address) {
-							trusted = true
-							break
-						}
-					}
-				}
+			if !trustedProxyAddress(remoteIP(r.RemoteAddr), trustedProxies) {
+				next.ServeHTTP(w, r)
+				return
 			}
-			if trusted {
-				forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0])
-				if ip := remoteIP(forwarded); ip != nil {
-					r.RemoteAddr = ip.String()
+			forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
+			for len(forwarded) > 0 {
+				separator := strings.LastIndexByte(forwarded, ',')
+				hop := strings.TrimSpace(forwarded[separator+1:])
+				ip := remoteIP(hop)
+				if ip == nil {
+					break
 				}
+				if !trustedProxyAddress(ip, trustedProxies) {
+					r.RemoteAddr = ip.String()
+					break
+				}
+				if separator < 0 {
+					break
+				}
+				forwarded = forwarded[:separator]
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func trustedProxyAddress(ip net.IP, trustedProxies []netip.Prefix) bool {
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	ipBytes := ip
+	if v4 := ip.To4(); v4 != nil {
+		ipBytes = v4
+	}
+	address, ok := netip.AddrFromSlice(ipBytes)
+	if !ok {
+		return false
+	}
+	for _, proxy := range trustedProxies {
+		if proxy.Contains(address) {
+			return true
+		}
+	}
+	return false
 }
 
 func remoteIP(address string) net.IP {

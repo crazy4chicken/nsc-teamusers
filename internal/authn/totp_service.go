@@ -38,6 +38,7 @@ func (s *Service) MeRoutes() chi.Router {
 		DeleteProfile:             s.deleteProfile,
 		ExportProfile:             s.exportProfile,
 		ListSessions:              s.listOwnSessions,
+		ListActivity:              s.listOwnActivity,
 		DeleteSession:             s.deleteOwnSession,
 		EnrollTOTP:                s.enrollTOTP,
 		ConfirmTOTP:               s.confirmTOTP,
@@ -224,7 +225,11 @@ func (s *Service) completeMFATOTPEnrollment(w http.ResponseWriter, r *http.Reque
 		if err := s.appendAuthAudit(ctx, tx, "auth.totp.confirmed", user.ID, user.ID); err != nil {
 			return err
 		}
-		return s.appendAuthAudit(ctx, tx, "auth.login.succeeded", user.ID, user.ID)
+		if err := s.appendAuthAudit(ctx, tx, "auth.login.succeeded", user.ID, user.ID); err != nil {
+			return err
+		}
+		s.recordLoginActivityFromMetadata(ctx, tx, user, "mfa", "success", metadata)
+		return nil
 	})
 	if errors.Is(err, errTOTPAlreadyEnabled) {
 		writeAuthProblem(w, r, http.StatusConflict, "totp_already_enabled")

@@ -22,8 +22,12 @@ const (
 var natsSubjects = map[string]string{
 	"perm.changed":  "iam.perm.changed",
 	"user.disabled": "iam.user.disabled",
-	"role.updated":  "iam.role.updated",
+	"user.created":  "iam.user.created",
+	"user.updated":  "iam.user.updated",
+	"user.deleted":  "iam.user.deleted",
 	"key.rotated":   "iam.key.rotated",
+	"team.created":  "iam.team.created",
+	"team.updated":  "iam.team.updated",
 }
 
 var relayTopicNames = func() []string {

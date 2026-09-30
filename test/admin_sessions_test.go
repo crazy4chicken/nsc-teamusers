@@ -19,11 +19,17 @@ func TestAdminSessionEndpoints(t *testing.T) {
 		t.Fatalf("list target sessions status = %d, want %d: %s", status, http.StatusOK, body)
 	}
 	var sessions []struct {
-		ID string `json:"id"`
+		ID           string `json:"id"`
+		LastActiveAt string `json:"last_active_at"`
 	}
 	decodeResponse(t, body, &sessions)
 	if len(sessions) != 2 {
 		t.Fatalf("target sessions = %d, want 2: %s", len(sessions), body)
+	}
+	for _, session := range sessions {
+		if session.LastActiveAt == "" {
+			t.Fatalf("admin session %q has no last_active_at", session.ID)
+		}
 	}
 	seen := make(map[string]bool, len(sessions))
 	for _, session := range sessions {
@@ -52,6 +58,13 @@ func TestAdminSessionEndpoints(t *testing.T) {
 	if status != http.StatusNoContent || len(body) != 0 {
 		t.Fatalf("revoke one target session = %d %q, want empty %d", status, body, http.StatusNoContent)
 	}
+	var revokeReason string
+	if err := stack.database.pool.QueryRow(context.Background(), `SELECT revoke_reason FROM sessions WHERE id = $1`, firstID).Scan(&revokeReason); err != nil {
+		t.Fatalf("read admin-revoked session reason: %v", err)
+	}
+	if revokeReason != "admin_revoked" {
+		t.Fatalf("admin-revoked session reason = %q, want admin_revoked", revokeReason)
+	}
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/refresh", map[string]string{"refresh_token": first.RefreshToken}, "")
 	if status != http.StatusUnauthorized {
 		t.Fatalf("revoked target refresh status = %d, want %d: %s", status, http.StatusUnauthorized, body)
@@ -77,6 +90,12 @@ func TestAdminSessionEndpoints(t *testing.T) {
 	status, body = stack.jsonRequest(t, http.MethodDelete, "/users/"+target.ID+"/sessions", nil, adminToken)
 	if status != http.StatusNoContent || len(body) != 0 {
 		t.Fatalf("revoke all target sessions = %d %q, want empty %d", status, body, http.StatusNoContent)
+	}
+	if err := stack.database.pool.QueryRow(context.Background(), `SELECT revoke_reason FROM sessions WHERE id = $1`, refreshSessionID(replacement.RefreshToken)).Scan(&revokeReason); err != nil {
+		t.Fatalf("read admin revoke-all session reason: %v", err)
+	}
+	if revokeReason != "admin_revoked" {
+		t.Fatalf("admin revoke-all session reason = %q, want admin_revoked", revokeReason)
 	}
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/refresh", map[string]string{"refresh_token": replacement.RefreshToken}, "")
 	if status != http.StatusUnauthorized {

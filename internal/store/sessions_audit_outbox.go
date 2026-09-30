@@ -19,28 +19,31 @@ func CreateSession(ctx context.Context, q Q, session Session) (Session, error) {
 	if session.CreatedAt.IsZero() {
 		session.CreatedAt = time.Now().UTC()
 	}
+	if session.LastActiveAt.IsZero() {
+		session.LastActiveAt = session.CreatedAt
+	}
 	clientMeta := []byte(session.ClientMeta)
 	if len(clientMeta) == 0 {
 		clientMeta = []byte(`{}`)
 	}
 	return scanSession(q.QueryRow(ctx, `
-		INSERT INTO sessions (id, user_id, family_id, client_meta, created_at, expires_at, family_not_after, revoked_at, revoke_reason)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id, user_id, family_id, client_meta, created_at, expires_at, family_not_after, revoked_at, revoke_reason`,
-		session.ID, session.UserID, session.FamilyID, clientMeta, session.CreatedAt, session.ExpiresAt,
-		session.FamilyNotAfter, session.RevokedAt, session.RevokeReason))
+		INSERT INTO sessions (id, user_id, family_id, client_meta, created_at, last_active_at, expires_at, family_not_after, revoked_at, revoke_reason)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id, user_id, family_id, client_meta, created_at, last_active_at, expires_at, family_not_after, revoked_at, revoke_reason`,
+		session.ID, session.UserID, session.FamilyID, clientMeta, session.CreatedAt, session.LastActiveAt,
+		session.ExpiresAt, session.FamilyNotAfter, session.RevokedAt, session.RevokeReason))
 }
 
 func GetSession(ctx context.Context, q Q, id string) (Session, error) {
 	return scanSession(q.QueryRow(ctx, `
-		SELECT id, user_id, family_id, client_meta, created_at, expires_at, family_not_after, revoked_at, revoke_reason
+		SELECT id, user_id, family_id, client_meta, created_at, last_active_at, expires_at, family_not_after, revoked_at, revoke_reason
 		FROM sessions WHERE id = $1`, id))
 }
 
 // ListSessionsByUser returns active, unexpired refresh-token sessions for a user.
 func ListSessionsByUser(ctx context.Context, q Q, userID string) ([]Session, error) {
 	rows, err := q.Query(ctx, `
-		SELECT id, user_id, family_id, client_meta, created_at, expires_at, family_not_after, revoked_at, revoke_reason
+		SELECT id, user_id, family_id, client_meta, created_at, last_active_at, expires_at, family_not_after, revoked_at, revoke_reason
 		FROM sessions
 		WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()
 		ORDER BY created_at, id`, userID)
@@ -65,11 +68,11 @@ func ListSessionsByUser(ctx context.Context, q Q, userID string) ([]Session, err
 // DeleteSessionForUser revokes one unrevoked session only when it belongs to
 // userID. The rows-affected result is zero for unknown, foreign, or revoked
 // sessions, allowing callers to return a non-leaking 404.
-func DeleteSessionForUser(ctx context.Context, q Q, sessionID, userID string) (int64, error) {
+func DeleteSessionForUser(ctx context.Context, q Q, sessionID, userID, reason string) (int64, error) {
 	result, err := q.Exec(ctx, `
 		UPDATE sessions
-		SET revoked_at = COALESCE(revoked_at, now()), revoke_reason = 'user_requested'
-		WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`, sessionID, userID)
+		SET revoked_at = COALESCE(revoked_at, now()), revoke_reason = $3
+		WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL`, sessionID, userID, reason)
 	if err != nil {
 		return 0, err
 	}
@@ -77,11 +80,11 @@ func DeleteSessionForUser(ctx context.Context, q Q, sessionID, userID string) (i
 }
 
 // DeleteAllSessionsForUser revokes every unrevoked session belonging to userID.
-func DeleteAllSessionsForUser(ctx context.Context, q Q, userID string) error {
+func DeleteAllSessionsForUser(ctx context.Context, q Q, userID, reason string) error {
 	_, err := q.Exec(ctx, `
 		UPDATE sessions
-		SET revoked_at = COALESCE(revoked_at, now()), revoke_reason = 'user_requested'
-		WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+		SET revoked_at = COALESCE(revoked_at, now()), revoke_reason = $2
+		WHERE user_id = $1 AND revoked_at IS NULL`, userID, reason)
 	return err
 }
 
@@ -98,7 +101,7 @@ func scanSession(row pgx.Row) (Session, error) {
 	var reason pgtype.Text
 	if err := row.Scan(
 		&session.ID, &session.UserID, &session.FamilyID, &clientMeta,
-		&session.CreatedAt, &session.ExpiresAt, &session.FamilyNotAfter, &session.RevokedAt, &reason,
+		&session.CreatedAt, &session.LastActiveAt, &session.ExpiresAt, &session.FamilyNotAfter, &session.RevokedAt, &reason,
 	); err != nil {
 		return Session{}, err
 	}
@@ -239,6 +242,15 @@ func AppendOutboxEvent(ctx context.Context, q Q, event OutboxEvent) (OutboxEvent
 		INSERT INTO outbox (topic, payload, published_at)
 		VALUES ($1, $2, $3)
 		RETURNING id, topic, payload, published_at`, event.Topic, payload, event.PublishedAt))
+}
+
+func AppendOutboxPayload(ctx context.Context, q Q, topic string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, err = AppendOutboxEvent(ctx, q, OutboxEvent{Topic: topic, Payload: data})
+	return err
 }
 
 func FetchUnpublishedOutbox(ctx context.Context, q Q, cursor int64, limit int) ([]OutboxEvent, int64, error) {

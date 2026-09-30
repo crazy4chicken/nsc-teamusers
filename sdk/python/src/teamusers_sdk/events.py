@@ -1,4 +1,4 @@
-"""Optional permission-cache invalidation events."""
+"""Optional NATS event subscriptions."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import inspect
 import json
 import threading
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, Literal, TypeVar, TypedDict, cast
 
 from .verifier import SDKError
 
@@ -18,6 +18,59 @@ PERMISSION_EVENT_SUBJECTS = (
 )
 
 KEY_ROTATION_EVENT_SUBJECT = "iam.key.rotated"
+
+USER_CREATED_EVENT_SUBJECT = "iam.user.created"
+USER_UPDATED_EVENT_SUBJECT = "iam.user.updated"
+USER_DELETED_EVENT_SUBJECT = "iam.user.deleted"
+TEAM_CREATED_EVENT_SUBJECT = "iam.team.created"
+TEAM_UPDATED_EVENT_SUBJECT = "iam.team.updated"
+
+USER_CREATED_EVENT_KIND = "user.created"
+USER_UPDATED_EVENT_KIND = "user.updated"
+USER_DELETED_EVENT_KIND = "user.deleted"
+TEAM_CREATED_EVENT_KIND = "team.created"
+TEAM_UPDATED_EVENT_KIND = "team.updated"
+
+
+class UserCreatedEvent(TypedDict):
+    event_id: int
+    type: Literal["user.created"]
+    user_id: str
+    changed_fields: list[str]
+    at: str
+
+
+class UserUpdatedEvent(TypedDict):
+    event_id: int
+    type: Literal["user.updated"]
+    user_id: str
+    changed_fields: list[str]
+    at: str
+
+
+class UserDeletedEvent(TypedDict):
+    event_id: int
+    type: Literal["user.deleted"]
+    user_id: str
+    at: str
+
+class TeamCreatedEvent(TypedDict):
+    event_id: int
+    type: Literal["team.created"]
+    team_id: str
+    changed_fields: list[str]
+    at: str
+
+
+class TeamUpdatedEvent(TypedDict):
+    event_id: int
+    type: Literal["team.updated"]
+    team_id: str
+    changed_fields: list[str]
+    at: str
+
+
+_LifecycleEventT = TypeVar("_LifecycleEventT")
 
 
 class NATSSubscriptionError(SDKError):
@@ -167,6 +220,172 @@ def subscribe_key_rotations(verifier: Any, source_or_url: Any) -> PermissionSubs
 
 def SubscribeKeyRotations(verifier: Any, source_or_url: Any) -> PermissionSubscription | None:
     return subscribe_key_rotations(verifier, source_or_url)
+
+
+def subscribe_user_created(
+    source_or_url: Any,
+    handler: Callable[[UserCreatedEvent], Any],
+) -> PermissionSubscription | None:
+    """Subscribe a callback to user.created lifecycle events."""
+    return _subscribe_lifecycle_event(
+        source_or_url,
+        USER_CREATED_EVENT_SUBJECT,
+        USER_CREATED_EVENT_KIND,
+        "user_id",
+        handler,
+    )
+
+
+def subscribe_user_updated(
+    source_or_url: Any,
+    handler: Callable[[UserUpdatedEvent], Any],
+) -> PermissionSubscription | None:
+    """Subscribe a callback to user.updated lifecycle events."""
+    return _subscribe_lifecycle_event(
+        source_or_url,
+        USER_UPDATED_EVENT_SUBJECT,
+        USER_UPDATED_EVENT_KIND,
+        "user_id",
+        handler,
+    )
+
+def subscribe_user_deleted(
+    source_or_url: Any,
+    handler: Callable[[UserDeletedEvent], Any],
+) -> PermissionSubscription | None:
+    """Subscribe a callback to user.deleted lifecycle events."""
+    return _subscribe_lifecycle_event(
+        source_or_url,
+        USER_DELETED_EVENT_SUBJECT,
+        USER_DELETED_EVENT_KIND,
+        "user_id",
+        handler,
+        changed_fields_required=False,
+    )
+
+def subscribe_team_created(
+    source_or_url: Any,
+    handler: Callable[[TeamCreatedEvent], Any],
+) -> PermissionSubscription | None:
+    """Subscribe a callback to team.created lifecycle events."""
+    return _subscribe_lifecycle_event(
+        source_or_url,
+        TEAM_CREATED_EVENT_SUBJECT,
+        TEAM_CREATED_EVENT_KIND,
+        "team_id",
+        handler,
+    )
+
+
+def subscribe_team_updated(
+    source_or_url: Any,
+    handler: Callable[[TeamUpdatedEvent], Any],
+) -> PermissionSubscription | None:
+    """Subscribe a callback to team.updated lifecycle events."""
+    return _subscribe_lifecycle_event(
+        source_or_url,
+        TEAM_UPDATED_EVENT_SUBJECT,
+        TEAM_UPDATED_EVENT_KIND,
+        "team_id",
+        handler,
+    )
+
+
+def SubscribeUserCreated(
+    source_or_url: Any,
+    handler: Callable[[UserCreatedEvent], Any],
+) -> PermissionSubscription | None:
+    return subscribe_user_created(source_or_url, handler)
+
+
+def SubscribeUserUpdated(
+    source_or_url: Any,
+    handler: Callable[[UserUpdatedEvent], Any],
+) -> PermissionSubscription | None:
+    return subscribe_user_updated(source_or_url, handler)
+
+
+def SubscribeUserDeleted(
+    source_or_url: Any,
+    handler: Callable[[UserDeletedEvent], Any],
+) -> PermissionSubscription | None:
+    return subscribe_user_deleted(source_or_url, handler)
+
+def SubscribeTeamCreated(
+    source_or_url: Any,
+    handler: Callable[[TeamCreatedEvent], Any],
+) -> PermissionSubscription | None:
+    return subscribe_team_created(source_or_url, handler)
+
+
+def SubscribeTeamUpdated(
+    source_or_url: Any,
+    handler: Callable[[TeamUpdatedEvent], Any],
+) -> PermissionSubscription | None:
+    return subscribe_team_updated(source_or_url, handler)
+
+
+def _subscribe_lifecycle_event(
+    source_or_url: Any,
+    subject: str,
+    event_kind: str,
+    entity_id_field: str,
+    handler: Callable[[_LifecycleEventT], Any],
+    changed_fields_required: bool = True,
+) -> PermissionSubscription | None:
+    if isinstance(source_or_url, str):
+        if not source_or_url.strip():
+            return None
+        try:
+            import nats  # type: ignore[import-not-found]
+        except ImportError as error:
+            raise NATSUnavailableError(
+                "NATS support requires the optional 'nats-py' extra; install teamusers-sdk[nats]"
+            ) from error
+        source = _NATSSource(nats, source_or_url.strip())
+    else:
+        if source_or_url is None:
+            raise NATSSubscriptionError("NATS subscription source is required")
+        source = source_or_url
+
+    def on_message(*message: Any) -> None:
+        payload = message[-1] if message else None
+        event = _decode_lifecycle_event(payload, event_kind, entity_id_field, changed_fields_required)
+        if event is not None:
+            handler(cast(_LifecycleEventT, event))
+
+    try:
+        return _subscribe_source(source, on_message, (subject,))
+    except NATSSubscriptionError:
+        raise
+    except Exception as error:
+        raise NATSSubscriptionError(f"subscribe to {event_kind} events", error) from error
+
+
+def _decode_lifecycle_event(
+    payload: Any,
+    event_kind: str,
+    entity_id_field: str,
+    changed_fields_required: bool,
+) -> Mapping[str, Any] | None:
+    event = _decode_event(payload)
+    if event is None or event.get("type") != event_kind:
+        return None
+    event_id = event.get("event_id")
+    if not isinstance(event_id, int) or isinstance(event_id, bool):
+        return None
+    entity_id = event.get(entity_id_field)
+    if not isinstance(entity_id, str) or not entity_id:
+        return None
+    if not isinstance(event.get("at"), str):
+        return None
+    changed_fields = event.get("changed_fields")
+    if changed_fields_required or "changed_fields" in event:
+        if not isinstance(changed_fields, list):
+            return None
+        if not all(isinstance(field, str) for field in changed_fields):
+            return None
+    return event
 
 
 def _event_callback(client: Any, handler: Callable[[list[str]], Any] | None):
@@ -369,6 +588,26 @@ class _NATSSource:
 
 __all__ = [
     "KEY_ROTATION_EVENT_SUBJECT",
+    "TEAM_CREATED_EVENT_KIND",
+    "TEAM_CREATED_EVENT_SUBJECT",
+    "TEAM_UPDATED_EVENT_KIND",
+    "TEAM_UPDATED_EVENT_SUBJECT",
+    "USER_CREATED_EVENT_KIND",
+    "USER_CREATED_EVENT_SUBJECT",
+    "USER_UPDATED_EVENT_KIND",
+    "USER_UPDATED_EVENT_SUBJECT",
+    "TeamCreatedEvent",
+    "TeamUpdatedEvent",
+    "UserCreatedEvent",
+    "UserUpdatedEvent",
+    "SubscribeTeamCreated",
+    "SubscribeTeamUpdated",
+    "SubscribeUserCreated",
+    "SubscribeUserUpdated",
+    "subscribe_team_created",
+    "subscribe_team_updated",
+    "subscribe_user_created",
+    "subscribe_user_updated",
     "NATSSubscriptionError",
     "NATSUnavailableError",
     "PERMISSION_EVENT_SUBJECTS",

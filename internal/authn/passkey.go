@@ -185,11 +185,21 @@ func (s *Service) beginPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	var request passkeyLoginBeginRequest
 	body, ok := readPasskeyBody(w, r)
 	if !ok {
+		if !s.limiter.allowIP(requestIP(r), s.now()) {
+			writeRateLimited(w, r)
+			return
+		}
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, store.User{}, "", "passkey", "failure")
 		writeUnauthorized(w, r)
 		return
 	}
 	if len(bytes.TrimSpace(body)) != 0 {
 		if err := json.Unmarshal(body, &request); err != nil {
+			if !s.limiter.allowIP(requestIP(r), s.now()) {
+				writeRateLimited(w, r)
+				return
+			}
+			s.recordLoginActivityFromRequest(r.Context(), s.q, r, store.User{}, request.Username, "passkey", "failure")
 			writeUnauthorized(w, r)
 			return
 		}
@@ -216,16 +226,19 @@ func (s *Service) beginPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := store.GetUserByUsername(r.Context(), s.q, username)
 	if err != nil || user.Status != "active" {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, username, "passkey", "failure")
 		writeUnauthorized(w, r)
 		return
 	}
 	if user.LockedUntil != nil && user.LockedUntil.After(s.now()) {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, username, "passkey", "failure")
 		s.auditAuth(r.Context(), s.q, "auth.passkey.login.locked", user, username)
 		writeAuthProblem(w, r, http.StatusLocked, "account_locked")
 		return
 	}
 	passkey, err := s.passkeyUser(r.Context(), user)
 	if err != nil || len(passkey.credentials) == 0 {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, username, "passkey", "failure")
 		writeUnauthorized(w, r)
 		return
 	}
@@ -267,17 +280,20 @@ func (s *Service) finishPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	body, ok := readPasskeyBody(w, r)
 	if !ok {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, store.User{}, "", "passkey", "failure")
 		writePasskeyInvalid(w, r)
 		return
 	}
 	parsed, err := protocol.ParseCredentialRequestResponseBytes(body)
 	if err != nil || parsed.Response.CollectedClientData.Challenge == "" {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, store.User{}, "", "passkey", "failure")
 		writePasskeyInvalid(w, r)
 		return
 	}
 	challenge := parsed.Response.CollectedClientData.Challenge
 	rawSession, err := store.ConsumeWebauthnChallenge(r.Context(), s.q, challenge, "login")
 	if errors.Is(err, store.ErrNotFound) {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, store.User{}, "", "passkey", "failure")
 		writePasskeyInvalid(w, r)
 		return
 	}
@@ -291,6 +307,7 @@ func (s *Service) finishPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if session.Challenge != challenge {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, store.User{}, "", "passkey", "failure")
 		writePasskeyInvalid(w, r)
 		return
 	}
@@ -300,20 +317,24 @@ func (s *Service) finishPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	if len(session.UserID) != 0 {
 		resolvedUser, err = store.GetUser(r.Context(), s.q, string(session.UserID))
 		if err != nil {
+			s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 			writeUnauthorized(w, r)
 			return
 		}
 		if resolvedUser.LockedUntil != nil && resolvedUser.LockedUntil.After(s.now()) {
+			s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 			s.auditAuth(r.Context(), s.q, "auth.passkey.login.locked", resolvedUser, resolvedUser.Username)
 			writeAuthProblem(w, r, http.StatusLocked, "account_locked")
 			return
 		}
 		if resolvedUser.Status != "active" {
+			s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 			writeUnauthorized(w, r)
 			return
 		}
 		passkey, passkeyErr := s.passkeyUser(r.Context(), resolvedUser)
 		if passkeyErr != nil {
+			s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 			writeUnauthorized(w, r)
 			return
 		}
@@ -342,6 +363,7 @@ func (s *Service) finishPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if resolvedUser.ID != "" && resolvedUser.LockedUntil != nil && resolvedUser.LockedUntil.After(s.now()) {
+			s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 			s.auditAuth(r.Context(), s.q, "auth.passkey.login.locked", resolvedUser, resolvedUser.Username)
 			writeAuthProblem(w, r, http.StatusLocked, "account_locked")
 			return
@@ -349,29 +371,35 @@ func (s *Service) finishPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 		if resolvedUser.ID != "" && resolvedUser.Status == "active" {
 			locked, failureErr := s.recordPasskeyFailure(r.Context(), resolvedUser)
 			if failureErr != nil {
+				s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 				writeInternal(w, r)
 				return
 			}
 			if locked {
+				s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 				s.auditAuth(r.Context(), s.q, "auth.passkey.login.locked", resolvedUser, resolvedUser.Username)
 				writeAuthProblem(w, r, http.StatusLocked, "account_locked")
 				return
 			}
 		}
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 		s.auditAuth(r.Context(), s.q, "auth.passkey.login.failed", resolvedUser, "passkey")
 		writeUnauthorized(w, r)
 		return
 	}
 	if credential == nil || resolvedUser.ID == "" {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 		writeUnauthorized(w, r)
 		return
 	}
 	if resolvedUser.LockedUntil != nil && resolvedUser.LockedUntil.After(s.now()) {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 		s.auditAuth(r.Context(), s.q, "auth.passkey.login.locked", resolvedUser, resolvedUser.Username)
 		writeAuthProblem(w, r, http.StatusLocked, "account_locked")
 		return
 	}
 	if resolvedUser.Status != "active" {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 		writeUnauthorized(w, r)
 		return
 	}
@@ -393,6 +421,7 @@ func (s *Service) finishPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 		hasTOTP := totpErr == nil
 		if hasTOTP || requiredMFA {
 			if requiredMFA && !hasTOTP && policy.DenyUnenrolled {
+				s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 				writeAuthProblem(w, r, http.StatusForbidden, "mfa_enrollment_denied")
 				return
 			}
@@ -406,7 +435,7 @@ func (s *Service) finishPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 				writeInternal(w, r)
 				return
 			}
-			if err := s.recordPasskeyMFARequired(r.Context(), resolvedUser, *credential); err != nil {
+			if err := s.recordPasskeyMFARequired(r.Context(), resolvedUser, *credential, metadata); err != nil {
 				writeInternal(w, r)
 				return
 			}
@@ -417,8 +446,8 @@ func (s *Service) finishPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 			} else {
 				writeJSON(w, http.StatusOK, map[string]any{
 					"mfa_enrollment_required": true,
-					"mfa_token":              pendingToken,
-					"mfa_methods":            []string{"otp"},
+					"mfa_token":               pendingToken,
+					"mfa_methods":             []string{"otp"},
 				})
 			}
 			return
@@ -457,7 +486,11 @@ func (s *Service) completePasskeyLogin(ctx context.Context, user store.User, cre
 		if err != nil {
 			return err
 		}
-		return s.appendAuthAudit(txctx, q, "auth.passkey.login.succeeded", user.ID, user.ID)
+		if err := s.appendAuthAudit(txctx, q, "auth.passkey.login.succeeded", user.ID, user.ID); err != nil {
+			return err
+		}
+		s.recordLoginActivityFromMetadata(txctx, q, user, "passkey", "success", metadata)
+		return nil
 	}
 	if s.pool != nil {
 		if err := store.WithTx(ctx, s.pool, func(txctx context.Context, tx store.Tx) error {
@@ -473,15 +506,16 @@ func (s *Service) completePasskeyLogin(ctx context.Context, user store.User, cre
 	return response, nil
 }
 
-func (s *Service) recordPasskeyMFARequired(ctx context.Context, user store.User, credential webauthnlib.Credential) error {
+func (s *Service) recordPasskeyMFARequired(ctx context.Context, user store.User, credential webauthnlib.Credential, metadata sessionMetadata) error {
 	issue := func(txctx context.Context, q store.Q) error {
 		if err := store.UpdatePasskey(txctx, q, user.ID, credential); err != nil {
 			return err
 		}
-		if err := store.ResetFailedLogins(txctx, q, user.ID); err != nil {
+		if err := s.appendAuthAudit(txctx, q, "auth.passkey.login.mfa_required", user.ID, user.ID); err != nil {
 			return err
 		}
-		return s.appendAuthAudit(txctx, q, "auth.passkey.login.mfa_required", user.ID, user.ID)
+		s.recordLoginActivityFromMetadata(txctx, q, user, "passkey", "success", metadata)
+		return nil
 	}
 	if s.pool != nil {
 		return store.WithTx(ctx, s.pool, func(txctx context.Context, tx store.Tx) error {

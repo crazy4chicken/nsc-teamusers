@@ -38,11 +38,11 @@ func NewRouter(q store.Q, authMW func(http.Handler) http.Handler) chi.Router {
 }
 
 type checkRequest struct {
-	Subject            string       `json:"subject"`
-	Permission         string       `json:"permission"`
-	AuthTime           int64        `json:"auth_time,omitempty"`
-	MaxAuthAgeSeconds  int64        `json:"max_auth_age_seconds,omitempty"`
-	Context            checkContext `json:"context,omitempty"`
+	Subject           string       `json:"subject"`
+	Permission        string       `json:"permission"`
+	AuthTime          int64        `json:"auth_time,omitempty"`
+	MaxAuthAgeSeconds int64        `json:"max_auth_age_seconds,omitempty"`
+	Context           checkContext `json:"context,omitempty"`
 }
 
 type checkContext struct {
@@ -129,7 +129,7 @@ func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 	}
 	result := evaluate(r.Context(), set, requested, values)
 	if errors.Is(resolveErr, ErrUserDisabled) {
-		result = evaluationResult{Matched: []string{}, Reason: "user disabled"}
+		result = evaluationResult{Matched: []string{}, Reason: "user_disabled"}
 	}
 	if result.Allow && request.MaxAuthAgeSeconds > 0 && !authTimeFresh(request.AuthTime, request.MaxAuthAgeSeconds, now) {
 		result = evaluationResult{Matched: []string{}, Reason: "step_up_required"}

@@ -439,6 +439,9 @@ func autoBootstrapAdmin(ctx context.Context, q store.Q) error {
 		if err != nil {
 			return err
 		}
+		if err := store.AppendUserLifecycleEvent(ctx, tx, "user.created", nil, &user); err != nil {
+			return err
+		}
 		if err := provisionAdminRole(ctx, tx, user, &bootstrapAdminResult{}); err != nil {
 			return err
 		}
@@ -658,6 +661,13 @@ func run(cfg config.Config) error {
 			runAuditLogReaper(workerContext, pool, cfg.AuditRetentionDays, logger)
 		}()
 	}
+	if cfg.LoginActivityRetentionDays > 0 {
+		backgroundWorkers.Add(1)
+		go func() {
+			defer backgroundWorkers.Done()
+			runLoginActivityReaper(workerContext, pool, cfg.LoginActivityRetentionDays, logger)
+		}()
+	}
 	waitForWorkers := func(waitContext context.Context) {
 		cancelWorkers()
 		done := make(chan struct{})
@@ -730,6 +740,38 @@ func runAuditLogReaper(ctx context.Context, q store.Q, retentionDays int, logger
 				continue
 			}
 			logger.Info("reaped expired audit entries", "retention_days", retentionDays, "deleted", deleted)
+		}
+	}
+}
+
+func runLoginActivityReaper(ctx context.Context, q store.Q, retentionDays int, logger *slog.Logger) {
+	if retentionDays <= 0 {
+		return
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now().UTC()
+			cutoff := now.AddDate(0, 0, -retentionDays)
+			if cutoff.After(now) || cutoff.Year() < 1 {
+				cutoff = time.Time{}
+			}
+			deleted, err := store.DeleteExpiredLoginActivity(ctx, q, cutoff)
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				logger.Error("reap expired login activity failed", "retention_days", retentionDays, "deleted", deleted, "error", err)
+				continue
+			}
+			logger.Info("reaped expired login activity", "retention_days", retentionDays, "deleted", deleted)
 		}
 	}
 }

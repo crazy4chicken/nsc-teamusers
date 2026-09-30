@@ -11,8 +11,16 @@ import (
 func TestTrustedRealIPHonorsConfiguredCIDR(t *testing.T) {
 	cfg := loadTrustedProxyConfig(t, "10.0.0.0/8")
 	got := remoteAddrAfterMiddleware(t, trustedRealIP(cfg.TrustedProxies), "10.24.8.4:4321", "198.51.100.7, 203.0.113.8")
-	if got != "198.51.100.7" {
-		t.Fatalf("trusted CIDR peer got RemoteAddr %q, want first forwarded address", got)
+	if got != "203.0.113.8" {
+		t.Fatalf("trusted CIDR peer got RemoteAddr %q, want rightmost non-trusted forwarded address", got)
+	}
+}
+
+func TestTrustedRealIPSkipsTrustedForwardedHops(t *testing.T) {
+	cfg := loadTrustedProxyConfig(t, "10.0.0.0/8")
+	got := remoteAddrAfterMiddleware(t, trustedRealIP(cfg.TrustedProxies), "10.24.8.4:4321", "198.51.100.20, 10.1.2.3")
+	if got != "198.51.100.20" {
+		t.Fatalf("trusted proxy chain got RemoteAddr %q, want rightmost non-trusted forwarded address", got)
 	}
 }
 

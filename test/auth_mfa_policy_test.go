@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-
 	"github.com/jackc/pgx/v5"
 	"teamusers/internal/store"
 )
@@ -98,6 +97,15 @@ func TestDenyUnenrolledMFAPolicyCanBeCreatedAndPatched(t *testing.T) {
 	}, "")
 	if status != http.StatusForbidden || !strings.Contains(string(body), "mfa_enrollment_denied") {
 		t.Fatalf("unenrolled login = %d %s, want mfa_enrollment_denied 403", status, body)
+	}
+	var method, result string
+	if err := stack.database.pool.QueryRow(ctx, `
+		SELECT method, result FROM login_activity
+		WHERE user_id = $1 ORDER BY id DESC LIMIT 1`, user.ID).Scan(&method, &result); err != nil {
+		t.Fatalf("read denied unenrolled MFA activity: %v", err)
+	}
+	if method != "password" || result != "failure" {
+		t.Fatalf("denied unenrolled MFA activity = %q/%q, want password failure", method, result)
 	}
 
 	status, body = stack.jsonRequest(t, http.MethodPatch, "/policies/mfa/"+policy.ID, map[string]any{

@@ -116,7 +116,7 @@ func GetUserTeamID(ctx context.Context, q Q, userID string) (string, error) {
 // enter the database.
 func GetSessionForUpdate(ctx context.Context, q Q, refreshHash string) (Session, error) {
 	return scanSession(q.QueryRow(ctx, `
-		SELECT id, user_id, family_id, client_meta, created_at, expires_at, family_not_after, revoked_at, revoke_reason
+		SELECT id, user_id, family_id, client_meta, created_at, last_active_at, expires_at, family_not_after, revoked_at, revoke_reason
 		FROM sessions WHERE id = $1 FOR UPDATE`, refreshHash))
 }
 
@@ -131,11 +131,15 @@ func RevokeSession(ctx context.Context, q Q, id, reason string) error {
 
 // RevokeSessionFamilyReuse marks every session in a family after a rotated
 // refresh token is presented again, including rows already revoked for
-// rotation. This preserves the theft-detection reason across the family.
-func RevokeSessionFamilyReuse(ctx context.Context, q Q, familyID string) error {
-	_, err := q.Exec(ctx, `
+// rotation. It reports whether this call transitioned any family rows to the
+// reuse-detected state.
+func RevokeSessionFamilyReuse(ctx context.Context, q Q, familyID string) (bool, error) {
+	result, err := q.Exec(ctx, `
         UPDATE sessions
         SET revoked_at = COALESCE(revoked_at, now()), revoke_reason = 'reuse_detected'
-        WHERE family_id = $1`, familyID)
-	return err
+        WHERE family_id = $1 AND revoke_reason IS DISTINCT FROM 'reuse_detected'`, familyID)
+	if err != nil {
+		return false, err
+	}
+	return result.RowsAffected() > 0, nil
 }

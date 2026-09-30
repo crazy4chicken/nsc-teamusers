@@ -92,6 +92,9 @@ func (h *adminHandler) createInvitation(w http.ResponseWriter, r *http.Request) 
 		})); err != nil {
 			return err
 		}
+		if err := store.AppendUserLifecycleEvent(ctx, tx, "user.created", nil, &created); err != nil {
+			return err
+		}
 		return appendNotifyEvent(ctx, tx, "user.invited", map[string]string{
 			"user_id": created.ID,
 			"email":   request.Email,
@@ -187,8 +190,10 @@ func (h *adminHandler) cancelInvitation(w http.ResponseWriter, r *http.Request) 
 		if err := store.DeleteUser(ctx, tx, id); err != nil {
 			return err
 		}
-		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, nil, "invitation.cancelled", id, before, nil))
-		return err
+		if _, err := h.audit.Append(ctx, tx, h.auditEntry(r, nil, "invitation.cancelled", id, before, nil)); err != nil {
+			return err
+		}
+		return store.AppendUserLifecycleEvent(ctx, tx, "user.deleted", &before, nil)
 	})
 	if err != nil {
 		if writeValidationError(w, r, err) {

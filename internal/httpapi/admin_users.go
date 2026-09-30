@@ -130,6 +130,9 @@ func (h *adminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 		if err := appendPermissionChange(ctx, tx, []string{user.ID}, nil); err != nil {
 			return err
 		}
+		if err := store.AppendUserLifecycleEvent(ctx, tx, "user.created", nil, &user); err != nil {
+			return err
+		}
 		return appendNotifyEvent(ctx, tx, "user.created", map[string]string{
 			"user_id": user.ID, "username": user.Username,
 		})
@@ -197,7 +200,7 @@ func (h *adminHandler) patchUser(w http.ResponseWriter, r *http.Request) {
 			}
 			updated.PermVer = version
 			if updated.Status == "disabled" {
-				if err := store.RevokeAllUserSessions(ctx, tx, id, "user disabled"); err != nil {
+				if err := store.RevokeAllUserSessions(ctx, tx, id, "user_disabled"); err != nil {
 					return err
 				}
 				if err := appendUserDisabledEvents(ctx, tx, id, nil); err != nil {
@@ -213,7 +216,10 @@ func (h *adminHandler) patchUser(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, nil, "user.updated", id, original, updated))
-		return err
+		if err != nil {
+			return err
+		}
+		return store.AppendUserLifecycleEvent(ctx, tx, "user.updated", &original, &updated)
 	})
 	if err != nil {
 		if writeValidationError(w, r, err) {
@@ -235,8 +241,10 @@ func (h *adminHandler) deleteUser(w http.ResponseWriter, r *http.Request) {
 		if err := store.DeleteUser(ctx, tx, id); err != nil {
 			return err
 		}
-		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, nil, "user.deleted", id, before, nil))
-		return err
+		if _, err := h.audit.Append(ctx, tx, h.auditEntry(r, nil, "user.deleted", id, before, nil)); err != nil {
+			return err
+		}
+		return store.AppendUserLifecycleEvent(ctx, tx, "user.deleted", &before, nil)
 	})
 	if err != nil {
 		WriteStoreProblem(w, r, err)
@@ -302,6 +310,9 @@ func (h *adminHandler) approveUser(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if _, err := h.audit.Append(ctx, tx, h.auditEntry(r, nil, "user.approved", id, before, updated)); err != nil {
+			return err
+		}
+		if err := store.AppendUserLifecycleEvent(ctx, tx, "user.updated", &before, &updated); err != nil {
 			return err
 		}
 		return appendNotifyEvent(ctx, tx, "user.approved", map[string]string{"user_id": id})

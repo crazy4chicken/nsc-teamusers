@@ -54,6 +54,24 @@ func TestAuthLifecycle(t *testing.T) {
 	if status != http.StatusUnauthorized {
 		t.Fatalf("family refresh after replay status = %d, want %d", status, http.StatusUnauthorized)
 	}
+	var reuseEvents int
+	if err := stack.database.pool.QueryRow(ctx, `
+		SELECT count(*) FROM outbox
+		WHERE topic = 'notify.session.reuse_detected' AND payload->>'user_id' = $1`, admin.ID).Scan(&reuseEvents); err != nil {
+		t.Fatalf("count refresh reuse events: %v", err)
+	}
+	if reuseEvents != 1 {
+		t.Fatalf("refresh reuse events = %d, want exactly one alert for the family", reuseEvents)
+	}
+	var reuseAuditEvents int
+	if err := stack.database.pool.QueryRow(ctx, `
+		SELECT count(*) FROM audit_log
+		WHERE action = 'auth.refresh.reuse_detected' AND target = $1`, admin.ID).Scan(&reuseAuditEvents); err != nil {
+		t.Fatalf("count refresh reuse audit entries: %v", err)
+	}
+	if reuseAuditEvents != 1 {
+		t.Fatalf("refresh reuse audit entries = %d, want exactly one", reuseAuditEvents)
+	}
 
 	status, body = stack.jsonRequest(t, http.MethodGet, "/.well-known/jwks.json", nil, "")
 	if status != http.StatusOK {
@@ -149,6 +167,23 @@ func TestAuthLogout(t *testing.T) {
 	}, "")
 	if status != http.StatusUnauthorized {
 		t.Fatalf("refresh after logout status = %d, want %d", status, http.StatusUnauthorized)
+	}
+	var revokeReason string
+	if err := stack.database.pool.QueryRow(context.Background(), `
+		SELECT revoke_reason FROM sessions WHERE id = $1`, refreshSessionID(pair.RefreshToken)).Scan(&revokeReason); err != nil {
+		t.Fatalf("read logged-out session reason: %v", err)
+	}
+	if revokeReason != "logout" {
+		t.Fatalf("logged-out session reason = %q, want logout", revokeReason)
+	}
+	var reuseEvents int
+	if err := stack.database.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM outbox
+		WHERE topic = 'notify.session.reuse_detected' AND payload->>'user_id' = $1`, admin.ID).Scan(&reuseEvents); err != nil {
+		t.Fatalf("count reuse events after logout: %v", err)
+	}
+	if reuseEvents != 0 {
+		t.Fatalf("reuse events after logout replay = %d, want 0", reuseEvents)
 	}
 	status, _ = stack.jsonRequest(t, http.MethodPost, "/auth/logout", map[string]string{}, "")
 	if status != http.StatusNoContent {

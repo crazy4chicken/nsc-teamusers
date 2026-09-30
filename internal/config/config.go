@@ -14,66 +14,69 @@ import (
 )
 
 const (
-	envConnectionString      = "TEAMUSERS_CONNECTION_STRING"
-	envListenAddress         = "TEAMUSERS_LISTEN_ADDRESS"
-	envListenPort            = "TEAMUSERS_LISTEN_PORT"
-	envNodeID                = "TEAMUSERS_NODE_ID"
-	envLogLevel              = "TEAMUSERS_LOG_LEVEL"
-	envKeyDir                = "TEAMUSERS_KEY_DIR"
-	envNATSURL               = "TEAMUSERS_NATS_URL"
-	envNotificationEndpoints = "TEAMUSERS_NOTIFICATION_ENDPOINTS"
-	envNotificationSecret    = "TEAMUSERS_NOTIFICATION_SECRET"
-	envAuditRetentionDays   = "TEAMUSERS_AUDIT_RETENTION_DAYS"
-	envAuditForwardEndpoints = "TEAMUSERS_AUDIT_FORWARD_ENDPOINTS"
-	envAuditForwardSecret    = "TEAMUSERS_AUDIT_FORWARD_SECRET"
-	envPwnedPasswordsEnabled = "TEAMUSERS_PWNED_PASSWORDS_ENABLED"
-	envRegistrationMode      = "TEAMUSERS_REGISTRATION_MODE"
-	envTokenAudience         = "TEAMUSERS_TOKEN_AUDIENCE"
-	envLockoutThreshold      = "TEAMUSERS_LOCKOUT_THRESHOLD"
-	envLockoutDuration       = "TEAMUSERS_LOCKOUT_DURATION"
-	envAccessTokenTTL        = "TEAMUSERS_ACCESS_TOKEN_TTL"
-	envRefreshTokenTTL       = "TEAMUSERS_REFRESH_TOKEN_TTL"
-	envSessionFamilyTTL      = "TEAMUSERS_SESSION_FAMILY_TTL"
-	envWebAuthnRPID          = "TEAMUSERS_WEBAUTHN_RP_ID"
-	envWebAuthnOrigin        = "TEAMUSERS_WEBAUTHN_ORIGIN"
-	envTrustedProxies        = "TEAMUSERS_TRUSTED_PROXIES"
+	envConnectionString           = "TEAMUSERS_CONNECTION_STRING"
+	envListenAddress              = "TEAMUSERS_LISTEN_ADDRESS"
+	envListenPort                 = "TEAMUSERS_LISTEN_PORT"
+	envNodeID                     = "TEAMUSERS_NODE_ID"
+	envLogLevel                   = "TEAMUSERS_LOG_LEVEL"
+	envKeyDir                     = "TEAMUSERS_KEY_DIR"
+	envNATSURL                    = "TEAMUSERS_NATS_URL"
+	envNotificationEndpoints      = "TEAMUSERS_NOTIFICATION_ENDPOINTS"
+	envNotificationSecret         = "TEAMUSERS_NOTIFICATION_SECRET"
+	envAuditRetentionDays         = "TEAMUSERS_AUDIT_RETENTION_DAYS"
+	envLoginActivityRetentionDays = "TEAMUSERS_LOGIN_ACTIVITY_RETENTION_DAYS"
+	envAuditForwardEndpoints      = "TEAMUSERS_AUDIT_FORWARD_ENDPOINTS"
+	envAuditForwardSecret         = "TEAMUSERS_AUDIT_FORWARD_SECRET"
+	envPwnedPasswordsEnabled      = "TEAMUSERS_PWNED_PASSWORDS_ENABLED"
+	envRegistrationMode           = "TEAMUSERS_REGISTRATION_MODE"
+	envTokenAudience              = "TEAMUSERS_TOKEN_AUDIENCE"
+	envLockoutThreshold           = "TEAMUSERS_LOCKOUT_THRESHOLD"
+	envLockoutDuration            = "TEAMUSERS_LOCKOUT_DURATION"
+	envAccessTokenTTL             = "TEAMUSERS_ACCESS_TOKEN_TTL"
+	envRefreshTokenTTL            = "TEAMUSERS_REFRESH_TOKEN_TTL"
+	envSessionFamilyTTL           = "TEAMUSERS_SESSION_FAMILY_TTL"
+	envWebAuthnRPID               = "TEAMUSERS_WEBAUTHN_RP_ID"
+	envWebAuthnOrigin             = "TEAMUSERS_WEBAUTHN_ORIGIN"
+	envTrustedProxies             = "TEAMUSERS_TRUSTED_PROXIES"
 
-	DefaultLockoutThreshold = 5
-	DefaultLockoutDuration  = 15 * time.Minute
-	DefaultAccessTokenTTL   = 10 * time.Minute
-	DefaultRefreshTokenTTL  = 720 * time.Hour
-	DefaultSessionFamilyTTL = 2160 * time.Hour
-	DefaultTokenAudience    = "teamusers"
-	DefaultWebAuthnRPID     = "localhost"
-	DefaultWebAuthnOrigin   = "http://localhost"
+	DefaultLockoutThreshold           = 5
+	DefaultLockoutDuration            = 15 * time.Minute
+	DefaultAccessTokenTTL             = 10 * time.Minute
+	DefaultRefreshTokenTTL            = 720 * time.Hour
+	DefaultSessionFamilyTTL           = 2160 * time.Hour
+	DefaultLoginActivityRetentionDays = 90
+	DefaultTokenAudience              = "teamusers"
+	DefaultWebAuthnRPID               = "localhost"
+	DefaultWebAuthnOrigin             = "http://localhost"
 )
 
 // Config is the process configuration. Values are resolved in flag, env, and
 // default order, respectively.
 type Config struct {
-	ConnectionString      string         `json:"connection_string,omitempty"`
-	ListenAddress         string         `json:"listen_address"`
-	ListenPort            int            `json:"listen_port"`
-	NodeID                string         `json:"node_id,omitempty"`
-	LogLevel              string         `json:"log_level"`
-	KeyDir                string         `json:"key_dir"`
-	NATSURL               string         `json:"nats_url,omitempty"`
-	NotificationEndpoints   []string       `json:"notification_endpoints,omitempty"`
-	NotificationSecret      string         `json:"notification_secret,omitempty"`
-	AuditRetentionDays      int            `json:"audit_retention_days"`
-	AuditForwardEndpoints   []string       `json:"audit_forward_endpoints,omitempty"`
-	AuditForwardSecret      string         `json:"audit_forward_secret,omitempty"`
-	PwnedPasswordsEnabled   bool           `json:"pwned_passwords_enabled"`
-	RegistrationMode      string         `json:"registration_mode"`
-	TokenAudience         string         `json:"token_audience"`
-	AccessTokenTTL        time.Duration  `json:"access_token_ttl"`
-	RefreshTokenTTL       time.Duration  `json:"refresh_token_ttl"`
-	SessionFamilyTTL      time.Duration  `json:"session_family_ttl"`
-	LockoutThreshold      int            `json:"lockout_threshold"`
-	LockoutDuration       time.Duration  `json:"lockout_duration"`
-	WebAuthnRPID          string         `json:"webauthn_rp_id"`
-	WebAuthnOrigin        string         `json:"webauthn_origin"`
-	TrustedProxies        []netip.Prefix `json:"trusted_proxies,omitempty"`
+	ConnectionString           string         `json:"connection_string,omitempty"`
+	ListenAddress              string         `json:"listen_address"`
+	ListenPort                 int            `json:"listen_port"`
+	NodeID                     string         `json:"node_id,omitempty"`
+	LogLevel                   string         `json:"log_level"`
+	KeyDir                     string         `json:"key_dir"`
+	NATSURL                    string         `json:"nats_url,omitempty"`
+	NotificationEndpoints      []string       `json:"notification_endpoints,omitempty"`
+	NotificationSecret         string         `json:"notification_secret,omitempty"`
+	AuditRetentionDays         int            `json:"audit_retention_days"`
+	LoginActivityRetentionDays int            `json:"login_activity_retention_days"`
+	AuditForwardEndpoints      []string       `json:"audit_forward_endpoints,omitempty"`
+	AuditForwardSecret         string         `json:"audit_forward_secret,omitempty"`
+	PwnedPasswordsEnabled      bool           `json:"pwned_passwords_enabled"`
+	RegistrationMode           string         `json:"registration_mode"`
+	TokenAudience              string         `json:"token_audience"`
+	AccessTokenTTL             time.Duration  `json:"access_token_ttl"`
+	RefreshTokenTTL            time.Duration  `json:"refresh_token_ttl"`
+	SessionFamilyTTL           time.Duration  `json:"session_family_ttl"`
+	LockoutThreshold           int            `json:"lockout_threshold"`
+	LockoutDuration            time.Duration  `json:"lockout_duration"`
+	WebAuthnRPID               string         `json:"webauthn_rp_id"`
+	WebAuthnOrigin             string         `json:"webauthn_origin"`
+	TrustedProxies             []netip.Prefix `json:"trusted_proxies,omitempty"`
 }
 
 // Load reads configuration from the process environment and optional command
@@ -96,6 +99,7 @@ func Load(args ...string) (Config, error) {
 	notificationEndpoints := envOrDefault(envNotificationEndpoints, "")
 	notificationSecret := envOrDefault(envNotificationSecret, "")
 	auditRetentionDays := envOrDefault(envAuditRetentionDays, "0")
+	loginActivityRetentionDays := envOrDefault(envLoginActivityRetentionDays, strconv.Itoa(DefaultLoginActivityRetentionDays))
 	auditForwardEndpoints := envOrDefault(envAuditForwardEndpoints, "")
 	auditForwardSecret := envOrDefault(envAuditForwardSecret, "")
 	pwnedPasswordsEnabledRaw := envOrDefault(envPwnedPasswordsEnabled, "false")
@@ -154,6 +158,10 @@ func Load(args ...string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid audit retention days %q: %w", auditRetentionDays, err)
 	}
+	loginActivityRetentionDaysValue, err := strconv.Atoi(strings.TrimSpace(loginActivityRetentionDays))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid login activity retention days %q: %w", loginActivityRetentionDays, err)
+	}
 	port, err := strconv.Atoi(strings.TrimSpace(listenPort))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid listen port %q: %w", listenPort, err)
@@ -190,29 +198,30 @@ func Load(args ...string) (Config, error) {
 	}
 
 	cfg := Config{
-		ConnectionString:      connectionString,
-		ListenAddress:         listenAddress,
-		ListenPort:            port,
-		NodeID:                nodeID,
-		LogLevel:              strings.ToLower(strings.TrimSpace(logLevel)),
-		KeyDir:                keyDir,
-		NATSURL:               natsURL,
-		NotificationEndpoints: parseNotificationEndpoints(notificationEndpoints),
-		NotificationSecret:    notificationSecret,
-		AuditRetentionDays:    auditRetentionDaysValue,
-		AuditForwardEndpoints: parseNotificationEndpoints(auditForwardEndpoints),
-		AuditForwardSecret:    auditForwardSecret,
-		PwnedPasswordsEnabled: pwnedPasswordsEnabled,
-		RegistrationMode:      strings.ToLower(strings.TrimSpace(registrationMode)),
-		TokenAudience:         strings.TrimSpace(tokenAudience),
-		AccessTokenTTL:        accessTTL,
-		RefreshTokenTTL:       refreshTTL,
-		SessionFamilyTTL:      familyTTL,
-		LockoutThreshold:      threshold,
-		LockoutDuration:       duration,
-		WebAuthnRPID:          strings.TrimSpace(webauthnRPID),
-		WebAuthnOrigin:        strings.TrimSpace(webauthnOrigin),
-		TrustedProxies:        parsedTrustedProxies,
+		ConnectionString:           connectionString,
+		ListenAddress:              listenAddress,
+		ListenPort:                 port,
+		NodeID:                     nodeID,
+		LogLevel:                   strings.ToLower(strings.TrimSpace(logLevel)),
+		KeyDir:                     keyDir,
+		NATSURL:                    natsURL,
+		NotificationEndpoints:      parseNotificationEndpoints(notificationEndpoints),
+		NotificationSecret:         notificationSecret,
+		AuditRetentionDays:         auditRetentionDaysValue,
+		LoginActivityRetentionDays: loginActivityRetentionDaysValue,
+		AuditForwardEndpoints:      parseNotificationEndpoints(auditForwardEndpoints),
+		AuditForwardSecret:         auditForwardSecret,
+		PwnedPasswordsEnabled:      pwnedPasswordsEnabled,
+		RegistrationMode:           strings.ToLower(strings.TrimSpace(registrationMode)),
+		TokenAudience:              strings.TrimSpace(tokenAudience),
+		AccessTokenTTL:             accessTTL,
+		RefreshTokenTTL:            refreshTTL,
+		SessionFamilyTTL:           familyTTL,
+		LockoutThreshold:           threshold,
+		LockoutDuration:            duration,
+		WebAuthnRPID:               strings.TrimSpace(webauthnRPID),
+		WebAuthnOrigin:             strings.TrimSpace(webauthnOrigin),
+		TrustedProxies:             parsedTrustedProxies,
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -281,6 +290,9 @@ func (c Config) Validate() error {
 	}
 	if c.AuditRetentionDays < 0 {
 		return fmt.Errorf("audit retention days must not be negative, got %d", c.AuditRetentionDays)
+	}
+	if c.LoginActivityRetentionDays < 0 {
+		return fmt.Errorf("login activity retention days must not be negative, got %d", c.LoginActivityRetentionDays)
 	}
 	if len(c.AuditForwardEndpoints) > 0 && strings.TrimSpace(c.AuditForwardSecret) == "" {
 		return errors.New("audit forwarding secret is required when endpoints are configured")

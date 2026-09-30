@@ -14,17 +14,17 @@ import (
 	"teamusers/internal/store"
 )
 
-
 type loginResponse struct {
-	AccessToken          string   `json:"access_token,omitempty"`
-	RefreshToken         string   `json:"refresh_token,omitempty"`
-	TokenType            string   `json:"token_type,omitempty"`
-	ExpiresIn            int64    `json:"expires_in,omitempty"`
-	MFARequired          bool     `json:"mfa_required,omitempty"`
-	MFAEnrollmentRequired bool    `json:"mfa_enrollment_required,omitempty"`
-	MFAToken             string   `json:"mfa_token,omitempty"`
-	MFAMethods           []string `json:"mfa_methods,omitempty"`
+	AccessToken           string   `json:"access_token,omitempty"`
+	RefreshToken          string   `json:"refresh_token,omitempty"`
+	TokenType             string   `json:"token_type,omitempty"`
+	ExpiresIn             int64    `json:"expires_in,omitempty"`
+	MFARequired           bool     `json:"mfa_required,omitempty"`
+	MFAEnrollmentRequired bool     `json:"mfa_enrollment_required,omitempty"`
+	MFAToken              string   `json:"mfa_token,omitempty"`
+	MFAMethods            []string `json:"mfa_methods,omitempty"`
 }
+
 // DocOperations is the authentication route contract used by the OpenAPI
 // generator.
 var DocOperations = []apidocs.Operation{

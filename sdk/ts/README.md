@@ -152,3 +152,18 @@ when the optional `nats` peer is installed, or pass a test/application source
 implementing `subscribe(subject, handler)`. An empty URL is a no-op. Requesting
 a non-empty URL without the optional peer raises `NATSDependencyError` at
 subscription time. `PermissionSubscription.close()` is idempotent.
+
+### User deletion lifecycle events
+
+`subscribeUserDeleted` listens to `iam.user.deleted`. The validated event has
+`event_id`, `type`, `user_id`, and `at`; unlike other user lifecycle events,
+`changed_fields` is omitted:
+
+```ts
+import { subscribeUserDeleted } from "teamusers-sdk";
+
+const subscription = await subscribeUserDeleted("nats://127.0.0.1:4222", async (event) => {
+  console.log(`deleted user ${event.user_id} in event ${event.event_id}`);
+});
+if (subscription !== null) await subscription.close();
+```

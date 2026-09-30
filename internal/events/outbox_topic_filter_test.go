@@ -35,9 +35,9 @@ type emptyOutboxTopicFilterRows struct {
 	pgx.Rows
 }
 
-func (*emptyOutboxTopicFilterRows) Close()         {}
-func (*emptyOutboxTopicFilterRows) Err() error     { return nil }
-func (*emptyOutboxTopicFilterRows) Next() bool     { return false }
+func (*emptyOutboxTopicFilterRows) Close()     {}
+func (*emptyOutboxTopicFilterRows) Err() error { return nil }
+func (*emptyOutboxTopicFilterRows) Next() bool { return false }
 
 func TestRelayFetchesOnlySupportedOutboxTopics(t *testing.T) {
 	query := &outboxTopicFilterTestQuery{}
@@ -52,11 +52,9 @@ func TestRelayFetchesOnlySupportedOutboxTopics(t *testing.T) {
 	if !ok {
 		t.Fatalf("relay topic argument = %T, want []string", query.args[0])
 	}
-	wantTopics := map[string]bool{
-		"perm.changed": true,
-		"user.disabled": true,
-		"role.updated": true,
-		"key.rotated": true,
+	wantTopics := make(map[string]bool, len(natsSubjects))
+	for topic := range natsSubjects {
+		wantTopics[topic] = true
 	}
 	if len(gotTopics) != len(wantTopics) {
 		t.Fatalf("relay topics = %v, want only %v", gotTopics, wantTopics)

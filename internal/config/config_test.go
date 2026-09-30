@@ -12,7 +12,7 @@ func isolateLoadEnvironment(t *testing.T) {
 	names := []string{
 		envConnectionString, envListenAddress, envListenPort, envNodeID, envLogLevel,
 		envKeyDir, envNATSURL, envNotificationEndpoints, envNotificationSecret,
-		envAuditRetentionDays, envAuditForwardEndpoints, envAuditForwardSecret, envPwnedPasswordsEnabled,
+		envLoginActivityRetentionDays, envAuditRetentionDays, envAuditForwardEndpoints, envAuditForwardSecret, envPwnedPasswordsEnabled,
 		envRegistrationMode, envTokenAudience, envLockoutThreshold, envLockoutDuration,
 		envAccessTokenTTL, envRefreshTokenTTL, envSessionFamilyTTL,
 		envWebAuthnRPID, envWebAuthnOrigin, envTrustedProxies, "HOST", "PORT",
@@ -136,6 +136,29 @@ func TestAuditRetentionDaysDefaultAndFlagOverride(t *testing.T) {
 	}
 }
 
+func TestLoginActivityRetentionDaysDefaultEnvironmentAndValidation(t *testing.T) {
+	isolateLoadEnvironment(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load default login activity retention: %v", err)
+	}
+	if cfg.LoginActivityRetentionDays != DefaultLoginActivityRetentionDays {
+		t.Fatalf("default login activity retention days = %d, want %d", cfg.LoginActivityRetentionDays, DefaultLoginActivityRetentionDays)
+	}
+	t.Setenv(envLoginActivityRetentionDays, "45")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("load overridden login activity retention: %v", err)
+	}
+	if cfg.LoginActivityRetentionDays != 45 {
+		t.Fatalf("login activity retention days = %d, want 45", cfg.LoginActivityRetentionDays)
+	}
+	t.Setenv(envLoginActivityRetentionDays, "-1")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "login activity retention days must not be negative") {
+		t.Fatalf("Load() error = %v, want negative login activity retention rejection", err)
+	}
+}
+
 func TestPwnedPasswordsEnabledDefaultEnvAndFlag(t *testing.T) {
 	isolateLoadEnvironment(t)
 	cfg, err := Load()
@@ -193,11 +216,15 @@ func TestLoadRequiresAuditForwardSecret(t *testing.T) {
 
 func TestRedactedHidesAuditForwardingConfig(t *testing.T) {
 	cfg := Config{
-		AuditForwardEndpoints: []string{"https://audit.example.test/events"},
-		AuditForwardSecret:   "shared secret",
+		AuditForwardEndpoints:      []string{"https://audit.example.test/events"},
+		AuditForwardSecret:         "shared secret",
+		LoginActivityRetentionDays: DefaultLoginActivityRetentionDays,
 	}
 	redacted := cfg.Redacted()
 	if len(redacted.AuditForwardEndpoints) != 0 || redacted.AuditForwardSecret != "[redacted]" {
 		t.Fatalf("redacted audit forwarding config = %+v, want endpoints hidden and secret redacted", redacted)
+	}
+	if redacted.LoginActivityRetentionDays != DefaultLoginActivityRetentionDays {
+		t.Fatalf("redacted login activity retention days = %d, want %d", redacted.LoginActivityRetentionDays, DefaultLoginActivityRetentionDays)
 	}
 }

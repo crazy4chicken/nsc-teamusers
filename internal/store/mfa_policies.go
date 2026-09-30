@@ -75,12 +75,12 @@ func DeleteMFAPolicy(ctx context.Context, q Q, id string) error {
 	var deletedID string
 	return q.QueryRow(ctx, `DELETE FROM mfa_policies WHERE id = $1 RETURNING id`, id).Scan(&deletedID)
 }
+
 // DeleteMFAPoliciesForSubject removes policies attached to a deleted subject.
 func DeleteMFAPoliciesForSubject(ctx context.Context, q Q, subjectKind, subjectID string) error {
 	_, err := q.Exec(ctx, `DELETE FROM mfa_policies WHERE subject_kind = $1 AND subject_id = $2`, subjectKind, subjectID)
 	return err
 }
-
 
 // ListEffectiveMFAPolicies returns policies matching the user through active
 // team, group, or role memberships. Conditional role bindings count only for

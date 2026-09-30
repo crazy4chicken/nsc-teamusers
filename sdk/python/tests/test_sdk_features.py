@@ -27,6 +27,7 @@ from teamusers_sdk import (
     UnauthorizedError,
     Verifier,
     subscribe_key_rotations,
+    subscribe_user_deleted,
 )
 
 
@@ -267,6 +268,36 @@ def test_middleware_errors_and_event_invalidation():
     assert isinstance(subscription, PermissionSubscription)
     subscription.Close()
 
+
+
+def test_user_deleted_lifecycle_events_do_not_require_changed_fields():
+    class Source:
+        def __init__(self):
+            self.callbacks = {}
+
+        def subscribe(self, subject, callback):
+            self.callbacks[subject] = callback
+
+    source = Source()
+    received = []
+    subscription = subscribe_user_deleted(source, received.append)
+    source.callbacks["iam.user.deleted"](
+        {
+            "event_id": 23,
+            "type": "user.deleted",
+            "user_id": "usr_1",
+            "at": "2026-09-30T00:00:00Z",
+        }
+    )
+    assert received == [
+        {
+            "event_id": 23,
+            "type": "user.deleted",
+            "user_id": "usr_1",
+            "at": "2026-09-30T00:00:00Z",
+        }
+    ]
+    subscription.Close()
 
 def test_require_fresh_checks_authentication_time():
     request = {"headers": {}, "method": "POST"}

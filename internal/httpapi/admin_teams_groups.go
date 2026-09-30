@@ -90,7 +90,13 @@ func (h *adminHandler) createTeam(w http.ResponseWriter, r *http.Request) {
 		}
 		created = team
 		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, new(team.ID), "team.created", team.ID, nil, team))
-		return err
+		if err != nil {
+			return err
+		}
+		return appendOutboxPayload(ctx, tx, "team.created", map[string]any{
+			"team_id":        team.ID,
+			"changed_fields": []string{"slug", "name", "status"},
+		})
 	})
 	if err != nil {
 		WriteStoreProblem(w, r, err)
@@ -139,7 +145,17 @@ func (h *adminHandler) patchTeam(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, new(original.ID), "team.updated", id, original, updated))
-		return err
+		if err != nil {
+			return err
+		}
+		changedFields := changedTeamFields(original, updated)
+		if len(changedFields) == 0 {
+			return nil
+		}
+		return appendOutboxPayload(ctx, tx, "team.updated", map[string]any{
+			"team_id":        id,
+			"changed_fields": changedFields,
+		})
 	})
 	if err != nil {
 		if writeValidationError(w, r, err) {
@@ -149,6 +165,20 @@ func (h *adminHandler) patchTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+func changedTeamFields(before, after store.Team) []string {
+	fields := make([]string, 0, 3)
+	if before.Slug != after.Slug {
+		fields = append(fields, "slug")
+	}
+	if before.Name != after.Name {
+		fields = append(fields, "name")
+	}
+	if before.Status != after.Status {
+		fields = append(fields, "status")
+	}
+	return fields
 }
 
 func (h *adminHandler) deleteTeam(w http.ResponseWriter, r *http.Request) {

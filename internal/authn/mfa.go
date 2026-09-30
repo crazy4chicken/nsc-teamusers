@@ -29,28 +29,32 @@ func (s *Service) recordLoginFailure(ctx context.Context, user store.User) error
 }
 
 func (s *Service) loginMFA(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allowIP(requestIP(r), s.now()) {
+		writeRateLimited(w, r)
+		return
+	}
 	var request mfaLoginRequest
 	if !decodeJSON(w, r, &request) {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, store.User{}, "", "mfa", "failure")
 		writeUnauthorized(w, r)
 		return
 	}
 	pending, err := s.parseMFAToken(strings.TrimSpace(request.MFAToken))
 	if err != nil {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, store.User{}, "", "mfa", "failure")
 		writeUnauthorized(w, r)
 		return
 	}
 	user, err := store.GetUser(r.Context(), s.q, pending.UserID)
 	if err != nil || user.Status != "active" {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, "", "mfa", "failure")
 		writeUnauthorized(w, r)
 		return
 	}
 	if user.LockedUntil != nil && user.LockedUntil.After(s.now()) {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, "", "mfa", "failure")
 		s.auditAuth(r.Context(), s.q, "auth.login.mfa_locked", user, user.ID)
 		writeAuthProblem(w, r, http.StatusLocked, "account_locked")
-		return
-	}
-	if !s.limiter.allowIP(requestIP(r), s.now()) {
-		writeRateLimited(w, r)
 		return
 	}
 
@@ -87,6 +91,7 @@ func (s *Service) loginMFA(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
+	s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, "", "mfa", "failure")
 	if err := s.recordLoginFailure(r.Context(), user); err != nil {
 		writeInternal(w, r)
 		return
@@ -236,7 +241,11 @@ func (s *Service) completeMFALogin(ctx context.Context, user store.User, metadat
 		if err != nil {
 			return err
 		}
-		return s.appendAuthAudit(txctx, q, "auth.login.succeeded", user.ID, user.ID)
+		if err := s.appendAuthAudit(txctx, q, "auth.login.succeeded", user.ID, user.ID); err != nil {
+			return err
+		}
+		s.recordLoginActivityFromMetadata(txctx, q, user, "mfa", "success", metadata)
+		return nil
 	}
 	if s.pool != nil {
 		if err := store.WithTx(ctx, s.pool, func(txctx context.Context, tx store.Tx) error {
@@ -269,7 +278,11 @@ func (s *Service) consumeBackupAndComplete(ctx context.Context, user store.User,
 		if err != nil {
 			return err
 		}
-		return s.appendAuthAudit(txctx, q, "auth.login.succeeded", user.ID, user.ID)
+		if err := s.appendAuthAudit(txctx, q, "auth.login.succeeded", user.ID, user.ID); err != nil {
+			return err
+		}
+		s.recordLoginActivityFromMetadata(txctx, q, user, "mfa", "success", metadata)
+		return nil
 	}
 	if s.pool != nil {
 		if err := store.WithTx(ctx, s.pool, func(txctx context.Context, tx store.Tx) error {

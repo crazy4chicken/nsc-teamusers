@@ -19,9 +19,10 @@ type meProfileTestResponse struct {
 }
 
 type meSessionTestResponse struct {
-	ID        string `json:"id"`
-	CreatedAt string `json:"created_at"`
-	ExpiresAt string `json:"expires_at"`
+	ID           string `json:"id"`
+	CreatedAt    string `json:"created_at"`
+	LastActiveAt string `json:"last_active_at"`
+	ExpiresAt    string `json:"expires_at"`
 }
 
 func loginMeTestPair(t *testing.T, stack *integrationStack, username, password string) tokenPair {
@@ -47,6 +48,11 @@ func listMeTestSessions(t *testing.T, stack *integrationStack, path, bearer stri
 	}
 	var sessions []meSessionTestResponse
 	decodeResponse(t, body, &sessions)
+	for _, session := range sessions {
+		if strings.TrimSpace(session.LastActiveAt) == "" {
+			t.Fatalf("session %q has no last_active_at", session.ID)
+		}
+	}
 	return sessions
 }
 

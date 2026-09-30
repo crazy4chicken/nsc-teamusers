@@ -130,15 +130,18 @@ secrets, private keys, or notification service secrets.
 
 ## Forwarded client addresses
 
-The HTTP middleware trusts `X-Forwarded-For` only when the direct TCP peer is a
-loopback address. In that case it uses the first address in the header. For any
-non-loopback peer, the forwarded header is ignored and the direct peer remains
-authoritative. This protects login rate limits and audit metadata from forged
-client addresses.
+The HTTP middleware uses `X-Forwarded-For` only when the direct TCP peer is
+loopback or matches a CIDR or IP configured in `TEAMUSERS_TRUSTED_PROXIES`. It
+walks the forwarded chain from right to left, skips trusted proxy hops, and
+uses the rightmost non-trusted address. For any other direct peer, the
+forwarded header is ignored and the direct peer remains authoritative. This
+protects login rate limits and audit metadata from forged client addresses.
 
-Nekostick should set one canonical `X-Forwarded-For` value on its loopback
-upstream connection and prevent untrusted clients from reaching that
-connection. Preserve the `Authorization` header when forwarding.
+The trusted edge proxy (Nekostick in this deployment) must overwrite, not
+preserve or blindly append to, any client-supplied `X-Forwarded-For` value
+with the source address it observes before forwarding. Prevent untrusted
+clients from reaching the loopback upstream connection and preserve the
+`Authorization` header when forwarding.
 
 ## TLS and shutdown
 

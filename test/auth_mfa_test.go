@@ -56,6 +56,15 @@ func TestTOTPEnrollmentConfirmAndMFALogin(t *testing.T) {
 	if len(backup.BackupCodes) != 10 {
 		t.Fatalf("backup code count = %d, want 10", len(backup.BackupCodes))
 	}
+	var enrollmentMethod, enrollmentResult string
+	if err := stack.database.pool.QueryRow(context.Background(), `
+		SELECT method, result FROM login_activity
+		WHERE user_id = $1 ORDER BY id DESC LIMIT 1`, user.ID).Scan(&enrollmentMethod, &enrollmentResult); err != nil {
+		t.Fatalf("read TOTP enrollment activity: %v", err)
+	}
+	if enrollmentMethod != "mfa" || enrollmentResult != "success" {
+		t.Fatalf("TOTP enrollment activity = %q/%q, want MFA success", enrollmentMethod, enrollmentResult)
+	}
 	status, body = stack.jsonRequest(t, http.MethodPost, "/me/totp/enroll", nil, accessToken)
 	if status != http.StatusConflict {
 		t.Fatalf("duplicate TOTP enroll status = %d, want %d: %s", status, http.StatusConflict, body)
@@ -125,6 +134,16 @@ func TestTOTPEnrollmentConfirmAndMFALogin(t *testing.T) {
 	if status != http.StatusUnauthorized {
 		t.Fatalf("access token used as MFA token status = %d, want %d: %s", status, http.StatusUnauthorized, body)
 	}
+	var failedMethod, failedResult string
+	if err := stack.database.pool.QueryRow(context.Background(), `
+		SELECT method, result FROM login_activity
+		WHERE user_id IS NULL AND method = 'mfa' AND result = 'failure'
+		ORDER BY id DESC LIMIT 1`).Scan(&failedMethod, &failedResult); err != nil {
+		t.Fatalf("read unresolved MFA failure: %v", err)
+	}
+	if failedMethod != "mfa" || failedResult != "failure" {
+		t.Fatalf("unresolved MFA activity = %q/%q, want MFA failure", failedMethod, failedResult)
+	}
 	code, err = currentTOTPCode(t, enrollment.Secret)
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +158,20 @@ func TestTOTPEnrollmentConfirmAndMFALogin(t *testing.T) {
 	var pair tokenPair
 	decodeResponse(t, body, &pair)
 	assertTokenPair(t, pair)
+	status, body = stack.jsonRequest(t, http.MethodGet, "/me/activity", nil, pair.AccessToken)
+	if status != http.StatusOK {
+		t.Fatalf("MFA activity status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	var activity struct {
+		Items []struct {
+			Method string `json:"method"`
+			Result string `json:"result"`
+		} `json:"items"`
+	}
+	decodeResponse(t, body, &activity)
+	if len(activity.Items) == 0 || activity.Items[0].Method != "mfa" || activity.Items[0].Result != "success" {
+		t.Fatalf("latest MFA activity = %+v, want MFA success", activity.Items)
+	}
 
 	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
 		"username": user.Username,
@@ -235,6 +268,35 @@ func TestMFALockoutExpires(t *testing.T) {
 	assertTokenPair(t, pair)
 }
 
+
+func TestMFALoginActivityRespectsIPRateLimit(t *testing.T) {
+	stack := newIntegrationStack(t)
+	for attempt := range 30 {
+		status, body := stack.jsonRequest(t, http.MethodPost, "/auth/login/mfa", map[string]string{
+			"mfa_token": "invalid-token",
+			"code":      "000000",
+		}, "")
+		if status != http.StatusUnauthorized {
+			t.Fatalf("invalid MFA token attempt %d status = %d, want %d: %s", attempt+1, status, http.StatusUnauthorized, body)
+		}
+	}
+	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/login/mfa", map[string]string{
+		"mfa_token": "invalid-token",
+		"code":      "000000",
+	}, "")
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("rate-limited MFA token status = %d, want %d: %s", status, http.StatusTooManyRequests, body)
+	}
+	var recordedFailures int
+	if err := stack.database.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM login_activity
+		WHERE user_id IS NULL AND method = 'mfa' AND result = 'failure'`).Scan(&recordedFailures); err != nil {
+		t.Fatalf("count failed MFA activity: %v", err)
+	}
+	if recordedFailures != 30 {
+		t.Fatalf("MFA activity rows = %d, want 30 limiter-passed attempts", recordedFailures)
+	}
+}
 func TestWeakPasswordsAreRejected(t *testing.T) {
 	stack := newIntegrationStackWithMode(t, "open")
 	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/register", map[string]string{

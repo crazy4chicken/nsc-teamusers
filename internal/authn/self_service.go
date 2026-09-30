@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/mail"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -169,7 +170,10 @@ func (s *Service) patchProfile(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		return s.appendSelfAudit(ctx, tx, "user.updated", subject.UserID, subject.UserID, profileResponse(before), profileResponse(updated))
+		if err := s.appendSelfAudit(ctx, tx, "user.updated", subject.UserID, subject.UserID, profileResponse(before), profileResponse(updated)); err != nil {
+			return err
+		}
+		return store.AppendUserLifecycleEvent(ctx, tx, "user.updated", &before, &updated)
 	})
 	if err != nil {
 		httpapi.WriteStoreProblem(w, r, err)
@@ -305,10 +309,18 @@ func (s *Service) confirmEmailChange(w http.ResponseWriter, r *http.Request) {
 		if taken {
 			return store.ErrNotFound
 		}
-		if _, err := store.UpdateUserEmail(ctx, tx, subject.UserID, change.NewEmail, s.now()); err != nil {
+		before, err := store.GetUser(ctx, tx, subject.UserID)
+		if err != nil {
 			return err
 		}
-		return s.appendSelfAudit(ctx, tx, "email.changed", subject.UserID, subject.UserID, nil, nil)
+		updated, err := store.UpdateUserEmail(ctx, tx, subject.UserID, change.NewEmail, s.now())
+		if err != nil {
+			return err
+		}
+		if err := s.appendSelfAudit(ctx, tx, "email.changed", subject.UserID, subject.UserID, nil, nil); err != nil {
+			return err
+		}
+		return store.AppendUserLifecycleEvent(ctx, tx, "user.updated", &before, &updated)
 	})
 	if errors.Is(err, store.ErrNotFound) {
 		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
@@ -357,6 +369,13 @@ func (s *Service) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	deletedUsername := "deleted_" + deletedID
 	deletedEmail := deletedUsername + "@deleted.invalid"
 	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		if err := store.LockSessionPolicyUser(ctx, tx, subject.UserID); err != nil {
+			return err
+		}
+		before, err := store.GetUser(ctx, tx, subject.UserID)
+		if err != nil {
+			return err
+		}
 		if err := store.AnonymizeUser(ctx, tx, subject.UserID, deletedUsername, deletedEmail); err != nil {
 			return err
 		}
@@ -366,7 +385,10 @@ func (s *Service) deleteProfile(w http.ResponseWriter, r *http.Request) {
 		if err := store.DeleteAllCredentials(ctx, tx, subject.UserID); err != nil {
 			return err
 		}
-		if err := store.DeleteAllSessionsForUser(ctx, tx, subject.UserID); err != nil {
+		if err := store.DeleteAllSessionsForUser(ctx, tx, subject.UserID, "user_requested"); err != nil {
+			return err
+		}
+		if err := store.AppendUserLifecycleEvent(ctx, tx, "user.deleted", &before, nil); err != nil {
 			return err
 		}
 		return s.appendSelfAudit(ctx, tx, "user.erased", subject.UserID, subject.UserID, nil, nil)
@@ -501,6 +523,9 @@ func (s *Service) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	rotatedAt := now
 	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		if err := store.LockSessionPolicyUser(ctx, tx, subject.UserID); err != nil {
+			return err
+		}
 		if err := passwd.RecordSet(ctx, tx, checked); err != nil {
 			return err
 		}
@@ -510,7 +535,7 @@ func (s *Service) changePassword(w http.ResponseWriter, r *http.Request) {
 		if _, err := store.UpdateCredential(ctx, tx, credential); err != nil {
 			return err
 		}
-		if err := store.DeleteAllSessionsForUser(ctx, tx, subject.UserID); err != nil {
+		if err := store.DeleteAllSessionsForUser(ctx, tx, subject.UserID, "user_requested"); err != nil {
 			return err
 		}
 		return s.appendSelfAudit(ctx, tx, "password.changed", subject.UserID, subject.UserID, nil, map[string]any{
@@ -549,6 +574,38 @@ func (s *Service) listOwnSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sessionResponses(sessions))
 }
 
+func (s *Service) listOwnActivity(w http.ResponseWriter, r *http.Request) {
+	subject, ok := httpapi.SubjectFrom(r.Context())
+	if !ok || subject.UserID == "" {
+		writeUnauthorized(w, r)
+		return
+	}
+	cursor := int64(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("cursor")); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value < 0 {
+			httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "cursor must be a non-negative integer")
+			return
+		}
+		cursor = value
+	}
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 {
+			httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "limit must be a positive integer")
+			return
+		}
+		limit = value
+	}
+	entries, next, err := store.ListLoginActivity(r.Context(), s.q, subject.UserID, cursor, limit)
+	if err != nil {
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": entries, "next_cursor": next})
+}
+
 func (s *Service) deleteOwnSession(w http.ResponseWriter, r *http.Request) {
 	subject, ok := httpapi.SubjectFrom(r.Context())
 	if !ok || subject.UserID == "" {
@@ -557,7 +614,10 @@ func (s *Service) deleteOwnSession(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID := chi.URLParam(r, "id")
 	err := store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
-		rows, err := store.DeleteSessionForUser(ctx, tx, sessionID, subject.UserID)
+		if err := store.LockSessionPolicyUser(ctx, tx, subject.UserID); err != nil {
+			return err
+		}
+		rows, err := store.DeleteSessionForUser(ctx, tx, sessionID, subject.UserID, "user_requested")
 		if err != nil {
 			return err
 		}
@@ -593,9 +653,10 @@ func sessionResponses(sessions []store.Session) []httpapi.SessionResponse {
 	responses := make([]httpapi.SessionResponse, 0, len(sessions))
 	for _, session := range sessions {
 		responses = append(responses, httpapi.SessionResponse{
-			ID:        session.ID,
-			CreatedAt: session.CreatedAt,
-			ExpiresAt: session.ExpiresAt,
+			ID:           session.ID,
+			CreatedAt:    session.CreatedAt,
+			LastActiveAt: session.LastActiveAt,
+			ExpiresAt:    session.ExpiresAt,
 		})
 	}
 	return responses

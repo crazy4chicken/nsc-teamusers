@@ -126,4 +126,3 @@ func NeedsRehash(encoded string) bool {
 	_, _, memory, iterations, parallel, err := parsePasswordHash(encoded)
 	return err != nil || memory != argonMemory || iterations != argonIterations || parallel != argonParallel
 }
-

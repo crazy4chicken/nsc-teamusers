@@ -147,10 +147,10 @@ type freshAuthPermissionRows struct {
 	available  bool
 }
 
-func (r *freshAuthPermissionRows) TypeMap() *pgtype.Map { return pgtype.NewMap() }
-func (r *freshAuthPermissionRows) Close() {}
-func (r *freshAuthPermissionRows) Err() error { return nil }
-func (r *freshAuthPermissionRows) CommandTag() pgconn.CommandTag { return pgconn.CommandTag{} }
+func (r *freshAuthPermissionRows) TypeMap() *pgtype.Map                         { return pgtype.NewMap() }
+func (r *freshAuthPermissionRows) Close()                                       {}
+func (r *freshAuthPermissionRows) Err() error                                   { return nil }
+func (r *freshAuthPermissionRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (r *freshAuthPermissionRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
 func (r *freshAuthPermissionRows) Next() bool {
 	if r.available {
@@ -168,5 +168,5 @@ func (r *freshAuthPermissionRows) Scan(dest ...any) error {
 	return nil
 }
 func (r *freshAuthPermissionRows) Values() ([]any, error) { return nil, nil }
-func (r *freshAuthPermissionRows) RawValues() [][]byte { return nil }
-func (r *freshAuthPermissionRows) Conn() *pgx.Conn { return nil }
+func (r *freshAuthPermissionRows) RawValues() [][]byte    { return nil }
+func (r *freshAuthPermissionRows) Conn() *pgx.Conn        { return nil }

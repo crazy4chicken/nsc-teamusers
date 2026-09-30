@@ -8,7 +8,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-
 )
 
 func TestPasswordSetCheckAndRecordPhases(t *testing.T) {
@@ -84,10 +83,10 @@ type passwordPolicyRows struct {
 	next bool
 }
 
-func (r *passwordPolicyRows) TypeMap() *pgtype.Map { return pgtype.NewMap() }
-func (r *passwordPolicyRows) Close() {}
-func (r *passwordPolicyRows) Err() error { return nil }
-func (r *passwordPolicyRows) CommandTag() pgconn.CommandTag { return pgconn.CommandTag{} }
+func (r *passwordPolicyRows) TypeMap() *pgtype.Map                         { return pgtype.NewMap() }
+func (r *passwordPolicyRows) Close()                                       {}
+func (r *passwordPolicyRows) Err() error                                   { return nil }
+func (r *passwordPolicyRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (r *passwordPolicyRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
 func (r *passwordPolicyRows) Next() bool {
 	if !r.next {
@@ -116,5 +115,5 @@ func (r *passwordPolicyRows) Scan(dest ...any) error {
 	return nil
 }
 func (r *passwordPolicyRows) Values() ([]any, error) { return nil, nil }
-func (r *passwordPolicyRows) RawValues() [][]byte { return nil }
-func (r *passwordPolicyRows) Conn() *pgx.Conn { return nil }
+func (r *passwordPolicyRows) RawValues() [][]byte    { return nil }
+func (r *passwordPolicyRows) Conn() *pgx.Conn        { return nil }

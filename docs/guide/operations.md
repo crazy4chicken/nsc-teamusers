@@ -19,7 +19,7 @@ default**. The supported environment variables are:
 | `TEAMUSERS_CONNECTION_STRING` | empty | PostgreSQL DSN; required by `run` and `doctor`. |
 | `TEAMUSERS_LISTEN_ADDRESS` | `127.0.0.1` | HTTP bind address. |
 | `TEAMUSERS_LISTEN_PORT` | `0` | HTTP port; `0` asks the OS for an ephemeral port. |
-| `TEAMUSERS_TRUSTED_PROXIES` | empty | Comma-separated CIDRs or IP addresses whose forwarded client addresses are trusted. |
+| `TEAMUSERS_TRUSTED_PROXIES` | empty | Comma-separated trusted proxy CIDRs or IPs; forwarded hops are walked right-to-left to select the rightmost non-trusted address. The trusted edge proxy must overwrite client-supplied `X-Forwarded-For` before forwarding. |
 | `TEAMUSERS_NODE_ID` | empty | Optional node label for deployment metadata. |
 | `TEAMUSERS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
 | `TEAMUSERS_KEY_DIR` | `./data/keys` | Ed25519 private/public keys and the `ACTIVE` marker. |
@@ -27,6 +27,7 @@ default**. The supported environment variables are:
 | `TEAMUSERS_NOTIFICATION_ENDPOINTS` | empty | Comma-separated notification service endpoint URLs. |
 | `TEAMUSERS_NOTIFICATION_SECRET` | empty | HMAC-SHA256 signing secret for notification service calls. |
 | `TEAMUSERS_AUDIT_RETENTION_DAYS` | `0` | Whole-day audit retention window (`--audit-retention-days`); `0` keeps rows forever. |
+| `TEAMUSERS_LOGIN_ACTIVITY_RETENTION_DAYS` | `90` | Whole-day login-activity retention window; `0` disables deletion. |
 | `TEAMUSERS_AUDIT_FORWARD_ENDPOINTS` | empty | Comma-separated HTTP endpoints for asynchronous HMAC-signed audit-row delivery; empty disables forwarding. |
 | `TEAMUSERS_AUDIT_FORWARD_SECRET` | empty | HMAC-SHA256 signing secret; required when audit-forward endpoints are configured and redacted from status output. |
 | `TEAMUSERS_REGISTRATION_MODE` | `closed` | Public registration mode: `closed`, `approval`, or `open`. |
@@ -267,6 +268,36 @@ the corresponding `/users/{id}/sessions` endpoints.
 Session IDs are opaque SHA-256 refresh-token digests and never reveal the
 plaintext token.
 
+Session policies are rows in `session_policies`, with nullable
+`max_concurrent_sessions` and `idle_timeout_minutes` resolved independently by
+priority for platform-default, team, group, and role targets. A concurrency
+limit evicts the least recently rotated active user session(s) with
+`evicted_by_policy` instead of rejecting a new login. Each rotation creates a
+replacement row with a new creation time, which determines the eviction order.
+Service-account sessions are exempt from user session policies.
+`last_active_at` is set when the session is created and updated only after
+successful refresh; idle timeout is enforced at refresh, which rejects and
+revokes an idle session with `session_idle_expired`. The session-policy table
+has no HTTP management endpoint in this release.
+
+Users can inspect their own resolved login activity with
+`GET /me/activity?limit=50`. Results are ordered by descending ID and contain
+only rows tied to the bearer user; unknown-user attempts are retained with a
+null `user_id` and are not visible through this endpoint. Continue with the
+numeric `next_cursor` returned by each page (omit `cursor` or use `0` for the
+first page). Activity includes timestamp, IP, user agent, method, and result,
+never passwords or tokens; write failures are logged and do not block login.
+
+```sh
+curl --fail-with-body -sS -G "$IAM_BASE_URL/me/activity" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  --data-urlencode 'limit=50'
+```
+
+`GET /me/sessions` and `/users/{id}/sessions` include `last_active_at` alongside
+creation and expiration timestamps. It reflects session issuance and refresh,
+not every access-token request.
+
 - **`perm_ver`:** mutations that affect a user's effective permissions bump the
   user's monotonic `perm_ver`; the value is copied into new access JWTs and the
   `/authz/permissions/{userID}` response. Existing access tokens with an old
@@ -429,12 +460,25 @@ production delivery guarantee.
 Set `TEAMUSERS_NATS_URL` to enable the relay. It publishes recognized outbox
 topics other than `notify.*` notification directives to these subjects:
 
-| Outbox topic | JetStream subject |
-| --- | --- |
-| `perm.changed` | `iam.perm.changed` |
-| `user.disabled` | `iam.user.disabled` |
-| `role.updated` | `iam.role.updated` |
-| `key.rotated` | `iam.key.rotated` |
+| Outbox topic | JetStream subject | Event-specific payload |
+| --- | --- | --- |
+| `perm.changed` | `iam.perm.changed` | — |
+| `user.disabled` | `iam.user.disabled` | — |
+| `role.updated` | `iam.role.updated` | — |
+| `key.rotated` | `iam.key.rotated` | — |
+| `user.created` | `iam.user.created` | `{"user_id":"<user-id>","changed_fields":["username","email","display_name","status"]}` |
+| `user.updated` | `iam.user.updated` | `{"user_id":"<user-id>","changed_fields":["display_name"]}` |
+| `user.deleted` | `iam.user.deleted` | `{"user_id":"<user-id>"}` |
+| `team.created` | `iam.team.created` | `{"team_id":"<team-id>","changed_fields":["slug","name","status"]}` |
+| `team.updated` | `iam.team.updated` | `{"team_id":"<team-id>","changed_fields":["name"]}` |
+
+Each lifecycle message also carries the relay envelope fields `event_id`, `type`,
+and `at`; `user_ids` and `team_id` retain their existing envelope semantics.
+`changed_fields` contains field names, not field values. Lifecycle payloads
+contain no passwords, credential hashes, or other secrets. Consumers that need
+current field values can fetch the entity separately.
+
+The `user.deleted` lifecycle payload omits `changed_fields`.
 
 Provision a JetStream stream covering `iam.*` before enabling the relay; the
 service connects to JetStream but does not create a stream or consumer. If the
@@ -459,6 +503,12 @@ before the cutoff are dropped. This is destructive and irreversible; the
 deployment role needs `DELETE` on `audit_log` and `outbox` only when retention
 is enabled. Back up and export retained records according to the organization's
 recovery and compliance requirements.
+
+`TEAMUSERS_LOGIN_ACTIVITY_RETENTION_DAYS` defaults to `90`; negative values are
+rejected and `0` disables deletion. A positive value enables an hourly reaper
+that deletes older `login_activity` rows in batches of at most 1,000. The
+deployment role needs `DELETE` on `login_activity` only when retention is
+enabled.
 
 ### Audit export
 
@@ -519,7 +569,8 @@ rows merely because they are old; investigate delivery or broker failures
 first.
 
 The hourly session reaper deletes rows whose ordinary refresh TTL has elapsed;
-its successful and failed counts are visible in structured logs.
+it does not scan for idle timeouts, which are enforced at refresh. Successful
+and failed reaper counts are visible in structured logs.
 
 ## Monitoring and incident signals
 
@@ -531,11 +582,13 @@ its successful and failed counts are visible in structured logs.
 - Run `teamusers doctor` during deployment and incident triage. Its JSON
   report separates database, migration, and key-directory checks.
 - Monitor `reaped expired sessions` and `reaped expired audit entries` counts; alert on
-  `reap expired audit entries failed`, `audit forward delivery failed`,
-  `audit forwarder poll failed`, `notification service delivery failed`,
-  `notification notifier poll failed`, `outbox relay poll failed`, and repeated
-  `publish outbox event failed` log records. Track pending/unpublished outbox
-  rows and notification/audit-forward retry volume.
+  `reap expired sessions failed`, `reap expired audit entries failed`,
+  `record login activity failed`, `create login activity savepoint failed`,
+  `audit forward delivery failed`, `audit forwarder poll failed`,
+  `notification service delivery failed`, `notification notifier poll failed`,
+  `outbox relay poll failed`, and repeated `publish outbox event failed` log
+  records. Track pending/unpublished outbox rows and notification/audit-forward
+  retry volume.
 - Alert on a new `refresh token reuse detected` warning: it indicates a
   presented rotated token and family-wide revocation, often a stolen or
   concurrently used credential.

@@ -58,19 +58,19 @@ type Dependencies = Deps
 // Service owns password authentication, signing keys, and refresh-token
 // sessions.
 type Service struct {
-	cfg              config.Config
-	q                store.Q
-	pool             *pgxpool.Pool
-	keyMu            sync.RWMutex
-	rotationMu       sync.Mutex
-	pendingRotation  *preparedSigningKeyRotation
-	keys             map[string]signingKey
-	activeKid        string
-	limiter          *loginLimiter
-	dummyHash        string
-	audit            *auditlog.Writer
-	webAuthn         *webauthn.WebAuthn
-	now              func() time.Time
+	cfg             config.Config
+	q               store.Q
+	pool            *pgxpool.Pool
+	keyMu           sync.RWMutex
+	rotationMu      sync.Mutex
+	pendingRotation *preparedSigningKeyRotation
+	keys            map[string]signingKey
+	activeKid       string
+	limiter         *loginLimiter
+	dummyHash       string
+	audit           *auditlog.Writer
+	webAuthn        *webauthn.WebAuthn
+	now             func() time.Time
 }
 
 func New(deps Deps) (*Service, error) {
@@ -101,16 +101,16 @@ func New(deps Deps) (*Service, error) {
 		deps.Audit = auditlog.NewWriter()
 	}
 	service := &Service{
-		cfg:        deps.Config,
-		q:          q,
-		pool:       pool,
-		keys:       keys,
-		activeKid:  activeKid,
-		limiter:    newLoginLimiter(),
-		dummyHash:  newDummyPasswordHash(),
-		audit:      deps.Audit,
-		webAuthn:   webAuthn,
-		now:        time.Now,
+		cfg:       deps.Config,
+		q:         q,
+		pool:      pool,
+		keys:      keys,
+		activeKid: activeKid,
+		limiter:   newLoginLimiter(),
+		dummyHash: newDummyPasswordHash(),
+		audit:     deps.Audit,
+		webAuthn:  webAuthn,
+		now:       time.Now,
 	}
 	if pool != nil {
 		ctx := deps.Context
@@ -300,6 +300,9 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			return err
 		}
+		if err := store.AppendUserLifecycleEvent(ctx, tx, "user.created", nil, &created); err != nil {
+			return err
+		}
 		return appendNotifyEvent(ctx, tx, "user.verification", map[string]any{
 			"user_id":    created.ID,
 			"email":      request.Email,
@@ -347,6 +350,10 @@ func (s *Service) verifyEmail(w http.ResponseWriter, r *http.Request) {
 		if kind != "email_verify" {
 			return store.ErrNotFound
 		}
+		before, err := store.GetUser(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
 		if err := store.SetEmailVerified(ctx, tx, userID, s.now()); err != nil {
 			return err
 		}
@@ -358,7 +365,11 @@ func (s *Service) verifyEmail(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		return nil
+		updated, err := store.GetUser(ctx, tx, userID)
+		if err != nil {
+			return err
+		}
+		return store.AppendUserLifecycleEvent(ctx, tx, "user.updated", &before, &updated)
 	})
 	if errors.Is(err, store.ErrNotFound) {
 		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
@@ -455,11 +466,14 @@ func (s *Service) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			return err
 		}
-		_, err = store.ActivateInvitedUser(ctx, tx, userID, request.DisplayName, s.now())
+		updated, err := store.ActivateInvitedUser(ctx, tx, userID, request.DisplayName, s.now())
 		if errors.Is(err, pgx.ErrNoRows) {
 			return store.ErrNotFound
 		}
 		if err != nil {
+			return err
+		}
+		if err := store.AppendUserLifecycleEvent(ctx, tx, "user.updated", &user, &updated); err != nil {
 			return err
 		}
 		return s.appendAuthAudit(ctx, tx, "invitation.accepted", userID, userID)
@@ -611,7 +625,12 @@ func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if err := store.DeleteAllSessionsForUser(ctx, tx, userID); err != nil {
+		if err := store.LockSessionPolicyUser(ctx, tx, userID); errors.Is(err, pgx.ErrNoRows) {
+			return store.ErrNotFound
+		} else if err != nil {
+			return err
+		}
+		if err := store.DeleteAllSessionsForUser(ctx, tx, userID, "user_requested"); err != nil {
 			return err
 		}
 		if err := store.ResetFailedLogins(ctx, tx, userID); err != nil {
@@ -674,28 +693,34 @@ type introspectResponse struct {
 }
 
 type sessionMetadata struct {
-	Kind      string   `json:"kind"`
-	IP        string   `json:"ip,omitempty"`
-	UserAgent string   `json:"user_agent,omitempty"`
-	AuthTime  int64    `json:"auth_time,omitempty"`
-	AMR       []string `json:"amr,omitempty"`
+	Kind            string   `json:"kind"`
+	IP              string   `json:"ip,omitempty"`
+	UserAgent       string   `json:"user_agent,omitempty"`
+	AuthTime        int64    `json:"auth_time,omitempty"`
+	AMR             []string `json:"amr,omitempty"`
 	authTimeMissing bool     `json:"-"`
 }
 
 func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	var request loginRequest
 	if !decodeJSON(w, r, &request) {
+		if !s.limiter.allowIP(requestIP(r), s.now()) {
+			writeRateLimited(w, r)
+			return
+		}
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, store.User{}, request.Username, "password", "failure")
 		writeUnauthorized(w, r)
 		return
 	}
 	user, credential, userErr, credentialErr := s.lookupCredential(r.Context(), request.Username, "password")
-	if userErr == nil && user.LockedUntil != nil && user.LockedUntil.After(s.now()) {
-		s.auditAuth(r.Context(), s.q, "auth.login.locked", user, request.Username)
-		writeAuthProblem(w, r, http.StatusLocked, "account_locked")
-		return
-	}
 	if !s.limiter.allow(requestIP(r), request.Username, s.now()) {
 		writeRateLimited(w, r)
+		return
+	}
+	if userErr == nil && user.LockedUntil != nil && user.LockedUntil.After(s.now()) {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, request.Username, "password", "failure")
+		s.auditAuth(r.Context(), s.q, "auth.login.locked", user, request.Username)
+		writeAuthProblem(w, r, http.StatusLocked, "account_locked")
 		return
 	}
 	valid, acquired := s.verifyPassword(r.Context(), credential.Hash, request.Password)
@@ -715,11 +740,13 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if userErr == nil && user.Status == "invited" {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, request.Username, "password", "failure")
 		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
 		writeAuthProblem(w, r, http.StatusForbidden, "account_pending")
 		return
 	}
 	if userErr != nil || credentialErr != nil || !valid {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, request.Username, "password", "failure")
 		if userErr == nil && user.ID != "" {
 			if err := s.recordLoginFailure(r.Context(), user); err != nil {
 				writeInternal(w, r)
@@ -731,11 +758,13 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user.Status == "pending" || user.Status == "invited" {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, request.Username, "password", "failure")
 		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
 		writeAuthProblem(w, r, http.StatusForbidden, "account_pending")
 		return
 	}
 	if user.Status != "active" {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, request.Username, "password", "failure")
 		s.auditAuth(r.Context(), s.q, "auth.login.failed", user, request.Username)
 		writeUnauthorized(w, r)
 		return
@@ -746,6 +775,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 			writeInternal(w, r)
 			return
 		}
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, request.Username, "password", "success")
 		writePasswordChangeRequired(w, changeToken)
 		return
 	}
@@ -768,12 +798,14 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 			writeInternal(w, r)
 			return
 		}
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, request.Username, "password", "success")
 		writeJSON(w, http.StatusOK, map[string]any{
 			"mfa_required": true, "mfa_token": mfaToken, "mfa_methods": []string{"otp"},
 		})
 		return
 	}
 	if required && policy.DenyUnenrolled {
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, request.Username, "password", "failure")
 		writeAuthProblem(w, r, http.StatusForbidden, "mfa_enrollment_denied")
 		return
 	}
@@ -783,10 +815,11 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 			writeInternal(w, r)
 			return
 		}
+		s.recordLoginActivityFromRequest(r.Context(), s.q, r, user, request.Username, "password", "success")
 		writeJSON(w, http.StatusOK, map[string]any{
 			"mfa_enrollment_required": true,
-			"mfa_token":              enrollmentToken,
-			"mfa_methods":            []string{"otp"},
+			"mfa_token":               enrollmentToken,
+			"mfa_methods":             []string{"otp"},
 		})
 		return
 	}
@@ -919,7 +952,13 @@ func (s *Service) completeLogin(ctx context.Context, user store.User, credential
 		if err != nil {
 			return err
 		}
-		return s.appendAuthAudit(txctx, q, "auth.login.succeeded", user.ID, user.ID)
+		if err := s.appendAuthAudit(txctx, q, "auth.login.succeeded", user.ID, user.ID); err != nil {
+			return err
+		}
+		if kind == "user" {
+			s.recordLoginActivityFromMetadata(txctx, q, user, "password", "success", metadata)
+		}
+		return nil
 	}
 	if s.pool != nil {
 		if err := store.WithTx(ctx, s.pool, func(txctx context.Context, tx store.Tx) error {
@@ -934,7 +973,6 @@ func (s *Service) completeLogin(ctx context.Context, user store.User, credential
 	}
 	return response, nil
 }
-
 
 func (s *Service) refresh(w http.ResponseWriter, r *http.Request) {
 	if !s.limiter.allowIP(requestIP(r), s.now()) {
@@ -977,11 +1015,19 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 		writeInternal(w, r)
 		return
 	}
-	if err := store.RevokeSessionFamily(r.Context(), s.q, session.FamilyID, "logout"); err != nil {
-		writeInternal(w, r)
-		return
-	}
-	if err := s.appendAuthAudit(r.Context(), s.q, "auth.logout", session.UserID, session.UserID); err != nil {
+	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		if err := store.LockSessionPolicyUser(ctx, tx, session.UserID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		if err := store.RevokeSessionFamily(ctx, tx, session.FamilyID, "logout"); err != nil {
+			return err
+		}
+		return s.appendAuthAudit(ctx, tx, "auth.logout", session.UserID, session.UserID)
+	})
+	if err != nil {
 		writeInternal(w, r)
 		return
 	}
@@ -1066,6 +1112,10 @@ func (s *Service) jwks(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Service) issuePair(ctx context.Context, q store.Q, user store.User, kind, familyID string, familyNotAfter time.Time, metadata sessionMetadata) (tokenResponse, error) {
+	return s.issuePairWithPolicy(ctx, q, user, kind, familyID, familyNotAfter, "", nil, metadata)
+}
+
+func (s *Service) issuePairWithPolicy(ctx context.Context, q store.Q, user store.User, kind, familyID string, familyNotAfter time.Time, replacingSessionID string, policy *store.SessionPolicy, metadata sessionMetadata) (tokenResponse, error) {
 	now := s.now()
 	if familyID == "" {
 		familyID = store.NewID()
@@ -1107,12 +1157,25 @@ func (s *Service) issuePair(ctx context.Context, q store.Q, user store.User, kin
 	if expiresAt.After(familyNotAfter) {
 		expiresAt = familyNotAfter
 	}
+	if kind != "service" {
+		if policy == nil {
+			resolved, err := store.ResolveSessionPolicy(ctx, q, user.ID, now)
+			if err != nil {
+				return tokenResponse{}, err
+			}
+			policy = &resolved
+		}
+		if err := store.EnforceConcurrentSessionLimit(ctx, q, user.ID, policy.MaxConcurrentSessions, replacingSessionID, now); err != nil {
+			return tokenResponse{}, err
+		}
+	}
 	if _, err := store.CreateSession(ctx, q, store.Session{
 		ID:             refreshTokenHash(refresh),
 		UserID:         user.ID,
 		FamilyID:       familyID,
 		ClientMeta:     meta,
 		CreatedAt:      now,
+		LastActiveAt:   now,
 		ExpiresAt:      expiresAt,
 		FamilyNotAfter: familyNotAfter,
 	}); err != nil {
@@ -1132,7 +1195,21 @@ func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Req
 	var reuseDetected bool
 	var reuseUserID string
 	var reuseFamilyID string
+	var idleExpired bool
 	err := store.WithTx(ctx, s.pool, func(txctx context.Context, tx store.Tx) error {
+		// All session-governance paths lock the user before the session row.
+		sessionUserID, err := store.GetSessionUserID(txctx, tx, hash)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errInvalidRefresh
+		}
+		if err != nil {
+			return err
+		}
+		if err := store.LockSessionPolicyUser(txctx, tx, sessionUserID); errors.Is(err, pgx.ErrNoRows) {
+			return errInvalidRefresh
+		} else if err != nil {
+			return err
+		}
 		session, err := store.GetSessionForUpdate(txctx, tx, hash)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errInvalidRefresh
@@ -1141,11 +1218,22 @@ func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Req
 			return err
 		}
 		if session.RevokedAt != nil {
+			reason := ""
+			if session.RevokeReason != nil {
+				reason = *session.RevokeReason
+			}
+			if reason != "rotated" && reason != "reuse_detected" {
+				return errInvalidRefresh
+			}
 			reuseDetected = true
 			reuseUserID = session.UserID
 			reuseFamilyID = session.FamilyID
-			if err := store.RevokeSessionFamilyReuse(txctx, tx, session.FamilyID); err != nil {
+			firstReuse, err := store.RevokeSessionFamilyReuse(txctx, tx, session.FamilyID)
+			if err != nil {
 				return err
+			}
+			if !firstReuse {
+				return nil
 			}
 			payload, err := json.Marshal(map[string]string{
 				"user_id": session.UserID, "family_id": session.FamilyID,
@@ -1171,19 +1259,42 @@ func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Req
 		if err != nil {
 			return err
 		}
+		kind := sessionKind(session)
+		var policy *store.SessionPolicy
+		if kind != "service" {
+			resolved, err := store.ResolveSessionPolicy(txctx, tx, user.ID, now)
+			if err != nil {
+				return err
+			}
+			policy = &resolved
+		}
+		lastActiveAt := session.LastActiveAt
+		if lastActiveAt.IsZero() {
+			lastActiveAt = session.CreatedAt
+		}
+		if policy != nil && sessionIdleExpired(lastActiveAt, policy.IdleTimeoutMinutes, now) {
+			if err := store.RevokeSession(txctx, tx, session.ID, "session_idle_expired"); err != nil {
+				return err
+			}
+			idleExpired = true
+			return nil
+		}
 		storedMetadata := sessionMetadataFrom(session)
-		metadata := sessionMetadataFor(r, sessionKind(session))
+		metadata := sessionMetadataFor(r, kind)
 		metadata.AuthTime = storedMetadata.AuthTime
 		metadata.authTimeMissing = metadata.AuthTime == 0
 		metadata.AMR = append([]string(nil), storedMetadata.AMR...)
 		if len(metadata.AMR) == 0 {
 			metadata.AMR = []string{"pwd"}
 		}
-		response, err = s.issuePair(txctx, tx, user, metadata.Kind, session.FamilyID, session.FamilyNotAfter, metadata)
+		response, err = s.issuePairWithPolicy(txctx, tx, user, metadata.Kind, session.FamilyID, session.FamilyNotAfter, session.ID, policy, metadata)
 		if err != nil {
 			return err
 		}
 		if err := s.appendAuthAudit(txctx, tx, "auth.refresh.rotated", user.ID, user.ID); err != nil {
+			return err
+		}
+		if err := store.TouchSession(txctx, tx, session.ID, now); err != nil {
 			return err
 		}
 		return store.RevokeSession(txctx, tx, session.ID, "rotated")
@@ -1194,6 +1305,12 @@ func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Req
 			return tokenResponse{}, err
 		}
 		return tokenResponse{}, errInvalidRefresh
+	}
+	if idleExpired {
+		if err != nil {
+			return tokenResponse{}, err
+		}
+		return tokenResponse{}, errExpiredRefresh
 	}
 	if errors.Is(err, errInvalidRefresh) || errors.Is(err, errExpiredRefresh) {
 		return tokenResponse{}, err
@@ -1513,6 +1630,66 @@ func (s *Service) auditAuth(ctx context.Context, q store.Q, action string, user 
 	if err := s.appendAuthAudit(ctx, q, action, actorID, target); err != nil {
 		slog.Error("append authentication audit event failed", "action", action, "target", target, "error", err)
 	}
+}
+
+func (s *Service) recordLoginActivityFromRequest(ctx context.Context, q store.Q, r *http.Request, user store.User, attemptedUsername, method, result string) {
+	ip, userAgent := "", ""
+	if r != nil {
+		ip = requestIP(r)
+		userAgent = r.UserAgent()
+	}
+	s.recordLoginActivity(ctx, q, user, attemptedUsername, ip, userAgent, method, result)
+}
+
+func (s *Service) recordLoginActivityFromMetadata(ctx context.Context, q store.Q, user store.User, method, result string, metadata sessionMetadata) {
+	s.recordLoginActivity(ctx, q, user, "", metadata.IP, metadata.UserAgent, method, result)
+}
+
+func (s *Service) recordLoginActivity(ctx context.Context, q store.Q, user store.User, attemptedUsername, ip, userAgent, method, result string) {
+	entry := store.LoginActivity{
+		At: s.now(), IP: ip, UserAgent: userAgent, Method: method, Result: result,
+	}
+	if user.ID != "" {
+		userID := user.ID
+		entry.UserID = &userID
+	} else {
+		entry.AttemptedUsername = strings.TrimSpace(attemptedUsername)
+	}
+	if _, inTx := q.(store.Tx); inTx {
+		const savepoint = "teamusers_login_activity_write"
+		if _, err := q.Exec(ctx, "SAVEPOINT "+savepoint); err != nil {
+			slog.Error("create login activity savepoint failed", "method", method, "error", err)
+			return
+		}
+		if err := store.CreateLoginActivity(ctx, q, entry); err != nil {
+			if _, rollbackErr := q.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint); rollbackErr != nil {
+				slog.Error("rollback login activity savepoint failed", "method", method, "error", rollbackErr)
+			}
+			if _, releaseErr := q.Exec(ctx, "RELEASE SAVEPOINT "+savepoint); releaseErr != nil {
+				slog.Error("release login activity savepoint failed", "method", method, "error", releaseErr)
+			}
+			slog.Error("record login activity failed", "method", method, "result", result, "error", err)
+			return
+		}
+		if _, err := q.Exec(ctx, "RELEASE SAVEPOINT "+savepoint); err != nil {
+			slog.Error("release login activity savepoint failed", "method", method, "error", err)
+		}
+		return
+	}
+	if err := store.CreateLoginActivity(ctx, q, entry); err != nil {
+		slog.Error("record login activity failed", "method", method, "result", result, "error", err)
+	}
+}
+
+func sessionIdleExpired(lastActiveAt time.Time, idleTimeoutMinutes *int, now time.Time) bool {
+	if idleTimeoutMinutes == nil || *idleTimeoutMinutes <= 0 || lastActiveAt.IsZero() {
+		return false
+	}
+	const maxTimeoutMinutes = int64((1<<63 - 1) / int64(time.Minute))
+	if int64(*idleTimeoutMinutes) > maxTimeoutMinutes {
+		return false
+	}
+	return now.Sub(lastActiveAt) > time.Duration(*idleTimeoutMinutes)*time.Minute
 }
 
 func (s *Service) reapExpiredSessions(ctx context.Context) {

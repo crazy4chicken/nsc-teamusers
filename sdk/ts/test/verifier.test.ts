@@ -12,6 +12,7 @@ import {
   Require,
   RequireFresh,
   subscribeKeyRotations,
+  subscribeUserDeleted,
   TokenClaimsError,
   TokenVerificationError,
   UnauthorizedError,
@@ -307,6 +308,30 @@ test("event subscription invalidates affected users", async () => {
   await callbacks.get("iam.perm.changed")?.({ data: JSON.stringify({ user_ids: ["usr_1"] }) });
   await permissions.get("usr_1", 2);
   assert.equal(fetchCount, 2);
+  await subscription?.close();
+});
+
+test("user.deleted lifecycle events do not require changed_fields", async () => {
+  const callbacks = new Map<string, (message: unknown) => void | Promise<void>>();
+  const source = {
+    subscribe(subject: string, callback: (message: unknown) => void | Promise<void>) {
+      callbacks.set(subject, callback);
+      return { unsubscribe() {} };
+    },
+  };
+  let received: unknown;
+  const subscription = await subscribeUserDeleted(source, (event) => {
+    received = event;
+  });
+  await callbacks.get("iam.user.deleted")?.({
+    data: JSON.stringify({ event_id: 23, type: "user.deleted", user_id: "usr_1", at: "2026-09-30T00:00:00Z" }),
+  });
+  assert.deepEqual(received, {
+    event_id: 23,
+    type: "user.deleted",
+    user_id: "usr_1",
+    at: "2026-09-30T00:00:00Z",
+  });
   await subscription?.close();
 });
 

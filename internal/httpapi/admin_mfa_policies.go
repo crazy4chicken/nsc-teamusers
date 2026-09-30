@@ -17,20 +17,20 @@ import (
 )
 
 type mfaPolicyCreateRequest struct {
-	Name        string `json:"name,omitempty"`
-	Priority    int    `json:"priority,omitempty"`
-	SubjectKind string `json:"subject_kind"`
-	SubjectID   string `json:"subject_id,omitempty"`
-	Required    *bool  `json:"required"`
+	Name           string `json:"name,omitempty"`
+	Priority       int    `json:"priority,omitempty"`
+	SubjectKind    string `json:"subject_kind"`
+	SubjectID      string `json:"subject_id,omitempty"`
+	Required       *bool  `json:"required"`
 	DenyUnenrolled bool   `json:"deny_unenrolled,omitempty"`
 }
 
 type mfaPolicyPatchRequest struct {
-	Name        *string `json:"name,omitempty"`
-	Priority    *int    `json:"priority,omitempty"`
-	SubjectKind *string `json:"subject_kind,omitempty"`
-	SubjectID   *string `json:"subject_id,omitempty"`
-	Required    *bool   `json:"required,omitempty"`
+	Name           *string `json:"name,omitempty"`
+	Priority       *int    `json:"priority,omitempty"`
+	SubjectKind    *string `json:"subject_kind,omitempty"`
+	SubjectID      *string `json:"subject_id,omitempty"`
+	Required       *bool   `json:"required,omitempty"`
 	DenyUnenrolled *bool   `json:"deny_unenrolled,omitempty"`
 }
 
@@ -82,11 +82,11 @@ func (h *adminHandler) createMFAPolicy(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		policy, err := store.CreateMFAPolicy(ctx, tx, store.MFAPolicy{
-			Name:        request.Name,
-			Priority:    request.Priority,
-			SubjectKind: request.SubjectKind,
-			SubjectID:   request.SubjectID,
-			Required:    *request.Required,
+			Name:           request.Name,
+			Priority:       request.Priority,
+			SubjectKind:    request.SubjectKind,
+			SubjectID:      request.SubjectID,
+			Required:       *request.Required,
 			DenyUnenrolled: request.DenyUnenrolled,
 		})
 		created = policy

@@ -85,6 +85,16 @@ func TestPasskeyHTTPPaths(t *testing.T) {
 	if len(body) == 0 || bytes.Contains(body, []byte("does-not-exist")) {
 		t.Fatalf("unknown passkey login response leaked username: %s", body)
 	}
+	var method, result, attemptedUsername string
+	if err := stack.database.pool.QueryRow(context.Background(), `
+		SELECT method, result, attempted_username FROM login_activity
+		WHERE user_id IS NULL AND attempted_username = $1
+		ORDER BY id DESC LIMIT 1`, "does-not-exist").Scan(&method, &result, &attemptedUsername); err != nil {
+		t.Fatalf("read unresolved passkey failure: %v", err)
+	}
+	if method != "passkey" || result != "failure" || attemptedUsername != "does-not-exist" {
+		t.Fatalf("unresolved passkey activity = %q/%q/%q, want passkey failure with attempted username", method, result, attemptedUsername)
+	}
 }
 
 func TestPasskeyCeremonyWithSoftAuthenticator(t *testing.T) {
@@ -119,6 +129,20 @@ func TestPasskeyCeremonyWithSoftAuthenticator(t *testing.T) {
 	var pair tokenPair
 	decodeResponse(t, body, &pair)
 	assertTokenPair(t, pair)
+	status, body = stack.jsonRequest(t, http.MethodGet, "/me/activity", nil, pair.AccessToken)
+	if status != http.StatusOK {
+		t.Fatalf("passkey activity status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	var activity struct {
+		Items []struct {
+			Method string `json:"method"`
+			Result string `json:"result"`
+		} `json:"items"`
+	}
+	decodeResponse(t, body, &activity)
+	if len(activity.Items) == 0 || activity.Items[0].Method != "passkey" || activity.Items[0].Result != "success" {
+		t.Fatalf("latest passkey activity = %+v, want passkey success", activity.Items)
+	}
 }
 
 func TestPasskeyLoginMFACombinations(t *testing.T) {
@@ -222,6 +246,94 @@ func TestPasskeyLoginMFACombinations(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPasskeyBeginDecodeFailureRespectsIPRateLimit(t *testing.T) {
+	stack := newIntegrationStack(t)
+	for attempt := range 30 {
+		status, body := stack.jsonRequest(t, http.MethodPost, "/auth/passkey/login/begin", "not-an-object", "")
+		if status != http.StatusUnauthorized {
+			t.Fatalf("malformed passkey begin attempt %d status = %d, want %d: %s", attempt+1, status, http.StatusUnauthorized, body)
+		}
+	}
+	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/passkey/login/begin", "not-an-object", "")
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("rate-limited passkey begin status = %d, want %d: %s", status, http.StatusTooManyRequests, body)
+	}
+	var recordedFailures int
+	if err := stack.database.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM login_activity
+		WHERE user_id IS NULL AND method = 'passkey' AND result = 'failure'`).Scan(&recordedFailures); err != nil {
+		t.Fatalf("count malformed passkey activity: %v", err)
+	}
+	if recordedFailures != 30 {
+		t.Fatalf("malformed passkey activity rows = %d, want 30 limiter-passed attempts", recordedFailures)
+	}
+}
+
+func TestPasskeyMFAResetsFailedLoginsOnlyAfterCompletion(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ctx := context.Background()
+	user := seedPasswordUser(t, ctx, stack.database.pool, "passkey-mfa-lockout", "PasskeyMFApassword1")
+	accessToken := loginUser(t, stack, user.Username, "PasskeyMFApassword1")
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate soft authenticator key: %v", err)
+	}
+	credentialID := make([]byte, 32)
+	if _, err := rand.Read(credentialID); err != nil {
+		t.Fatalf("generate soft authenticator credential id: %v", err)
+	}
+	registerSoftPasskey(t, stack, accessToken, privateKey, credentialID)
+	const totpSecret = "JBSWY3DPEHPK3PXP"
+	if _, err := store.CreateCredential(ctx, stack.database.pool, store.Credential{
+		UserID: user.ID, Kind: "totp", Hash: totpSecret,
+	}); err != nil {
+		t.Fatalf("create TOTP credential: %v", err)
+	}
+	if _, err := stack.database.pool.Exec(ctx, `UPDATE users SET failed_logins = 1 WHERE id = $1`, user.ID); err != nil {
+		t.Fatalf("seed failed login count: %v", err)
+	}
+
+	status, body := loginWithSoftPasskey(t, stack, user.Username, user.ID, credentialID, privateKey, false)
+	if status != http.StatusOK {
+		t.Fatalf("passkey MFA first-factor status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	var challenge struct {
+		MFARequired bool   `json:"mfa_required"`
+		MFAToken    string `json:"mfa_token"`
+	}
+	decodeResponse(t, body, &challenge)
+	if !challenge.MFARequired || challenge.MFAToken == "" {
+		t.Fatalf("passkey login response = %s, want MFA challenge", body)
+	}
+	var failedLogins int
+	if err := stack.database.pool.QueryRow(ctx, `SELECT failed_logins FROM users WHERE id = $1`, user.ID).Scan(&failedLogins); err != nil {
+		t.Fatalf("read failed login count after passkey factor: %v", err)
+	}
+	if failedLogins != 1 {
+		t.Fatalf("failed login count after passkey factor = %d, want 1 until MFA completes", failedLogins)
+	}
+	code, err := currentTOTPCode(t, totpSecret)
+	if err != nil {
+		t.Fatalf("generate TOTP code: %v", err)
+	}
+	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login/mfa", map[string]string{
+		"mfa_token": challenge.MFAToken,
+		"code":      code,
+	}, "")
+	if status != http.StatusOK {
+		t.Fatalf("passkey MFA completion status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	var pair tokenPair
+	decodeResponse(t, body, &pair)
+	assertTokenPair(t, pair)
+	if err := stack.database.pool.QueryRow(ctx, `SELECT failed_logins FROM users WHERE id = $1`, user.ID).Scan(&failedLogins); err != nil {
+		t.Fatalf("read failed login count after MFA completion: %v", err)
+	}
+	if failedLogins != 0 {
+		t.Fatalf("failed login count after MFA completion = %d, want 0", failedLogins)
 	}
 }
 

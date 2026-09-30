@@ -127,7 +127,7 @@ func (h *adminHandler) applyUserStatus(ctx context.Context, tx store.Tx, r *http
 			return store.User{}, err
 		}
 		updated.PermVer = version
-		if err := store.RevokeAllUserSessions(ctx, tx, id, "user disabled"); err != nil {
+		if err := store.RevokeAllUserSessions(ctx, tx, id, "user_disabled"); err != nil {
 			return store.User{}, err
 		}
 		if err := appendUserDisabledEvents(ctx, tx, id, nil); err != nil {
@@ -144,6 +144,9 @@ func (h *adminHandler) applyUserStatus(ctx context.Context, tx store.Tx, r *http
 		}
 	}
 	if _, err := h.audit.Append(ctx, tx, h.auditEntry(r, nil, action, id, before, updated)); err != nil {
+		return store.User{}, err
+	}
+	if err := store.AppendUserLifecycleEvent(ctx, tx, "user.updated", &before, &updated); err != nil {
 		return store.User{}, err
 	}
 	return updated, nil
@@ -280,6 +283,9 @@ func (h *adminHandler) importUsers(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			if err := appendPermissionChange(ctx, tx, []string{user.ID}, nil); err != nil {
+				return err
+			}
+			if err := store.AppendUserLifecycleEvent(ctx, tx, "user.created", nil, &user); err != nil {
 				return err
 			}
 			return appendNotifyEvent(ctx, tx, "user.created", map[string]string{

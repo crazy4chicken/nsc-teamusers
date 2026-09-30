@@ -29,7 +29,7 @@ const (
 var (
 	pwnedPasswordsHTTPClient = &http.Client{Timeout: pwnedPasswordsTimeout}
 	// ErrPolicyRejected indicates the replacement password violates its policy.
-	ErrPolicyRejected        = errors.New("password rejected by policy")
+	ErrPolicyRejected = errors.New("password rejected by policy")
 )
 
 // ResolvePolicy loads the effective password rules for userID and merges their
@@ -60,12 +60,12 @@ func ResolvePolicy(ctx context.Context, q store.Q, userID string, now time.Time)
 type CheckedSet struct {
 	Hash string
 
-	userID       string
-	historyCount int
+	userID        string
+	historyCount  int
 	historyHashes []string
-	currentHash  string
-	currentSetAt time.Time
-	setAt        time.Time
+	currentHash   string
+	currentSetAt  time.Time
+	setAt         time.Time
 }
 
 // ErrPasswordStateChanged indicates that password history changed after the

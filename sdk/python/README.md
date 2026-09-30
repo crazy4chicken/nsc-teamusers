@@ -138,3 +138,19 @@ subscription source object with `subscribe(subject, callback)` instead of a
 URL. The missing optional dependency is reported as `NATSUnavailableError`
 when `SubscribePermissions` is called; importing the core SDK never requires
 NATS.
+
+### User deletion lifecycle events
+
+`SubscribeUserDeleted` listens to `iam.user.deleted`. The validated event has
+`event_id`, `type`, `user_id`, and `at`; `changed_fields` is omitted:
+
+```python
+from teamusers_sdk import SubscribeUserDeleted
+
+subscription = SubscribeUserDeleted(
+    "nats://127.0.0.1:4222",
+    lambda event: print(event["user_id"], event["event_id"]),
+)
+if subscription is not None:
+    subscription.close()
+```

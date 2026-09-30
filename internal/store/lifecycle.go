@@ -117,6 +117,80 @@ func ApproveUser(ctx context.Context, q Q, userID, approverID string, at time.Ti
 	return user, err
 }
 
+// AppendUserLifecycleEvent queues a user lifecycle event for the NATS relay.
+// Updated events with no changed user fields are omitted.
+func AppendUserLifecycleEvent(ctx context.Context, q Q, topic string, before, after *User) error {
+	payload := map[string]any{}
+	var userID string
+	switch topic {
+	case "user.created":
+		if after == nil {
+			return errors.New("user.created event requires an after user")
+		}
+		userID = after.ID
+		payload["changed_fields"] = []string{"username", "email", "display_name", "status"}
+	case "user.updated":
+		if before == nil || after == nil {
+			return errors.New("user.updated event requires before and after users")
+		}
+		userID = after.ID
+		changedFields := changedUserLifecycleFields(*before, *after)
+		if len(changedFields) == 0 {
+			return nil
+		}
+		payload["changed_fields"] = changedFields
+	case "user.deleted":
+		if before == nil {
+			return errors.New("user.deleted event requires a before user")
+		}
+		userID = before.ID
+	default:
+		return errors.New("unsupported user lifecycle event")
+	}
+	payload["user_id"] = userID
+	return AppendOutboxPayload(ctx, q, topic, payload)
+}
+
+func changedUserLifecycleFields(before, after User) []string {
+	fields := make([]string, 0, 7)
+	if before.Username != after.Username {
+		fields = append(fields, "username")
+	}
+	if !sameUserLifecycleString(before.Email, after.Email) {
+		fields = append(fields, "email")
+	}
+	if before.DisplayName != after.DisplayName {
+		fields = append(fields, "display_name")
+	}
+	if before.Status != after.Status {
+		fields = append(fields, "status")
+	}
+	if !sameUserLifecycleTime(before.EmailVerifiedAt, after.EmailVerifiedAt) {
+		fields = append(fields, "email_verified_at")
+	}
+	if !sameUserLifecycleTime(before.ApprovedAt, after.ApprovedAt) {
+		fields = append(fields, "approved_at")
+	}
+	if !sameUserLifecycleString(before.ApprovedBy, after.ApprovedBy) {
+		fields = append(fields, "approved_by")
+	}
+	return fields
+}
+
+func sameUserLifecycleString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func sameUserLifecycleTime(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Equal(*right)
+}
+
 func scanVerificationToken(row pgx.Row) (VerificationToken, error) {
 	var token VerificationToken
 	var usedAt pgtype.Timestamptz

@@ -158,6 +158,15 @@ func TestMeDeleteAnonymizesAndRevokes(t *testing.T) {
 	if activeSessionCount != 0 {
 		t.Fatalf("erased active session count = %d, want 0", activeSessionCount)
 	}
+	var deletedEvents int
+	if err := stack.database.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM outbox
+		WHERE topic = 'user.deleted' AND payload->>'user_id' = $1`, user.ID).Scan(&deletedEvents); err != nil {
+		t.Fatalf("count self-erasure user.deleted events: %v", err)
+	}
+	if deletedEvents != 1 {
+		t.Fatalf("self-erasure user.deleted events = %d, want 1", deletedEvents)
+	}
 }
 
 func TestMeExportShape(t *testing.T) {

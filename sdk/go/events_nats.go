@@ -22,14 +22,6 @@ var permissionEventSubjects = []string{
 	"iam.role.updated",
 }
 
-type permissionEvent struct {
-	EventID string   `json:"event_id"`
-	Type    string   `json:"type"`
-	UserIDs []string `json:"user_ids"`
-	TeamID  string   `json:"team_id"`
-	At      string   `json:"at"`
-}
-
 func subscribePermissionsNATS(client *PermissionsClient, natsURL string, handler func([]string)) (*PermissionSubscription, error) {
 	if strings.TrimSpace(natsURL) == "" {
 		return nil, nil
@@ -89,6 +81,42 @@ func subscribeKeyRotationsNATS(verifier *Verifier, natsURL string) (*PermissionS
 		ctx, cancel := context.WithTimeout(context.Background(), keyRotationJWKSRefreshTimeout)
 		defer cancel()
 		_ = verifier.refreshJWKS(ctx)
+	})
+	if err != nil {
+		connection.Close()
+		return nil, err
+	}
+	closeSubscription := func() error {
+		var closeErr error
+		if err := subscription.Unsubscribe(); err != nil {
+			closeErr = err
+		}
+		if err := connection.Drain(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		connection.Close()
+		return closeErr
+	}
+	if err := connection.Flush(); err != nil {
+		_ = closeSubscription()
+		return nil, errors.New("flush NATS subscriptions: " + err.Error())
+	}
+	return &PermissionSubscription{close: closeSubscription}, nil
+}
+
+func subscribeLifecycleEventNATS[T any](natsURL, subject string, handler func(T)) (*PermissionSubscription, error) {
+	connection, err := nats.Connect(natsURL)
+	if err != nil {
+		return nil, err
+	}
+	subscription, err := connection.Subscribe(subject, func(message *nats.Msg) {
+		var event T
+		if err := json.Unmarshal(message.Data, &event); err != nil {
+			return
+		}
+		if handler != nil {
+			handler(event)
+		}
 	})
 	if err != nil {
 		connection.Close()
