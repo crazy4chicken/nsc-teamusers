@@ -27,6 +27,7 @@ export default defineConfig({
             { text: 'Authentication Security', link: '/guide/security' },
             { text: 'Operations Runbook', link: '/guide/operations' },
             { text: 'Administrative Permissions', link: '/guide/permissions' },
+            { text: 'SDK Usage', link: '/guide/sdks' },
             { text: 'Nekostick Deployment', link: '/guide/nekostick' }
           ]
         }
