@@ -53,6 +53,7 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 	valid := signSDKTestToken(t, privateKey, map[string]any{
 		"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
 		"auth_time": now.Add(-time.Minute).Unix(), "amr": []string{"pwd", "otp"},
+		"act": map[string]any{"sub": "sdk-admin"}, "imp": true,
 		"iat": now, "exp": now.Add(5 * time.Minute),
 	})
 	claims, err := verifier.Verify(t.Context(), valid)
@@ -60,7 +61,8 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 		t.Fatalf("verify valid SDK token: %v", err)
 	}
 	if claims.Subject != "sdk-user" || claims.Kind != "user" || claims.PermVer != 2 || claims.Audience != "teamusers" ||
-		claims.AuthTime != now.Add(-time.Minute).Unix() || len(claims.AMR) != 2 || claims.AMR[0] != "pwd" || claims.AMR[1] != "otp" {
+		claims.AuthTime != now.Add(-time.Minute).Unix() || len(claims.AMR) != 2 || claims.AMR[0] != "pwd" || claims.AMR[1] != "otp" ||
+		claims.Actor != "sdk-admin" || !claims.Impersonated {
 		t.Fatalf("verified SDK claims = %+v", claims)
 	}
 
@@ -72,8 +74,8 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify legacy SDK token: %v", err)
 	}
-	if legacyClaims.AuthTime != 0 || len(legacyClaims.AMR) != 0 {
-		t.Fatalf("legacy SDK claims = %+v, want absent authentication evidence", legacyClaims)
+	if legacyClaims.AuthTime != 0 || len(legacyClaims.AMR) != 0 || legacyClaims.Actor != "" || legacyClaims.Impersonated {
+		t.Fatalf("legacy SDK claims = %+v, want absent authentication and impersonation evidence", legacyClaims)
 	}
 
 	cases := []struct {
@@ -94,6 +96,7 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 				"iat": now, "exp": now.Add(5 * time.Minute),
 			}),
 		},
+
 		{
 			name: "missing audience",
 			token: signSDKTestToken(t, privateKey, map[string]any{
@@ -135,6 +138,27 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 			token: signSDKTestToken(t, privateKey, map[string]any{
 				"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
 				"amr": "pwd", "iat": now, "exp": now.Add(5 * time.Minute),
+			}),
+		},
+		{
+			name: "invalid act",
+			token: signSDKTestToken(t, privateKey, map[string]any{
+				"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+				"act": "sdk-admin", "iat": now, "exp": now.Add(5 * time.Minute),
+			}),
+		},
+		{
+			name: "invalid imp",
+			token: signSDKTestToken(t, privateKey, map[string]any{
+				"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+				"act": map[string]any{"sub": "sdk-admin"}, "imp": "true", "iat": now, "exp": now.Add(5 * time.Minute),
+			}),
+		},
+		{
+			name: "imp without actor",
+			token: signSDKTestToken(t, privateKey, map[string]any{
+				"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+				"imp": true, "iat": now, "exp": now.Add(5 * time.Minute),
 			}),
 		},
 	}

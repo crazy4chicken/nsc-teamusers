@@ -59,6 +59,7 @@ var bootstrapAdminPermissions = [...]struct {
 	{key: "iam:mfa:any", description: "Manage MFA policies"},
 	{key: "iam:keys:any", description: "Rotate signing keys"},
 	{key: "iam:*:any", description: "All IAM administration"},
+	{key: "iam:impersonate:any", description: "Impersonate users"},
 }
 
 type statusOutput struct {
@@ -620,6 +621,7 @@ func run(cfg config.Config) error {
 	meRoutes := authService.MeRoutes()
 	authzRoutes := authz.NewRouter(pool, authService.Middleware())
 	adminRoutes := httpapi.NewAdminRouter(pool, auditWriter, authService.Middleware(), cfg, authService)
+	scimRoutes := httpapi.NewSCIMRouter(pool, cfg, logger)
 	server.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/authz/") || r.URL.Path == "/authz" {
 			authzRoutes.ServeHTTP(w, r)
@@ -631,6 +633,10 @@ func run(cfg config.Config) error {
 		}
 		if strings.HasPrefix(r.URL.Path, "/me/") || r.URL.Path == "/me" {
 			meRoutes.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/scim/") || r.URL.Path == "/scim" {
+			http.StripPrefix("/scim", scimRoutes).ServeHTTP(w, r)
 			return
 		}
 		adminRoutes.ServeHTTP(w, r)

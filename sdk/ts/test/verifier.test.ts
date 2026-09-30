@@ -11,6 +11,7 @@ import {
   PermissionsClient,
   Require,
   RequireFresh,
+  RejectImpersonated,
   subscribeKeyRotations,
   subscribeUserDeleted,
   TokenClaimsError,
@@ -47,6 +48,8 @@ test("verifies an Ed25519 access token and caches the JWKS", async () => {
     perm_ver: 2,
     auth_time: authTime,
     amr: ["pwd", "otp"],
+    act: { sub: "sdk-admin" },
+    imp: true,
   })
     .setProtectedHeader({ alg: "EdDSA", kid: "test-key" })
     .setIssuer("teamusers")
@@ -68,6 +71,8 @@ test("verifies an Ed25519 access token and caches the JWKS", async () => {
   assert.equal(claims.authTime, authTime);
   assert.equal(claims.auth_time, authTime);
   assert.deepEqual(claims.amr, ["pwd", "otp"]);
+  assert.equal(claims.actor, "sdk-admin");
+  assert.equal(claims.impersonated, true);
   assert.equal(fetchCount, 1);
 
   const secondClaims = await verifier.verify(token);
@@ -107,6 +112,8 @@ test("supports an expected audience and rejects invalid application claims", asy
   assert.equal(claims.permVer, 0);
   assert.equal(claims.authTime, 0);
   assert.deepEqual(claims.amr, []);
+  assert.equal(claims.actor, undefined);
+  assert.equal(claims.impersonated, false);
 
   const missingKind = await new SignJWT({ perm_ver: 0 })
     .setProtectedHeader({ alg: "EdDSA", kid: "audience-key" })
@@ -133,7 +140,38 @@ test("supports an expected audience and rejects invalid application claims", asy
     .setExpirationTime("5m")
     .sign(privateKey);
   await assert.rejects(verifier.verify(invalidAMR), TokenClaimsError);
+
+  const invalidAct = await new SignJWT({ kind: "service", perm_ver: 0, act: "sdk-admin" })
+    .setProtectedHeader({ alg: "EdDSA", kid: "audience-key" })
+    .setIssuer("teamusers")
+    .setAudience("api")
+    .setSubject("svc")
+    .setExpirationTime("5m")
+    .sign(privateKey);
+  await assert.rejects(verifier.verify(invalidAct), TokenClaimsError);
+  const invalidImp = await new SignJWT({
+    kind: "service",
+    perm_ver: 0,
+    act: { sub: "sdk-admin" },
+    imp: "true",
+  })
+    .setProtectedHeader({ alg: "EdDSA", kid: "audience-key" })
+    .setIssuer("teamusers")
+    .setAudience("api")
+    .setSubject("svc")
+    .setExpirationTime("5m")
+    .sign(privateKey);
+  await assert.rejects(verifier.verify(invalidImp), TokenClaimsError);
+  const impWithoutActor = await new SignJWT({ kind: "service", perm_ver: 0, imp: true })
+    .setProtectedHeader({ alg: "EdDSA", kid: "audience-key" })
+    .setIssuer("teamusers")
+    .setAudience("api")
+    .setSubject("svc")
+    .setExpirationTime("5m")
+    .sign(privateKey);
+  await assert.rejects(verifier.verify(impWithoutActor), TokenClaimsError);
 });
+
 
 test("rejects an audience array that contains an extra value", async () => {
   const { privateKey, publicKey } = await generateKeyPair("EdDSA");
@@ -283,6 +321,36 @@ test("RequireFresh accepts recent auth_time and the shared future skew", async (
       (error: unknown) => error instanceof ForbiddenError && error.message === "step_up_required",
     );
   }
+});
+
+test("RejectImpersonated rejects only impersonated claims", async () => {
+  const request = { headers: {}, method: "GET" };
+  const guard = RejectImpersonated();
+  const claims = new Claims({
+    subject: "usr_1",
+    team: "",
+    kind: "user",
+    permVer: 1,
+    expiry: new Date(Date.now() + 60_000),
+    audience: "teamusers",
+  });
+  assert.equal(await guard(request, claims), claims);
+  await assert.rejects(guard(request), UnauthorizedError);
+
+  const impersonated = new Claims({
+    subject: "usr_1",
+    team: "",
+    kind: "user",
+    permVer: 1,
+    expiry: new Date(Date.now() + 60_000),
+    audience: "teamusers",
+    actor: "admin_1",
+    impersonated: true,
+  });
+  await assert.rejects(
+    guard(request, impersonated),
+    (error: unknown) => error instanceof ForbiddenError && error.message === "impersonation_forbidden",
+  );
 });
 
 test("event subscription invalidates affected users", async () => {

@@ -194,6 +194,23 @@ def require_fresh(max_age_seconds: float):
     return RequireFresh(max_age_seconds)
 
 
+def RejectImpersonated():
+    """Reject verified claims issued for an impersonated subject."""
+
+    def handler(_request: Any, claims: Claims | None = None) -> Claims:
+        if claims is None:
+            raise UnauthorizedError("authentication is required")
+        if claims.impersonated:
+            raise ForbiddenError("impersonation_forbidden")
+        return claims
+
+    return handler
+
+
+def reject_impersonated():
+    return RejectImpersonated()
+
+
 @dataclass(slots=True)
 class Client:
     """Verifier plus optional local/remote permission authorization."""
@@ -289,8 +306,10 @@ __all__ = [
     "NewClient",
     "Require",
     "RequireFresh",
+    "RejectImpersonated",
     "UnauthorizedError",
     "authenticate",
     "require",
     "require_fresh",
+    "reject_impersonated",
 ]

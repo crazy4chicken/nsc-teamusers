@@ -155,6 +155,29 @@ func (c *Client) RequireFresh(maxAge time.Duration) func(http.Handler) http.Hand
 	}
 }
 
+// RejectImpersonated returns middleware that rejects authenticated claims issued
+// for an impersonated subject with a 403 decision.
+func (c *Client) RejectImpersonated() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if next == nil {
+				writeDecision(w, http.StatusInternalServerError, "next handler is nil")
+				return
+			}
+			claims, ok := ClaimsFromContext(r.Context())
+			if !ok {
+				writeUnauthorized(w, "authentication is required")
+				return
+			}
+			if claims.Impersonated {
+				writeDecision(w, http.StatusForbidden, "impersonation_forbidden")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // authTimeFutureSkew is the shared 30-second allowance for issuer clock differences.
 const authTimeFutureSkew = 30 * time.Second
 

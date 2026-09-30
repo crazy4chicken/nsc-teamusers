@@ -51,6 +51,8 @@ export class Claims {
   public readonly audience: Audience;
   public readonly authTime: number;
   public readonly amr: readonly string[];
+  public readonly actor: string | undefined;
+  public readonly impersonated: boolean;
 
   public constructor(values: {
     readonly subject: string;
@@ -61,6 +63,8 @@ export class Claims {
     readonly audience: Audience;
     readonly authTime?: number;
     readonly amr?: readonly string[];
+    readonly actor?: string;
+    readonly impersonated?: boolean;
   }) {
     this.subject = values.subject;
     this.team = values.team;
@@ -70,6 +74,8 @@ export class Claims {
     this.audience = values.audience;
     this.authTime = values.authTime ?? 0;
     this.amr = [...(values.amr ?? [])];
+    this.actor = values.actor;
+    this.impersonated = values.impersonated ?? false;
   }
 
   /** JWT `sub` spelling for callers working directly with token claims. */
@@ -411,6 +417,30 @@ function claimsFromPayload(
     amr = amrValue;
   }
 
+  let actor: string | undefined;
+  const actorValue = payload.act;
+  if (actorValue !== undefined) {
+    if (typeof actorValue !== "object" || actorValue === null || Array.isArray(actorValue)) {
+      throw new TokenClaimsError("invalid access token act");
+    }
+    const actorSubject = (actorValue as Record<string, unknown>).sub;
+    if (typeof actorSubject !== "string" || actorSubject === "") {
+      throw new TokenClaimsError("invalid access token act");
+    }
+    actor = actorSubject;
+  }
+  const impersonatedValue = payload.imp;
+  let impersonated = false;
+  if (impersonatedValue !== undefined) {
+    if (typeof impersonatedValue !== "boolean") {
+      throw new TokenClaimsError("invalid access token imp");
+    }
+    impersonated = impersonatedValue;
+  }
+  if (impersonated && actor === undefined) {
+    throw new TokenClaimsError("invalid access token impersonation claims");
+  }
+
   return new Claims({
     subject: payload.sub,
     team,
@@ -420,6 +450,8 @@ function claimsFromPayload(
     audience: Array.isArray(audience) ? [...audienceValues] : audienceValues[0],
     authTime: authTime ?? 0,
     amr,
+    actor,
+    impersonated,
   });
 }
 

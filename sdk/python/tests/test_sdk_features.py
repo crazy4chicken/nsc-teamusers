@@ -21,6 +21,7 @@ from teamusers_sdk import (
     PermissionsClient,
     Request,
     RequireFresh,
+    RejectImpersonated,
     Resource,
     Subject,
     TokenClaimsError,
@@ -317,6 +318,19 @@ def test_require_fresh_checks_authentication_time():
     with pytest.raises(ForbiddenError, match="step_up_required"):
         RequireFresh(0)(request, claims)
 
+
+def test_reject_impersonated_claims():
+    request = {"headers": {}, "method": "GET"}
+    guard = RejectImpersonated()
+    claims = _claims()
+
+    assert guard(request, claims) == claims
+    with pytest.raises(UnauthorizedError):
+        guard(request)
+
+    impersonated = replace(claims, actor="admin_1", impersonated=True)
+    with pytest.raises(ForbiddenError, match="impersonation_forbidden"):
+        guard(request, impersonated)
 
 
 def test_key_rotation_event_refreshes_verifier_jwks():

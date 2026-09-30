@@ -386,7 +386,6 @@ func init() {
 		meRoutes := service.MeRoutes()
 		authzRoutes := authz.NewRouter(q, service.Middleware())
 		adminRoutes := httpapi.NewAdminRouter(q, auditWriter, service.Middleware(), cfg, service)
-
 		server.Mount("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case strings.HasPrefix(r.URL.Path, "/authz/") || r.URL.Path == "/authz":

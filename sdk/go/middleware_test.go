@@ -92,3 +92,45 @@ func TestRequireFreshRejectsMissingClaims(t *testing.T) {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
 	}
 }
+
+func TestRejectImpersonatedBlocksOnlyImpersonatedClaims(t *testing.T) {
+	client := NewClient(nil, nil)
+	for _, tt := range []struct {
+		name       string
+		claims     Claims
+		wantStatus int
+		wantCalled bool
+	}{
+		{name: "ordinary", claims: Claims{Subject: "usr_1"}, wantStatus: http.StatusOK, wantCalled: true},
+		{name: "impersonated", claims: Claims{Subject: "usr_1", Actor: "admin_1", Impersonated: true}, wantStatus: http.StatusForbidden},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			handler := client.RejectImpersonated()(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				called = true
+			}))
+			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			request = request.WithContext(WithClaims(context.Background(), tt.claims))
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != tt.wantStatus || called != tt.wantCalled {
+				t.Fatalf("response = %d, handler called = %v, want status %d called %v", response.Code, called, tt.wantStatus, tt.wantCalled)
+			}
+			if tt.claims.Impersonated && !strings.Contains(response.Body.String(), `"reason":"impersonation_forbidden"`) {
+				t.Fatalf("response = %s, want impersonation_forbidden", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestRejectImpersonatedRequiresClaims(t *testing.T) {
+	client := NewClient(nil, nil)
+	handler := client.RejectImpersonated()(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("next handler should not run")
+	}))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+}

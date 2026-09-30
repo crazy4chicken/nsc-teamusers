@@ -227,6 +227,8 @@ func adminPermissionArea(path string) string {
 		return "audit"
 	case "keys":
 		return "keys"
+	case "impersonations":
+		return "impersonate"
 	default:
 		return ""
 	}
@@ -531,6 +533,7 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 		r.Get("/export", h.exportAudit)
 	})
 	router.With(freshAuthMiddleware).Post("/keys/rotate", h.rotateSigningKey)
+	router.With(freshAuthMiddleware).Post("/impersonations", h.createImpersonation)
 	return router
 }
 
@@ -583,8 +586,12 @@ func (h *adminHandler) withTx(ctx context.Context, fn func(context.Context, stor
 
 func (h *adminHandler) auditEntry(r *http.Request, teamID *string, action, target string, before, after any) auditlog.Entry {
 	var actorID *string
+	impersonatedBy := ""
 	if subject, ok := SubjectFrom(r.Context()); ok && subject.UserID != "" {
 		actorID = &subject.UserID
+		if subject.Impersonated {
+			impersonatedBy = subject.ActorID
+		}
 	}
 	return auditlog.Entry{
 		TeamID:  teamID,
@@ -592,8 +599,29 @@ func (h *adminHandler) auditEntry(r *http.Request, teamID *string, action, targe
 		Action:  action,
 		Target:  target,
 		Before:  before,
-		After:   after,
+		After:   auditAfterWithImpersonatedBy(after, impersonatedBy),
 	}
+}
+
+func auditAfterWithImpersonatedBy(after any, actorID string) any {
+	if actorID == "" {
+		return after
+	}
+	if after == nil {
+		return map[string]string{"impersonated_by": actorID}
+	}
+	encoded, err := json.Marshal(after)
+	if err != nil {
+		return map[string]any{"value": after, "impersonated_by": actorID}
+	}
+	fields := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(encoded, &fields); err != nil || fields == nil {
+		fields = make(map[string]json.RawMessage, 2)
+		fields["value"] = json.RawMessage(encoded)
+	}
+	actor, _ := json.Marshal(actorID)
+	fields["impersonated_by"] = actor
+	return fields
 }
 
 type permissionOutboxPayload struct {

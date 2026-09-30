@@ -170,7 +170,7 @@ func (s *Service) patchProfile(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if err := s.appendSelfAudit(ctx, tx, "user.updated", subject.UserID, subject.UserID, profileResponse(before), profileResponse(updated)); err != nil {
+		if err := s.appendSelfAudit(ctx, tx, "user.updated", subject.UserID, subject.UserID, profileResponse(before), profileResponse(updated), selfAuditImpersonator(subject)); err != nil {
 			return err
 		}
 		return store.AppendUserLifecycleEvent(ctx, tx, "user.updated", &before, &updated)
@@ -255,7 +255,7 @@ func (s *Service) changeEmail(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			return err
 		}
-		return s.appendSelfAudit(ctx, tx, "email.change_requested", subject.UserID, subject.UserID, nil, nil)
+		return s.appendSelfAudit(ctx, tx, "email.change_requested", subject.UserID, subject.UserID, nil, nil, selfAuditImpersonator(subject))
 	})
 	if errors.Is(err, errEmailTaken) {
 		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "email_taken")
@@ -317,7 +317,7 @@ func (s *Service) confirmEmailChange(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		if err := s.appendSelfAudit(ctx, tx, "email.changed", subject.UserID, subject.UserID, nil, nil); err != nil {
+		if err := s.appendSelfAudit(ctx, tx, "email.changed", subject.UserID, subject.UserID, nil, nil, selfAuditImpersonator(subject)); err != nil {
 			return err
 		}
 		return store.AppendUserLifecycleEvent(ctx, tx, "user.updated", &before, &updated)
@@ -379,6 +379,12 @@ func (s *Service) deleteProfile(w http.ResponseWriter, r *http.Request) {
 		if err := store.AnonymizeUser(ctx, tx, subject.UserID, deletedUsername, deletedEmail); err != nil {
 			return err
 		}
+		if err := store.DeleteOIDCIdentitiesForUser(ctx, tx, subject.UserID); err != nil {
+			return err
+		}
+		if err := store.ClearUserExternalID(ctx, tx, subject.UserID); err != nil {
+			return err
+		}
 		if _, err := store.BumpUserPermVer(ctx, tx, subject.UserID); err != nil {
 			return err
 		}
@@ -391,7 +397,7 @@ func (s *Service) deleteProfile(w http.ResponseWriter, r *http.Request) {
 		if err := store.AppendUserLifecycleEvent(ctx, tx, "user.deleted", &before, nil); err != nil {
 			return err
 		}
-		return s.appendSelfAudit(ctx, tx, "user.erased", subject.UserID, subject.UserID, nil, nil)
+		return s.appendSelfAudit(ctx, tx, "user.erased", subject.UserID, subject.UserID, nil, nil, selfAuditImpersonator(subject))
 	})
 	if err != nil {
 		httpapi.WriteStoreProblem(w, r, err)
@@ -540,7 +546,7 @@ func (s *Service) changePassword(w http.ResponseWriter, r *http.Request) {
 		}
 		return s.appendSelfAudit(ctx, tx, "password.changed", subject.UserID, subject.UserID, nil, map[string]any{
 			"sessions_revoked": true,
-		})
+		}, selfAuditImpersonator(subject))
 	})
 	if err != nil {
 		if errors.Is(err, passwd.ErrPasswordStateChanged) {
@@ -624,7 +630,7 @@ func (s *Service) deleteOwnSession(w http.ResponseWriter, r *http.Request) {
 		if rows == 0 {
 			return store.ErrNotFound
 		}
-		return s.appendSelfAudit(ctx, tx, "session.revoked", subject.UserID, sessionID, sessionID, nil)
+		return s.appendSelfAudit(ctx, tx, "session.revoked", subject.UserID, sessionID, sessionID, nil, selfAuditImpersonator(subject))
 	})
 	if errors.Is(err, store.ErrNotFound) {
 		httpapi.WriteProblem(w, r, http.StatusNotFound, "Not Found", "the requested resource was not found")
@@ -662,11 +668,14 @@ func sessionResponses(sessions []store.Session) []httpapi.SessionResponse {
 	return responses
 }
 
-func (s *Service) appendSelfAudit(ctx context.Context, q store.Q, action, actorID, target string, before, after any) error {
+func (s *Service) appendSelfAudit(ctx context.Context, q store.Q, action, actorID, target string, before, after any, impersonatedBy string) error {
 	if s.audit == nil {
 		return nil
 	}
 	actor := actorID
+	if impersonatedBy != "" {
+		after = auditAfterWithImpersonatedBy(after, impersonatedBy)
+	}
 	_, err := s.audit.Append(ctx, q, auditlog.Entry{
 		ActorID: &actor,
 		Action:  action,
@@ -675,4 +684,29 @@ func (s *Service) appendSelfAudit(ctx context.Context, q store.Q, action, actorI
 		After:   after,
 	})
 	return err
+}
+
+func selfAuditImpersonator(subject httpapi.Subject) string {
+	if !subject.Impersonated {
+		return ""
+	}
+	return subject.ActorID
+}
+
+func auditAfterWithImpersonatedBy(after any, actorID string) any {
+	if after == nil {
+		return map[string]string{"impersonated_by": actorID}
+	}
+	encoded, err := json.Marshal(after)
+	if err != nil {
+		return map[string]any{"value": after, "impersonated_by": actorID}
+	}
+	fields := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(encoded, &fields); err != nil || fields == nil {
+		fields = make(map[string]json.RawMessage, 2)
+		fields["value"] = json.RawMessage(encoded)
+	}
+	actor, _ := json.Marshal(actorID)
+	fields["impersonated_by"] = actor
+	return fields
 }

@@ -71,6 +71,8 @@ type Service struct {
 	audit           *auditlog.Writer
 	webAuthn        *webauthn.WebAuthn
 	now             func() time.Time
+	oidcMu sync.Mutex
+	oidc   *oidcProvider
 }
 
 func New(deps Deps) (*Service, error) {
@@ -126,6 +128,8 @@ func New(deps Deps) (*Service, error) {
 func (s *Service) Routes() chi.Router {
 	router := chi.NewRouter()
 	router.Post("/auth/login", s.login)
+	router.Get("/auth/oidc/begin", s.oidcBegin)
+	router.Get("/auth/oidc/callback", s.oidcCallback)
 	router.Post("/auth/register", s.register)
 	router.Post("/auth/verify-email", s.verifyEmail)
 	router.Post("/auth/invite/accept", s.acceptInvitation)
@@ -171,6 +175,7 @@ func (s *Service) Middleware() func(http.Handler) http.Handler {
 			subject := httpapi.Subject{
 				UserID: claims.Subject, TeamID: claims.Team, Kind: claims.Kind, PermVer: claims.PermVer,
 				AuthTime: claims.AuthTime, AMR: append([]string(nil), claims.AMR...),
+				Impersonated: claims.Impersonated, ActorID: claims.ActorID,
 			}
 			next.ServeHTTP(w, r.WithContext(httpapi.ContextWithSubject(r.Context(), subject)))
 		})
@@ -674,22 +679,26 @@ type tokenResponse struct {
 }
 
 type tokenClaims struct {
-	Subject  string
-	Team     string
-	Kind     string
-	PermVer  int64
-	Expiry   time.Time
-	AuthTime int64
-	AMR      []string
+	Subject      string
+	Team         string
+	Kind         string
+	PermVer      int64
+	Expiry       time.Time
+	AuthTime     int64
+	AMR          []string
+	ActorID      string
+	Impersonated bool
 }
 
 type introspectResponse struct {
-	Active  bool   `json:"active"`
-	Subject string `json:"sub,omitempty"`
-	Team    string `json:"team,omitempty"`
-	Kind    string `json:"kind,omitempty"`
-	PermVer int64  `json:"perm_ver,omitempty"`
-	Exp     int64  `json:"exp,omitempty"`
+	Active  bool              `json:"active"`
+	Subject string            `json:"sub,omitempty"`
+	Team    string            `json:"team,omitempty"`
+	Kind    string            `json:"kind,omitempty"`
+	PermVer int64             `json:"perm_ver,omitempty"`
+	Exp     int64             `json:"exp,omitempty"`
+	Act     map[string]string `json:"act,omitempty"`
+	Imp     bool              `json:"imp,omitempty"`
 }
 
 type sessionMetadata struct {
@@ -1051,10 +1060,15 @@ func (s *Service) introspect(w http.ResponseWriter, r *http.Request) {
 	if claims, err := s.parseAccessToken(request.Token); err == nil {
 		user, userErr := store.GetUser(r.Context(), s.q, claims.Subject)
 		if userErr == nil && user.Status == "active" && user.PermVer == claims.PermVer {
-			writeJSON(w, http.StatusOK, introspectResponse{
+			response := introspectResponse{
 				Active: true, Subject: claims.Subject, Team: claims.Team,
 				Kind: claims.Kind, PermVer: claims.PermVer, Exp: claims.Expiry.Unix(),
-			})
+				Imp: claims.Impersonated,
+			}
+			if claims.ActorID != "" {
+				response.Act = map[string]string{"sub": claims.ActorID}
+			}
+			writeJSON(w, http.StatusOK, response)
 			return
 		}
 		if userErr != nil && !errors.Is(userErr, pgx.ErrNoRows) {
@@ -1320,6 +1334,10 @@ func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Req
 
 func (s *Service) signAccessToken(user store.User, team, kind string, authTime int64, amr []string) (string, error) {
 	now := s.now()
+	return s.signAccessTokenAt(user, team, kind, authTime, amr, now, now.Add(s.cfg.AccessTokenTTL), nil)
+}
+
+func (s *Service) signAccessTokenAt(user store.User, team, kind string, authTime int64, amr []string, issuedAt, expiresAt time.Time, additionalClaims map[string]interface{}) (string, error) {
 	token := jwt.New()
 	audience := strings.TrimSpace(s.cfg.TokenAudience)
 	if audience == "" {
@@ -1331,14 +1349,17 @@ func (s *Service) signAccessToken(user store.User, team, kind string, authTime i
 		"sub":       user.ID,
 		"kind":      kind,
 		"perm_ver":  user.PermVer,
-		"iat":       now,
-		"exp":       now.Add(s.cfg.AccessTokenTTL),
+		"iat":       issuedAt,
+		"exp":       expiresAt,
 		"jti":       store.NewID(),
 		"auth_time": authTime,
 		"amr":       amr,
 	}
 	if team != "" {
 		claims["team"] = team
+	}
+	for name, value := range additionalClaims {
+		claims[name] = value
 	}
 	for name, value := range claims {
 		if err := token.Set(name, value); err != nil {
@@ -1402,9 +1423,34 @@ func (s *Service) parseAccessToken(raw string) (tokenClaims, error) {
 			return tokenClaims{}, errors.New("invalid amr claim")
 		}
 	}
+	actorID := ""
+	if value, present := token.Get("act"); present {
+		switch actor := value.(type) {
+		case map[string]interface{}:
+			actorID, ok = actor["sub"].(string)
+		case map[string]string:
+			actorID, ok = actor["sub"]
+		default:
+			return tokenClaims{}, errors.New("invalid act claim")
+		}
+		if !ok || actorID == "" {
+			return tokenClaims{}, errors.New("invalid act claim")
+		}
+	}
+	impersonated := false
+	if value, present := token.Get("imp"); present {
+		impersonated, ok = value.(bool)
+		if !ok {
+			return tokenClaims{}, errors.New("invalid imp claim")
+		}
+	}
+	if impersonated && actorID == "" {
+		return tokenClaims{}, errors.New("invalid impersonation claims")
+	}
 	return tokenClaims{
 		Subject: token.Subject(), Team: team, Kind: kind, PermVer: permVer,
 		Expiry: token.Expiration(), AuthTime: authTime, AMR: amr,
+		ActorID: actorID, Impersonated: impersonated,
 	}, nil
 }
 

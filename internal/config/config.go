@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -38,7 +39,16 @@ const (
 	envWebAuthnRPID               = "TEAMUSERS_WEBAUTHN_RP_ID"
 	envWebAuthnOrigin             = "TEAMUSERS_WEBAUTHN_ORIGIN"
 	envTrustedProxies             = "TEAMUSERS_TRUSTED_PROXIES"
+	envOIDCIssuer                 = "TEAMUSERS_OIDC_ISSUER"
+	envOIDCClientID               = "TEAMUSERS_OIDC_CLIENT_ID"
+	envOIDCClientSecret           = "TEAMUSERS_OIDC_CLIENT_SECRET"
+	envOIDCRedirectURL            = "TEAMUSERS_OIDC_REDIRECT_URL"
+	envOIDCTrustUpstreamMFA       = "TEAMUSERS_OIDC_TRUST_UPSTREAM_MFA"
+	envOIDCMFAACRValues           = "TEAMUSERS_OIDC_MFA_ACR_VALUES"
+	envScimBearerToken            = "TEAMUSERS_SCIM_BEARER_TOKEN"
+)
 
+const (
 	DefaultLockoutThreshold           = 5
 	DefaultLockoutDuration            = 15 * time.Minute
 	DefaultAccessTokenTTL             = 10 * time.Minute
@@ -67,6 +77,13 @@ type Config struct {
 	AuditForwardEndpoints      []string       `json:"audit_forward_endpoints,omitempty"`
 	AuditForwardSecret         string         `json:"audit_forward_secret,omitempty"`
 	PwnedPasswordsEnabled      bool           `json:"pwned_passwords_enabled"`
+	OIDCIssuer                 string         `json:"oidc_issuer,omitempty"`
+	OIDCClientID               string         `json:"oidc_client_id,omitempty"`
+	OIDCClientSecret           string         `json:"oidc_client_secret,omitempty"`
+	OIDCRedirectURL            string         `json:"oidc_redirect_url,omitempty"`
+	OIDCTrustUpstreamMFA          bool           `json:"oidc_trust_upstream_mfa"`
+	OIDCMFAACRValues              []string       `json:"oidc_mfa_acr_values,omitempty"`
+	ScimBearerToken            string         `json:"scim_bearer_token,omitempty"`
 	RegistrationMode           string         `json:"registration_mode"`
 	TokenAudience              string         `json:"token_audience"`
 	AccessTokenTTL             time.Duration  `json:"access_token_ttl"`
@@ -104,6 +121,17 @@ func Load(args ...string) (Config, error) {
 	auditForwardSecret := envOrDefault(envAuditForwardSecret, "")
 	pwnedPasswordsEnabledRaw := envOrDefault(envPwnedPasswordsEnabled, "false")
 	registrationMode := envOrDefault(envRegistrationMode, "closed")
+	oidcIssuer := envOrDefault(envOIDCIssuer, "")
+	oidcClientID := envOrDefault(envOIDCClientID, "")
+	oidcClientSecret := envOrDefault(envOIDCClientSecret, "")
+	oidcRedirectURL := envOrDefault(envOIDCRedirectURL, "")
+	oidcTrustUpstreamMFARaw := envOrDefault(envOIDCTrustUpstreamMFA, "false")
+	oidcTrustUpstreamMFA, oidcTrustUpstreamMFAErr := strconv.ParseBool(strings.TrimSpace(oidcTrustUpstreamMFARaw))
+	if oidcTrustUpstreamMFAErr != nil {
+		oidcTrustUpstreamMFA = false
+	}
+	oidcMFAACRValues := envOrDefault(envOIDCMFAACRValues, "")
+	scimBearerToken := envOrDefault(envScimBearerToken, "")
 	tokenAudience := envOrDefault(envTokenAudience, DefaultTokenAudience)
 	accessTokenTTL := envOrDefault(envAccessTokenTTL, DefaultAccessTokenTTL.String())
 	refreshTokenTTL := envOrDefault(envRefreshTokenTTL, DefaultRefreshTokenTTL.String())
@@ -139,6 +167,13 @@ func Load(args ...string) (Config, error) {
 	fs.StringVar(&webauthnRPID, "webauthn-rp-id", webauthnRPID, "WebAuthn relying-party ID")
 	fs.StringVar(&webauthnOrigin, "webauthn-origin", webauthnOrigin, "WebAuthn relying-party origin")
 	fs.StringVar(&trustedProxies, "trusted-proxies", trustedProxies, "comma-separated trusted proxy CIDRs or IPs")
+	fs.StringVar(&oidcIssuer, "oidc-issuer", oidcIssuer, "OIDC issuer URL")
+	fs.StringVar(&oidcClientID, "oidc-client-id", oidcClientID, "OIDC client ID")
+	fs.StringVar(&oidcClientSecret, "oidc-client-secret", oidcClientSecret, "OIDC client secret")
+	fs.StringVar(&oidcRedirectURL, "oidc-redirect-url", oidcRedirectURL, "OIDC callback redirect URL")
+	fs.BoolVar(&oidcTrustUpstreamMFA, "oidc-trust-upstream-mfa", oidcTrustUpstreamMFA, "trust configured upstream OIDC MFA evidence")
+	fs.StringVar(&oidcMFAACRValues, "oidc-mfa-acr-values", oidcMFAACRValues, "comma-separated exact OIDC ACR values trusted as MFA")
+	fs.StringVar(&scimBearerToken, "scim-bearer-token", scimBearerToken, "SCIM bearer token")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -153,6 +188,21 @@ func Load(args ...string) (Config, error) {
 		if !flagSet {
 			return Config{}, fmt.Errorf("invalid pwned-passwords enabled value %q: %w", pwnedPasswordsEnabledRaw, pwnedPasswordsEnabledErr)
 		}
+	}
+	if oidcTrustUpstreamMFAErr != nil {
+		flagSet := false
+		fs.Visit(func(value *flag.Flag) {
+			if value.Name == "oidc-trust-upstream-mfa" {
+				flagSet = true
+			}
+		})
+		if !flagSet {
+			return Config{}, fmt.Errorf("invalid OIDC upstream MFA trust value %q: %w", oidcTrustUpstreamMFARaw, oidcTrustUpstreamMFAErr)
+		}
+	}
+	parsedOIDCMFAACRValues, err := parseOIDCMFAACRValues(oidcMFAACRValues)
+	if err != nil {
+		return Config{}, err
 	}
 	auditRetentionDaysValue, err := strconv.Atoi(strings.TrimSpace(auditRetentionDays))
 	if err != nil {
@@ -212,6 +262,13 @@ func Load(args ...string) (Config, error) {
 		AuditForwardEndpoints:      parseNotificationEndpoints(auditForwardEndpoints),
 		AuditForwardSecret:         auditForwardSecret,
 		PwnedPasswordsEnabled:      pwnedPasswordsEnabled,
+		OIDCIssuer:                 strings.TrimSpace(oidcIssuer),
+		OIDCClientID:               strings.TrimSpace(oidcClientID),
+		OIDCClientSecret:           oidcClientSecret,
+		OIDCRedirectURL:            strings.TrimSpace(oidcRedirectURL),
+		OIDCTrustUpstreamMFA:       oidcTrustUpstreamMFA,
+		OIDCMFAACRValues:           parsedOIDCMFAACRValues,
+		ScimBearerToken:            strings.TrimSpace(scimBearerToken),
 		RegistrationMode:           strings.ToLower(strings.TrimSpace(registrationMode)),
 		TokenAudience:              strings.TrimSpace(tokenAudience),
 		AccessTokenTTL:             accessTTL,
@@ -297,6 +354,28 @@ func (c Config) Validate() error {
 	if len(c.AuditForwardEndpoints) > 0 && strings.TrimSpace(c.AuditForwardSecret) == "" {
 		return errors.New("audit forwarding secret is required when endpoints are configured")
 	}
+	oidcConfigured := 0
+	for _, value := range []string{c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCRedirectURL} {
+		if strings.TrimSpace(value) != "" {
+			oidcConfigured++
+		}
+	}
+	if oidcConfigured != 0 && oidcConfigured != 4 {
+		return errors.New("OIDC issuer, client ID, client secret, and redirect URL must be configured together")
+	}
+	if oidcConfigured == 4 {
+		if err := validateOIDCURL("OIDC issuer", c.OIDCIssuer, false); err != nil {
+			return err
+		}
+		if err := validateOIDCURL("OIDC redirect URL", c.OIDCRedirectURL, true); err != nil {
+			return err
+		}
+	}
+	for _, value := range c.OIDCMFAACRValues {
+		if value == "" || strings.TrimSpace(value) != value || strings.Contains(value, ",") {
+			return errors.New("OIDC MFA ACR values must be non-empty, trimmed comma-separated entries")
+		}
+	}
 	if c.LockoutDuration < 0 {
 		return fmt.Errorf("lockout duration must not be negative, got %s", c.LockoutDuration)
 	}
@@ -315,6 +394,33 @@ func (c Config) Validate() error {
 	return nil
 }
 
+func validateOIDCURL(name, value string, redirect bool) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.Fragment != "" {
+		return fmt.Errorf("%s must be an absolute HTTP(S) URL without user information or a fragment", name)
+	}
+	if !redirect && parsed.RawQuery != "" {
+		return errors.New("OIDC issuer must not include a query")
+	}
+	return nil
+}
+
+
+func parseOIDCMFAACRValues(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			return nil, errors.New("OIDC MFA ACR values must be non-empty, trimmed comma-separated entries")
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
 // ValidateFor applies command-specific requirements after Validate.
 func (c Config) ValidateFor(command string) error {
 	if err := c.Validate(); err != nil {
@@ -350,6 +456,12 @@ func (c Config) Redacted() Config {
 	}
 	if redacted.NotificationSecret != "" {
 		redacted.NotificationSecret = "[redacted]"
+	}
+	if redacted.OIDCClientSecret != "" {
+		redacted.OIDCClientSecret = "[redacted]"
+	}
+	if redacted.ScimBearerToken != "" {
+		redacted.ScimBearerToken = "[redacted]"
 	}
 	return redacted
 }

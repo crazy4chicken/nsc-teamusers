@@ -158,6 +158,22 @@ export function RequireFresh(
   return requireFresh(maxAgeMs);
 }
 
+/** Reject authenticated claims issued for an impersonated subject. */
+export function rejectImpersonated(): (request: MiddlewareRequest, claims?: Claims) => Promise<Claims> {
+  return async (_request: MiddlewareRequest, providedClaims?: Claims): Promise<Claims> => {
+    if (providedClaims === undefined) {
+      throw new UnauthorizedError("authentication is required");
+    }
+    if (providedClaims.impersonated) {
+      throw new ForbiddenError("impersonation_forbidden");
+    }
+    return providedClaims;
+  };
+}
+
+/** Go-style spelling for the RejectImpersonated middleware helper. */
+export const RejectImpersonated = rejectImpersonated;
+
 function bearerToken(header: string | undefined): string | undefined {
   if (header === undefined) return undefined;
   const parts = header.trim().split(/\s+/u);

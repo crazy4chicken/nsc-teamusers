@@ -70,9 +70,11 @@ type credentialResponse struct {
 }
 
 type introspectionResponse struct {
-	Active  bool   `json:"active"`
-	Subject string `json:"sub"`
-	Kind    string `json:"kind"`
+	Active  bool              `json:"active"`
+	Subject string            `json:"sub"`
+	Kind    string            `json:"kind"`
+	Act     map[string]string `json:"act"`
+	Imp     bool              `json:"imp"`
 }
 
 type jwksResponse struct {
@@ -334,6 +336,7 @@ var testBootstrapAdminPermissionKeys = []string{
 	"iam:policies:any",
 	"iam:mfa:any",
 	"iam:keys:any",
+	"iam:impersonate:any",
 	"iam:*:any",
 }
 

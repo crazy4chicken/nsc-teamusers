@@ -19,7 +19,7 @@ func main() {
 }
 
 func generate() error {
-	operations := apidocs.All(authn.DocOperations, httpapi.DocOperations, authz.DocOperations)
+	operations := apidocs.All(authn.DocOperations, httpapi.DocOperations, httpapi.DocOIDCOperations, httpapi.DocSCIMOperations, httpapi.DocImpersonationOperations, authz.DocOperations)
 	apidocs.SetOperations(operations)
 	operations, err := apidocs.Operations()
 	if err != nil {

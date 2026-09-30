@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,6 +19,39 @@ func TestAuditExportCSVCellPrefixesFormulaCharacters(t *testing.T) {
 		if got := auditExportCSVCell(value); got != value {
 			t.Errorf("auditExportCSVCell(%q) = %q, want unchanged", value, got)
 		}
+	}
+}
+
+func TestAdminAuditEntryRecordsImpersonatingActor(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/admin/users/target", nil)
+	request = request.WithContext(ContextWithSubject(request.Context(), Subject{
+		UserID:       "target-user",
+		Impersonated: true,
+		ActorID:      "admin-user",
+	}))
+	entry := (&adminHandler{}).auditEntry(request, nil, "user.updated", "target-user", nil, map[string]string{
+		"display_name": "Target",
+	})
+	if entry.ActorID == nil || *entry.ActorID != "target-user" {
+		t.Fatalf("audit actor = %v, want target-user", entry.ActorID)
+	}
+	fields, ok := entry.After.(map[string]json.RawMessage)
+	if !ok {
+		t.Fatalf("audit after type = %T, want map[string]json.RawMessage", entry.After)
+	}
+	var impersonatedBy string
+	if err := json.Unmarshal(fields["impersonated_by"], &impersonatedBy); err != nil {
+		t.Fatalf("decode impersonated_by: %v", err)
+	}
+	if impersonatedBy != "admin-user" {
+		t.Fatalf("impersonated_by = %q, want admin-user", impersonatedBy)
+	}
+	var displayName string
+	if err := json.Unmarshal(fields["display_name"], &displayName); err != nil {
+		t.Fatalf("decode display_name: %v", err)
+	}
+	if displayName != "Target" {
+		t.Fatalf("display_name = %q, want Target", displayName)
 	}
 }
 

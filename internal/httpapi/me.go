@@ -49,6 +49,7 @@ func NewMeRouter(authMW func(http.Handler) http.Handler, handlers MeHandlers) ch
 		router.Use(authMW)
 	}
 	router.Use(requireMeSubject)
+	router.Use(restrictImpersonatedMeAccess)
 	router.Get("/me", handlers.Profile)
 	router.Get("/me/password-policy", handlers.PasswordPolicy)
 	router.Patch("/me", handlers.PatchProfile)
@@ -69,6 +70,26 @@ func NewMeRouter(authMW func(http.Handler) http.Handler, handlers MeHandlers) ch
 	router.Get("/me/passkeys", handlers.ListPasskeys)
 	router.Delete("/me/passkeys/{credID}", handlers.DeletePasskey)
 	return router
+}
+
+func restrictImpersonatedMeAccess(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subject, ok := SubjectFrom(r.Context())
+		if ok && subject.Impersonated && (r.Method != http.MethodGet || !allowedImpersonatedMeRead(r.URL.Path)) {
+			WriteProblem(w, r, http.StatusForbidden, "impersonation_forbidden", "impersonation_forbidden")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func allowedImpersonatedMeRead(path string) bool {
+	switch path {
+	case "/me", "/me/password-policy", "/me/sessions", "/me/activity", "/me/export":
+		return true
+	default:
+		return false
+	}
 }
 
 func requireMeSubject(next http.Handler) http.Handler {

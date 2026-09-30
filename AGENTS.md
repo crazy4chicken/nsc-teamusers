@@ -45,8 +45,9 @@ is unset. No in-memory substitute is accepted.
 
 - **Tokens prove identity only.** Permissions are NEVER embedded in JWTs.
   Claims contract consumed by all three SDKs: `iss, aud, sub, team, kind,
-  perm_ver, iat, exp, jti, auth_time, amr`. Additive-only; changing existing
-  claim names/shapes is a breaking cross-repo change.
+  perm_ver, iat, exp, jti, auth_time, amr`; impersonation tokens add `act`
+  ({sub: admin id}) + `imp=true` and force `auth_time=0`. Additive-only;
+  changing existing claim names/shapes is a breaking cross-repo change.
 - **Effective set = direct bindings U group bindings -> roles -> permission
   keys**, minus failed ABAC conditions, expired bindings, disabled users.
   Explicit deny (`!` prefix) always beats allow; wildcards match within one
@@ -113,7 +114,12 @@ injected) > defaults. Current env vars: `TEAMUSERS_CONNECTION_STRING`,
 `TEAMUSERS_AUDIT_RETENTION_DAYS` (default 0 = keep forever),
 `TEAMUSERS_AUDIT_FORWARD_ENDPOINTS`, `TEAMUSERS_AUDIT_FORWARD_SECRET`,
 `TEAMUSERS_LOGIN_ACTIVITY_RETENTION_DAYS` (default 90),
-`TEAMUSERS_PWNED_PASSWORDS_ENABLED` (HIBP breach screening, default off).
+`TEAMUSERS_PWNED_PASSWORDS_ENABLED` (HIBP breach screening, default off),
+`TEAMUSERS_OIDC_ISSUER`, `TEAMUSERS_OIDC_CLIENT_ID`,
+`TEAMUSERS_OIDC_CLIENT_SECRET`, `TEAMUSERS_OIDC_REDIRECT_URL` (OIDC off when
+issuer unset), `TEAMUSERS_OIDC_TRUST_UPSTREAM_MFA`,
+`TEAMUSERS_OIDC_MFA_ACR_VALUES`, `TEAMUSERS_SCIM_BEARER_TOKEN` (SCIM off
+when empty).
 
 Signing-key rotation: `POST /keys/rotate` (admin plane, `iam:keys:any`).
 Retired keys stay in JWKS until `rotated_at + 2*max(access, mfa,

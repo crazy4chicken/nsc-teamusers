@@ -50,7 +50,7 @@ revocation state. Refresh-token introspection checks the stored session and its
 revocation/expiry state. This divergence preserves stateless access-token
 validation while retaining operational refresh-token status.
 
-The service records resolved password, passkey, and MFA authentication
+The service records resolved password, passkey, OIDC, and MFA authentication
 outcomes in `login_activity`, including timestamp, client IP, user agent,
 method, and result; passwords and tokens are never stored. Writes are
 best-effort and logged without blocking authentication. `GET /me/activity`
@@ -58,6 +58,16 @@ returns cursor pages ordered by descending activity ID and filters strictly to
 the caller's `user_id`. When a failed attempt cannot be tied to a user, its
 attempted username is stored with a null `user_id` and is not exposed through
 the self-service endpoint.
+
+## Inbound OpenID Connect federation
+
+Inbound federation is disabled when `TEAMUSERS_OIDC_ISSUER` is empty. Configure the issuer, client ID, client secret, and callback URL together; use HTTPS issuer and callback URLs in production. The authorization-code exchange has a ten-second timeout. The begin endpoint creates random state, nonce, and PKCE verifier values, stores the state and nonce digests plus the PKCE S256 challenge and verifier server-side for five minutes, and keeps state single-use.
+
+The begin endpoint sets a `__Host-oidc_state` cookie containing the state digest with `HttpOnly`, `SameSite=Lax`, `Secure`, `Path=/`, and no `Domain`. `Secure` is unconditional because production TLS terminates at the trusted reverse proxy; the browser callback must use the public HTTPS origin. At callback, the service constant-time checks the cookie against the state query, consumes the state, and sends the stored verifier to the token endpoint. Missing or mismatched cookies and replayed states are rejected.
+
+The callback verifies the ID-token signature against cached issuer JWKS while enforcing the header-algorithm allowlist. It checks `iss`, `aud`, `exp`, the nonce, requires `iat` to be no more than ten minutes old and no more than 30 seconds in the future, and rejects `nbf` values more than 30 seconds in the future. An unknown `kid` triggers a JWKS refresh. Unverified email claims are never used to associate an account: an existing `(issuer, sub)` identity can sign in directly, while linking by email and just-in-time user creation require `email_verified: true`. An email match can link only when the local `email_verified_at` is set and the local status is neither `pending` nor `invited`; erased users are not linkable. Refused links return `403 oidc_link_refused` without changing local credentials. Closed registration rejects unknown users; approval mode creates a pending user; open mode creates an active user. Newly provisioned OIDC users emit the `user.created` lifecycle event.
+
+The callback returns JSON, not a frontend redirect, and never persists the provider's ID token. OIDC primary authentication sets `auth_time` to the callback time and contributes `amr: ["ext"]`; a local TOTP step-up retains that evidence and adds `otp` to the final token pair. The callback can return a JSON TOTP or enrollment challenge. Upstream `amr`/`acr` claims satisfy MFA only when `TEAMUSERS_OIDC_TRUST_UPSTREAM_MFA=true` (default `false`); otherwise local MFA remains required when policy demands it. When trust is enabled, configured `TEAMUSERS_OIDC_MFA_ACR_VALUES` are exact `acr` matches; the service does not split or infer values from delimiters. Login activity records the `oidc` method for both successful and failed callbacks and uses the existing per-IP limiter.
 
 ## Admin-plane dogfooding
 
@@ -68,7 +78,7 @@ The route family is resolved against the caller's current role bindings on each
 request (the plane is low QPS), and a missing `iam:*` key fails closed with
 `insufficient_permissions`.
 
-The ten enumerated administrative `iam:<area>:any` keys plus the
+The enumerated administrative `iam:<area>:any` keys plus the
 `iam:*:any` wildcard are provisioned explicitly by
 `teamusers bootstrap-admin --username <name>`. This command creates or
 reconciles the platform-scoped `iam-admin` role and its binding; there is no
@@ -112,6 +122,39 @@ Sensitive administrative operations require a user access token whose
 their normal administrative permissions but do not require fresh
 authentication. Other admin operations continue to use their existing
 permission checks.
+
+## Administrative impersonation
+
+`POST /impersonations` is a high-risk support operation guarded by
+`iam:impersonate:any` and the same ten-minute fresh-authentication step-up as
+other sensitive administrative mutations. Each request requires a reason of at
+least three characters. Successful issuance records an append-only
+`impersonation.started` audit row containing the administrator, target, reason,
+TTL, token `jti`, and exact `expires_at`.
+
+The access token represents the target user (`kind=user`) and carries
+`act: {"sub": "<administrator-id>"}` and `imp: true`. It sets `auth_time` to
+zero, so it never satisfies step-up. The TTL defaults to five minutes and is
+capped at fifteen minutes. No refresh token or session row is created; the
+token cannot be renewed.
+Trusted service introspection also returns the `act` and `imp` values for an
+active impersonation access token.
+
+The `/me` router permits impersonated tokens to use only `GET /me`,
+`GET /me/password-policy`, `GET /me/sessions`, `GET /me/activity`, and
+`GET /me/export`. Every other `/me` method or route is rejected with 403
+`impersonation_forbidden`, including profile changes, account erasure, session
+revocation, TOTP, and passkey operations.
+
+Audit events emitted under an impersonated subject retain the target user as
+`actor_id` and record the administrator from `act.sub` as
+`after.impersonated_by`. There is no per-`jti` revocation list; an individual
+impersonation token cannot be revoked early by its identifier. Its 15-minute
+maximum expiry is therefore the upper bound on its remaining validity.
+
+Only active non-service accounts may be targets. Self-impersonation and
+impersonation of any account with effective `iam:*` permissions are denied so
+the token cannot grant administrative access.
 
 ## Password policies
 

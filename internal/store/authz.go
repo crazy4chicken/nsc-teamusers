@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"teamusers/internal/domain"
 )
 
 // ListDirectRoleBindings returns active direct user bindings that are either
@@ -84,6 +87,63 @@ func ListRolePermissionsForRoles(ctx context.Context, q Q, roleIDs []string) (ma
 		return nil, err
 	}
 	return permissions, nil
+}
+
+// UserHasIAMPermission reports whether a user's active direct or group role
+// bindings grant an effective IAM permission. It intentionally does not check
+// users.status so callers can apply their own status policy.
+func UserHasIAMPermission(ctx context.Context, q Q, userID string) (bool, error) {
+	now := time.Now()
+	direct, err := ListDirectRoleBindings(ctx, q, userID, now)
+	if err != nil {
+		return false, err
+	}
+	group, err := ListGroupRoleBindings(ctx, q, userID, now)
+	if err != nil {
+		return false, err
+	}
+	bindings := append(direct, group...)
+	roleIDs := make([]string, 0, len(bindings))
+	seenRoles := make(map[string]struct{}, len(bindings))
+	for _, binding := range bindings {
+		if _, ok := seenRoles[binding.RoleID]; ok {
+			continue
+		}
+		seenRoles[binding.RoleID] = struct{}{}
+		roleIDs = append(roleIDs, binding.RoleID)
+	}
+	rolePermissions, err := ListRolePermissionsForRoles(ctx, q, roleIDs)
+	if err != nil {
+		return false, err
+	}
+
+	permissions := make([]domain.Permission, 0)
+	for _, binding := range bindings {
+		conditional := binding.Condition != nil && strings.TrimSpace(*binding.Condition) != ""
+		if conditional {
+			if _, err := domain.Compile(*binding.Condition); err != nil {
+				continue
+			}
+		}
+		for _, key := range rolePermissions[binding.RoleID] {
+			permission, err := domain.Parse(key)
+			if err != nil || (conditional && permission.Deny) {
+				continue
+			}
+			permissions = append(permissions, permission)
+		}
+	}
+	for _, permission := range permissions {
+		if permission.Deny || (permission.Resource != "iam" && permission.Resource != "*") {
+			continue
+		}
+		permission.Resource = "iam"
+		resolved := domain.Resolve(permissions, []domain.Permission{permission})
+		if len(resolved) == 1 && resolved[0].Allowed {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ListUnconditionalRolePermissions mirrors the grant selection in authz's

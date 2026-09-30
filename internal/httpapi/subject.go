@@ -4,12 +4,14 @@ import "context"
 
 // Subject identifies the authenticated principal making an admin request.
 type Subject struct {
-	UserID   string
-	TeamID   string
-	Kind     string
-	PermVer  int64
-	AuthTime int64
-	AMR      []string
+	UserID        string
+	TeamID        string
+	Kind          string
+	PermVer       int64
+	AuthTime      int64
+	AMR           []string
+	Impersonated  bool
+	ActorID       string
 }
 
 type subjectContextKey struct{}

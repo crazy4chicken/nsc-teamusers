@@ -31,6 +31,12 @@ default**. The supported environment variables are:
 | `TEAMUSERS_AUDIT_FORWARD_ENDPOINTS` | empty | Comma-separated HTTP endpoints for asynchronous HMAC-signed audit-row delivery; empty disables forwarding. |
 | `TEAMUSERS_AUDIT_FORWARD_SECRET` | empty | HMAC-SHA256 signing secret; required when audit-forward endpoints are configured and redacted from status output. |
 | `TEAMUSERS_REGISTRATION_MODE` | `closed` | Public registration mode: `closed`, `approval`, or `open`. |
+| `TEAMUSERS_OIDC_ISSUER` | empty | OpenID Provider issuer URL (`--oidc-issuer`); empty disables inbound OIDC. |
+| `TEAMUSERS_OIDC_CLIENT_ID` | empty | OIDC client identifier (`--oidc-client-id`). |
+| `TEAMUSERS_OIDC_CLIENT_SECRET` | empty | Confidential OIDC client secret (`--oidc-client-secret`); redacted from diagnostic output. |
+| `TEAMUSERS_OIDC_REDIRECT_URL` | empty | Absolute OIDC callback URL (`--oidc-redirect-url`). |
+| `TEAMUSERS_OIDC_TRUST_UPSTREAM_MFA` | `false` | Opts in to satisfying local MFA policy from recognized upstream OIDC `amr` or configured exact `acr` evidence; default false always requires local MFA when policy demands it. |
+| `TEAMUSERS_OIDC_MFA_ACR_VALUES` | empty | Comma-separated exact-match `acr` values trusted only when upstream OIDC MFA trust is enabled; values are not delimiter-split. |
 | `TEAMUSERS_ACCESS_TOKEN_TTL` | `10m` | Access-token lifetime (`--access-token-ttl`); parsed by `time.ParseDuration`. |
 | `TEAMUSERS_REFRESH_TOKEN_TTL` | `720h` | Refresh-token lifetime (`--refresh-token-ttl`); parsed by `time.ParseDuration`. |
 | `TEAMUSERS_SESSION_FAMILY_TTL` | `2160h` | Absolute session-family lifetime (`--session-family-ttl`); parsed by `time.ParseDuration` and must be at least the refresh-token TTL. |
@@ -39,6 +45,8 @@ default**. The supported environment variables are:
 | `TEAMUSERS_PWNED_PASSWORDS_ENABLED` | `false` | Enables HIBP screening for password policies with `breach_check: true` (`--pwned-passwords-enabled`). |
 | `TEAMUSERS_WEBAUTHN_RP_ID` | `localhost` | WebAuthn relying-party ID. |
 | `TEAMUSERS_WEBAUTHN_ORIGIN` | `http://localhost` | WebAuthn browser origin. |
+
+Configure all four OIDC endpoint/client values together; the service rejects partial configuration. Use HTTPS issuer and callback URLs in production. The `__Host-` state cookie is always `Secure`, so public HTTPS must terminate at the trusted reverse proxy. Upstream MFA trust is opt-in; keep `TEAMUSERS_OIDC_TRUST_UPSTREAM_MFA=false` unless relying on upstream MFA, and list permitted full `acr` values in `TEAMUSERS_OIDC_MFA_ACR_VALUES`.
 
 Do not put credentials in the repository. Use Nekostick's protected service
 configuration or another approved secret facility, and restrict read access.
@@ -603,3 +611,111 @@ instance first, waits for its `/healthz` check to pass, switches forwarding to
 the new instance, and then drains the old one. Never route new traffic to an
 instance after its drain begins; investigate a failed health check before
 terminating the healthy instance.
+
+## SCIM provisioning
+
+SCIM 2.0 provisioning is available under `$IAM_BASE_URL/scim/v2` when
+`TEAMUSERS_SCIM_BEARER_TOKEN` is a static bearer credential. Store it in the
+deployment secret facility. To revoke access, replace the configured value and
+restart or roll out every replica; never put it in source control or request
+logs. An empty value disables SCIM, so requests to the mounted router return
+`401 application/problem+json`. Configure SCIM independently of inbound OIDC.
+
+The bearer token can create, update, list, read, and deactivate users. It is a
+service-wide credential, so restrict it to the identity provider that owns
+provisioning and protect access to it as an administrator credential. Only
+users with a non-empty `externalId` are in the SCIM-managed population; `POST`
+requires one. List results and `totalResults` exclude erased users, service
+accounts, and users with effective IAM permissions. Single-resource GET reports
+unmanaged or protected users as `404`; mutations refuse protected targets.
+User mutations are transactional with audit rows (`actor_id = scim`) and
+lifecycle outbox events (`user.created` and `user.updated`). Disabling a user
+also invalidates the user's permission version and revokes active refresh
+sessions.
+
+Create users with the SCIM media type and an idempotency key:
+
+```sh
+export SCIM_TOKEN='use-a-secret-manager-value'
+export SCIM_BASE_URL="$IAM_BASE_URL/scim/v2"
+
+curl --fail-with-body -sS -X POST "$SCIM_BASE_URL/Users" \
+  -H "Authorization: Bearer $SCIM_TOKEN" \
+  -H 'Content-Type: application/scim+json' \
+  -H "Idempotency-Key: $CHANGE_ID" \
+  --data '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"alice","externalId":"directory-123","name":{"givenName":"Alice","familyName":"Example"},"emails":[{"value":"alice@example.test","primary":true}],"active":true}'
+```
+
+`userName` and a non-empty `externalId` are required; `userName` is unique
+without regard to case and `externalId` is unique. A supplied email must be a
+valid address and unique across all users. Duplicate `userName`, `externalId`,
+or email returns `409 uniqueness`. `externalId` is stored as a client-owned
+identifier; the service-issued SCIM `id` is separate. The primary email maps to
+the service's email field. If `active` is omitted it defaults to true; `active:
+false` creates a disabled user.
+
+`GET /Users` uses SCIM's one-based `startIndex` and `count` pagination, and only
+returns eligible users in the externally identified population. `count`
+defaults to 100, may be zero, and is capped at 1000. `totalResults` counts only
+eligible users after protected accounts are excluded. The only supported filter
+is `userName eq "value"`; other attributes and operators return
+`400 invalidFilter`. For example:
+
+```sh
+curl --fail-with-body -sS -G "$SCIM_BASE_URL/Users" \
+  -H "Authorization: Bearer $SCIM_TOKEN" \
+  --data-urlencode 'filter=userName eq "alice"' \
+  --data-urlencode 'startIndex=1' \
+  --data-urlencode 'count=100'
+```
+
+PATCH accepts RFC 7644 `add`, `remove`, and `replace` operations for `active`,
+`name`/`name.formatted`, `displayName`, and email values. Entra's filtered path
+`emails[type eq "work"].value` is supported for add/replace/remove; remove does
+not require a value. Changed emails must be valid addresses unique across all
+users; invalid values return `400 invalidValue` and duplicates return
+`409 uniqueness`.
+
+`PUT /Users/{id}` fully replaces writable profile fields: `userName` is
+required, omitted `displayName` and `emails` are cleared, and `active` defaults
+to true unless explicitly false. A supplied non-empty `externalId` replaces
+the client-owned identifier; if omitted it is preserved and it cannot be
+cleared. Only disabled users may transition to active; attempts to activate
+pending, invited, erased, or otherwise non-disabled users return `403`.
+
+`DELETE /Users/{id}` is intentionally a soft delete: it sets `active` to false
+and returns `204`; eligible users remain available to SCIM reads with
+`active:false`. PATCH, PUT, and DELETE disable paths revoke sessions and
+invalidate permission versions.
+
+`GET /ServiceProviderConfig` reports PATCH and userName equality filtering as
+supported, and bulk and sort as unsupported; `PUT /Users/{id}` supports full
+replacement.
+`GET /ResourceTypes` lists User as the only supported resource type. Groups
+are not implemented because the service's groups are team-scoped and SCIM
+membership provisioning would require additional team and membership semantics.
+`GET /Groups` returns `501` with a
+SCIM error response. Provisioning and error responses use
+`application/scim+json` except the unauthenticated `401` problem response.
+
+## Administrative impersonation
+
+`iam:impersonate:any` is the platform-scoped permission for the admin
+`POST /impersonations` endpoint and is included in the bootstrap administrator
+permission set.
+Assign it only to operators approved to act as other users. The endpoint also
+requires fresh authentication within the previous ten minutes. Each successful
+issuance records the administrator, target, reason, TTL, token `jti`, and exact
+`expires_at` in the append-only audit log. Tokens have a default TTL of 300
+seconds and a maximum TTL of 900 seconds.
+
+An impersonated token is read-only at the `/me` boundary. It may call only
+`GET /me`, `GET /me/password-policy`, `GET /me/sessions`, `GET /me/activity`,
+and `GET /me/export`. All other `/me` methods and routes return 403
+`impersonation_forbidden`, including TOTP and passkey operations. The token has
+no refresh token or session and cannot be renewed.
+
+There is no per-token `jti` revocation list in this release. Individual
+impersonation tokens expire within 15 minutes of issuance, which is the maximum
+remaining validity bound if an operator stops using a token.
+

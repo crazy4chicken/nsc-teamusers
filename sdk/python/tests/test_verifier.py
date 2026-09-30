@@ -70,7 +70,14 @@ def test_verifies_token_and_caches_jwks() -> None:
     verifier = Verifier("https://issuer.example/", fetcher=fetcher)
     auth_time = int(time.time()) - 12
     claims = verifier.verify(
-        _token(private_key, team="platform", auth_time=auth_time, amr=["pwd", "otp"])
+        _token(
+            private_key,
+            team="platform",
+            auth_time=auth_time,
+            amr=["pwd", "otp"],
+            act={"sub": "sdk-admin"},
+            imp=True,
+        )
     )
 
     assert isinstance(claims, Claims)
@@ -84,13 +91,16 @@ def test_verifies_token_and_caches_jwks() -> None:
     assert claims.auth_time == auth_time
     assert claims.authTime == auth_time
     assert claims.amr == ("pwd", "otp")
+    assert claims.actor == "sdk-admin"
+    assert claims.impersonated is True
     assert requests == ["https://issuer.example/.well-known/jwks.json"]
 
     legacy = verifier.verify(_token(private_key))
     assert legacy.subject == "sdk-user"
     assert legacy.auth_time == 0
     assert legacy.amr == ()
-    assert len(requests) == 1
+    assert legacy.actor is None
+    assert legacy.impersonated is False
 
 
 def test_expected_audience_and_claim_validation() -> None:
@@ -114,6 +124,9 @@ def test_expected_audience_and_claim_validation() -> None:
         {"auth_time": True},
         {"amr": "pwd"},
         {"amr": ["pwd", 1]},
+        {"act": "sdk-admin"},
+        {"act": {"sub": "sdk-admin"}, "imp": "true"},
+        {"imp": True},
     ):
         with pytest.raises(TokenClaimsError):
             verifier.verify(_token(private_key, aud="orders", **invalid_claims))

@@ -309,9 +309,35 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 			return Claims{}, errors.New("invalid access token amr")
 		}
 	}
+	actor := ""
+	if value, present := token.Get("act"); present {
+		switch actorClaims := value.(type) {
+		case map[string]interface{}:
+			actor, ok = actorClaims["sub"].(string)
+		case map[string]string:
+			actor, ok = actorClaims["sub"]
+		default:
+			return Claims{}, errors.New("invalid access token act")
+		}
+		if !ok || actor == "" {
+			return Claims{}, errors.New("invalid access token act")
+		}
+	}
+	impersonated := false
+	if value, present := token.Get("imp"); present {
+		var impersonatedOK bool
+		impersonated, impersonatedOK = value.(bool)
+		if !impersonatedOK {
+			return Claims{}, errors.New("invalid access token imp")
+		}
+	}
+	if impersonated && actor == "" {
+		return Claims{}, errors.New("invalid access token impersonation claims")
+	}
 	return Claims{
 		Subject: subject, Team: team, Kind: kind, PermVer: permVer,
 		Audience: audiences[0], Expiry: expiry, AuthTime: authTime, AMR: amr,
+		Actor: actor, Impersonated: impersonated,
 	}, nil
 }
 

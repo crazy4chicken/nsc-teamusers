@@ -79,6 +79,8 @@ class Claims:
     audience: Audience
     auth_time: int = 0
     amr: tuple[str, ...] = ()
+    actor: str | None = None
+    impersonated: bool = False
 
     @property
     def sub(self) -> str:
@@ -426,6 +428,28 @@ def _claims_from_payload(
     else:
         amr = ()
 
+    if "act" in payload:
+        actor_raw = payload["act"]
+        if (
+            not isinstance(actor_raw, dict)
+            or not isinstance(actor_raw.get("sub"), str)
+            or actor_raw["sub"] == ""
+        ):
+            raise TokenClaimsError("invalid access token act")
+        actor = actor_raw["sub"]
+    else:
+        actor = None
+
+    if "imp" in payload:
+        impersonated_raw = payload["imp"]
+        if not isinstance(impersonated_raw, bool):
+            raise TokenClaimsError("invalid access token imp")
+        impersonated = impersonated_raw
+    else:
+        impersonated = False
+    if impersonated and actor is None:
+        raise TokenClaimsError("invalid access token impersonation claims")
+
     audience: Audience = (
         tuple(audience_values) if isinstance(audience_raw, list) else audience_values[0]
     )
@@ -438,6 +462,8 @@ def _claims_from_payload(
         audience=audience,
         auth_time=auth_time,
         amr=amr,
+        actor=actor,
+        impersonated=impersonated,
     )
 
 

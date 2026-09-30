@@ -18,9 +18,13 @@ import (
 // RouterBuilder constructs the complete application router for documentation.
 type RouterBuilder func(config.Config, store.Q) (chi.Router, error)
 
+// RouterChildBuilder constructs a package-owned child router for route discovery.
+type RouterChildBuilder func(config.Config, store.Q) (chi.Router, error)
+
 var (
 	builderMu sync.RWMutex
 	builder   RouterBuilder
+	routerChildBuilders []RouterChildBuilder
 
 	operationsMu    sync.RWMutex
 	operationSet    []Operation
@@ -35,6 +39,17 @@ func RegisterRouterBuilder(next RouterBuilder) {
 	}
 	builderMu.Lock()
 	builder = next
+	builderMu.Unlock()
+}
+
+// RegisterRouterChildBuilder adds a package-owned child router to the
+// documentation route walk.
+func RegisterRouterChildBuilder(next RouterChildBuilder) {
+	if next == nil {
+		return
+	}
+	builderMu.Lock()
+	routerChildBuilders = append(routerChildBuilders, next)
 	builderMu.Unlock()
 }
 
@@ -72,11 +87,24 @@ func BuildRouter(cfg config.Config, q store.Q) (chi.Router, error) {
 	}
 	builderMu.RLock()
 	current := builder
+	childBuilders := append([]RouterChildBuilder(nil), routerChildBuilders...)
 	builderMu.RUnlock()
 	if current == nil {
 		return nil, errors.New("apidocs router builder is not registered")
 	}
-	return current(cfg, q)
+	router, err := current(cfg, q)
+	if err != nil {
+		return nil, err
+	}
+	children := make([]chi.Router, 0, len(childBuilders))
+	for _, buildChild := range childBuilders {
+		child, err := buildChild(cfg, q)
+		if err != nil {
+			return nil, err
+		}
+		children = append(children, child)
+	}
+	return WithRoutes(router, children...)
 }
 
 // Operations builds the router and collects its registered metadata.

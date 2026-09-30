@@ -99,6 +99,15 @@ func TestMeDeleteAnonymizesAndRevokes(t *testing.T) {
 	stack := newIntegrationStack(t)
 	user := seedPasswordUser(t, context.Background(), stack.database.pool, "lifecycle-delete", "Delete-password1")
 	user = setLifecycleEmail(t, stack.database.pool, user, "delete-lifecycle@example.test")
+	issuer := "https://oidc.example.test"
+	providerSubject := "erasure-subject-" + user.ID
+	linkedUserID, err := store.CreateOIDCIdentity(context.Background(), stack.database.pool, user.ID, issuer, providerSubject)
+	if err != nil || linkedUserID != user.ID {
+		t.Fatalf("create erasure OIDC identity = %q, %v, want user %q", linkedUserID, err, user.ID)
+	}
+	if _, err := stack.database.pool.Exec(context.Background(), `UPDATE users SET external_id = $1 WHERE id = $2`, "external-"+user.ID, user.ID); err != nil {
+		t.Fatalf("set erasure external_id: %v", err)
+	}
 	pair := loginMeTestPair(t, stack, user.Username, "Delete-password1")
 	for _, kind := range []string{"service", "totp", "totp_pending", "backup_codes", "passkeys"} {
 		if _, err := store.CreateCredential(context.Background(), stack.database.pool, store.Credential{
@@ -142,6 +151,22 @@ func TestMeDeleteAnonymizesAndRevokes(t *testing.T) {
 		!strings.HasPrefix(*erased.Email, "deleted_") || !strings.HasSuffix(*erased.Email, "@deleted.invalid") ||
 		erased.DisplayName != "" || erased.Status != "disabled" {
 		t.Fatalf("erased user = %+v", erased)
+	}
+	var oidcIdentityCount int
+	if err := stack.database.pool.QueryRow(context.Background(), `
+		SELECT count(*) FROM oidc_identities WHERE user_id = $1`, user.ID).Scan(&oidcIdentityCount); err != nil {
+		t.Fatalf("count erased OIDC identities: %v", err)
+	}
+	if oidcIdentityCount != 0 {
+		t.Fatalf("erased OIDC identity count = %d, want 0", oidcIdentityCount)
+	}
+	var externalIDCleared bool
+	if err := stack.database.pool.QueryRow(context.Background(), `
+		SELECT external_id IS NULL FROM users WHERE id = $1`, user.ID).Scan(&externalIDCleared); err != nil {
+		t.Fatalf("check erased external_id: %v", err)
+	}
+	if !externalIDCleared {
+		t.Fatal("erased external_id was not cleared")
 	}
 	var credentialCount, activeSessionCount int
 	if err := stack.database.pool.QueryRow(context.Background(),

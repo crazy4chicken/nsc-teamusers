@@ -15,7 +15,7 @@ func isolateLoadEnvironment(t *testing.T) {
 		envLoginActivityRetentionDays, envAuditRetentionDays, envAuditForwardEndpoints, envAuditForwardSecret, envPwnedPasswordsEnabled,
 		envRegistrationMode, envTokenAudience, envLockoutThreshold, envLockoutDuration,
 		envAccessTokenTTL, envRefreshTokenTTL, envSessionFamilyTTL,
-		envWebAuthnRPID, envWebAuthnOrigin, envTrustedProxies, "HOST", "PORT",
+		envWebAuthnRPID, envWebAuthnOrigin, envTrustedProxies, envOIDCTrustUpstreamMFA, envOIDCMFAACRValues, "HOST", "PORT",
 	}
 	type savedValue struct {
 		name  string
@@ -226,5 +226,50 @@ func TestRedactedHidesAuditForwardingConfig(t *testing.T) {
 	}
 	if redacted.LoginActivityRetentionDays != DefaultLoginActivityRetentionDays {
 		t.Fatalf("redacted login activity retention days = %d, want %d", redacted.LoginActivityRetentionDays, DefaultLoginActivityRetentionDays)
+	}
+}
+
+func TestOIDCUpstreamMFAConfig(t *testing.T) {
+	isolateLoadEnvironment(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load default OIDC MFA config: %v", err)
+	}
+	if cfg.OIDCTrustUpstreamMFA || len(cfg.OIDCMFAACRValues) != 0 {
+		t.Fatalf("default OIDC MFA config = trust:%v ACR:%v, want disabled trust and no ACR values", cfg.OIDCTrustUpstreamMFA, cfg.OIDCMFAACRValues)
+	}
+
+	t.Setenv(envOIDCTrustUpstreamMFA, "true")
+	t.Setenv(envOIDCMFAACRValues, " urn:teamusers:mfa , urn:teamusers:step-up ")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("load configured OIDC MFA policy: %v", err)
+	}
+	if !cfg.OIDCTrustUpstreamMFA || len(cfg.OIDCMFAACRValues) != 2 || cfg.OIDCMFAACRValues[0] != "urn:teamusers:mfa" || cfg.OIDCMFAACRValues[1] != "urn:teamusers:step-up" {
+		t.Fatalf("loaded OIDC MFA config = trust:%v ACR:%v, want configured exact values", cfg.OIDCTrustUpstreamMFA, cfg.OIDCMFAACRValues)
+	}
+	redacted := cfg.Redacted()
+	if !redacted.OIDCTrustUpstreamMFA || len(redacted.OIDCMFAACRValues) != 2 || redacted.OIDCMFAACRValues[0] != cfg.OIDCMFAACRValues[0] || redacted.OIDCMFAACRValues[1] != cfg.OIDCMFAACRValues[1] {
+		t.Fatalf("redacted OIDC MFA config = trust:%v ACR:%v, want non-secret policy retained", redacted.OIDCTrustUpstreamMFA, redacted.OIDCMFAACRValues)
+	}
+
+	cfg, err = Load("--oidc-trust-upstream-mfa=false", "--oidc-mfa-acr-values=urn:teamusers:override")
+	if err != nil || cfg.OIDCTrustUpstreamMFA || len(cfg.OIDCMFAACRValues) != 1 || cfg.OIDCMFAACRValues[0] != "urn:teamusers:override" {
+		t.Fatalf("OIDC MFA flags did not override environment: trust:%v ACR:%v err=%v", cfg.OIDCTrustUpstreamMFA, cfg.OIDCMFAACRValues, err)
+	}
+}
+
+func TestLoadRejectsInvalidOIDCUpstreamMFAConfig(t *testing.T) {
+	isolateLoadEnvironment(t)
+	t.Setenv(envOIDCTrustUpstreamMFA, "maybe")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "invalid OIDC upstream MFA trust value") {
+		t.Fatalf("Load() error = %v, want invalid OIDC upstream MFA trust rejection", err)
+	}
+	if cfg, err := Load("--oidc-trust-upstream-mfa=true"); err != nil || !cfg.OIDCTrustUpstreamMFA {
+		t.Fatalf("valid OIDC MFA flag did not override invalid environment value: trust:%v err=%v", cfg.OIDCTrustUpstreamMFA, err)
+	}
+	t.Setenv(envOIDCMFAACRValues, "urn:teamusers:mfa,,urn:teamusers:step-up")
+	if _, err := Load("--oidc-trust-upstream-mfa=false"); err == nil || !strings.Contains(err.Error(), "OIDC MFA ACR values must be non-empty") {
+		t.Fatalf("Load() error = %v, want empty OIDC MFA ACR entry rejection", err)
 	}
 }

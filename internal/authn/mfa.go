@@ -214,7 +214,7 @@ func (s *Service) parsePendingToken(raw, expectedPurpose string) (pendingAuth, e
 	}
 	primaryMethod := false
 	for _, method := range amr {
-		if method == "pwd" || method == "webauthn" {
+		if method == "pwd" || method == "webauthn" || method == "ext" {
 			primaryMethod = true
 		}
 	}

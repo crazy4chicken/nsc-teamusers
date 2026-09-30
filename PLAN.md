@@ -11,13 +11,16 @@ configurable token/session TTLs, runtime signing-key rotation, audit
 retention/export/forwarding, MFA enforcement policy (incl. `amr`/
 `auth_time` claims), password history + breach screening, step-up
 authentication, lifecycle domain events, session governance (concurrency
-limits + idle timeout), user-visible login activity (`/me/activity`).
+limits + idle timeout), user-visible login activity (`/me/activity`),
+inbound OIDC federation (PKCE + state cookie + opt-in upstream-MFA trust),
+SCIM 2.0 inbound provisioning (external_id-scoped population, bearer auth),
+audited admin impersonation (≤15min non-refreshable tokens, `act`/`imp`
+claims, credential-mutation lockout).
 
-## P3 — deferred strategic (explicit non-goals, revisit on demand)
+## P3 — deferred strategic (revisit on demand)
 
-1. **Inbound federation** (OIDC/SAML/LDAP login) — original non-goal;
-   revisit when an org-level IdP adoption demands SSO login.
-2. **SCIM inbound provisioning** — CSV import is the only bulk path today.
-3. **Audited admin impersonation** — either implement with strong audit +
-   time bounds for support debugging, or record an explicit rejection in
-   `docs/`.
+1. **Self-service erasure for OIDC-only users** — `DELETE /me` requires a
+   `password` credential, so users who registered via OIDC (no local
+   password) cannot self-erase; today only admin-disable + admin erasure
+   covers them. Revisit when GDPR erasure self-service is demanded: confirm
+   via current OIDC session re-auth instead of a password.
