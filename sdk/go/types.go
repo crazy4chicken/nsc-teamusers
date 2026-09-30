@@ -124,7 +124,8 @@ type Permission struct {
 	Deny     bool
 }
 
-// Parse parses a permission key according to PLAN.md §5.
+// Parse parses a permission key per the grammar in internal/domain
+// ([!]resource:action:scope; see docs/guide/permissions.md).
 func Parse(key string) (Permission, error) {
 	if key == "" {
 		return Permission{}, fmt.Errorf("permission key is empty")
