@@ -1,6 +1,7 @@
 package passwd
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -8,20 +9,28 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
 
 const (
-	argonMemory     = 64 * 1024
-	argonIterations = 3
-	argonParallel   = 2
-	argonSaltLength = 16
-	argonKeyLength  = 32
+	argonMemory                = 64 * 1024
+	argonIterations            = 3
+	argonParallel              = 2
+	argonSaltLength            = 16
+	argonKeyLength             = 32
+	argonVerificationSlots     = 4
+	argonVerificationWaitLimit = 2 * time.Second
 )
 
-// Hash returns an Argon2id PHC string using the OWASP-recommended memory,
-// iteration, parallelism, salt, and derived-key parameters.
+var (
+	argonVerificationSlotsInUse = make(chan struct{}, argonVerificationSlots)
+	errArgonVerificationBusy    = errors.New("Argon2 verification capacity unavailable")
+)
+
+// Hash returns an Argon2id PHC string using the OWASP-recommended
+// memory, iteration, parallelism, salt, and derived-key parameters.
 func Hash(password string) (string, error) {
 	salt := make([]byte, argonSaltLength)
 	if _, err := rand.Read(salt); err != nil {
@@ -31,8 +40,31 @@ func Hash(password string) (string, error) {
 }
 
 // Verify checks an Argon2id PHC string without exposing parsing or
-// password-match details to callers.
+// password-match details to callers. Verification shares the login capacity limit.
 func Verify(encoded, password string) bool {
+	valid, err := VerifyContext(context.Background(), encoded, password)
+	return err == nil && valid
+}
+
+// VerifyContext bounds concurrent Argon2 verification across login and password-history checks.
+func VerifyContext(ctx context.Context, encoded, password string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(argonVerificationWaitLimit)
+	defer timer.Stop()
+	select {
+	case argonVerificationSlotsInUse <- struct{}{}:
+		defer func() { <-argonVerificationSlotsInUse }()
+	case <-timer.C:
+		return false, errArgonVerificationBusy
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+	return verify(encoded, password), nil
+}
+
+func verify(encoded, password string) bool {
 	salt, expected, memory, iterations, parallel, err := parsePasswordHash(encoded)
 	if err != nil {
 		return false
@@ -94,3 +126,4 @@ func NeedsRehash(encoded string) bool {
 	_, _, memory, iterations, parallel, err := parsePasswordHash(encoded)
 	return err != nil || memory != argonMemory || iterations != argonIterations || parallel != argonParallel
 }
+

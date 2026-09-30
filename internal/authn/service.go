@@ -36,7 +36,6 @@ import (
 const (
 	issuer           = "teamusers"
 	refreshTokenSize = 32
-	argonSlots       = 4
 )
 
 var (
@@ -69,7 +68,6 @@ type Service struct {
 	activeKid        string
 	limiter          *loginLimiter
 	dummyHash        string
-	argonSlots       chan struct{}
 	audit            *auditlog.Writer
 	webAuthn         *webauthn.WebAuthn
 	now              func() time.Time
@@ -110,7 +108,6 @@ func New(deps Deps) (*Service, error) {
 		activeKid:  activeKid,
 		limiter:    newLoginLimiter(),
 		dummyHash:  newDummyPasswordHash(),
-		argonSlots: make(chan struct{}, argonSlots),
 		audit:      deps.Audit,
 		webAuthn:   webAuthn,
 		now:        time.Now,
@@ -136,6 +133,8 @@ func (s *Service) Routes() chi.Router {
 	router.Post("/auth/password-reset/confirm", s.confirmPasswordReset)
 	router.Post("/auth/client-credentials", s.clientCredentials)
 	router.Post("/auth/login/mfa", s.loginMFA)
+	router.Post("/auth/login/mfa/enroll/begin", s.beginMFATOTPEnrollment)
+	router.Post("/auth/login/mfa/enroll/complete", s.completeMFATOTPEnrollment)
 	router.Post("/auth/passkey/login/begin", s.beginPasskeyLogin)
 	router.Post("/auth/passkey/login/finish", s.finishPasskeyLogin)
 	router.Post("/auth/refresh", s.refresh)
@@ -171,6 +170,7 @@ func (s *Service) Middleware() func(http.Handler) http.Handler {
 			}
 			subject := httpapi.Subject{
 				UserID: claims.Subject, TeamID: claims.Team, Kind: claims.Kind, PermVer: claims.PermVer,
+				AuthTime: claims.AuthTime, AMR: append([]string(nil), claims.AMR...),
 			}
 			next.ServeHTTP(w, r.WithContext(httpapi.ContextWithSubject(r.Context(), subject)))
 		})
@@ -227,10 +227,6 @@ type inviteAcceptRequest struct {
 	DisplayName *string `json:"display_name,omitempty"`
 }
 
-var errWeakInvitePassword = errors.New("weak invitation password")
-
-var errWeakPasswordReset = errors.New("weak password")
-
 func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	if !s.limiter.allowIP(requestIP(r), s.now()) {
 		writeRateLimited(w, r)
@@ -256,15 +252,17 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "email must be a valid address")
 		return
 	}
-	if !passwd.DefaultPolicy().Validate(request.Password) {
+	userID := store.NewID()
+	checked, err := passwd.CheckSet(r.Context(), s.q, userID, request.Password, s.cfg.PwnedPasswordsEnabled, s.now())
+	if errors.Is(err, passwd.ErrPolicyRejected) {
 		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
 		return
 	}
-	passwordHash, err := HashPassword(request.Password)
 	if err != nil {
-		writeInternal(w, r)
+		httpapi.WriteStoreProblem(w, r, err)
 		return
 	}
+
 	plaintextToken, tokenHash, err := newVerificationToken()
 	if err != nil {
 		writeInternal(w, r)
@@ -274,6 +272,7 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 	var created store.User
 	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
 		created, err = store.CreateUser(ctx, tx, store.User{
+			ID:          userID,
 			Username:    request.Username,
 			Email:       &request.Email,
 			DisplayName: request.DisplayName,
@@ -282,10 +281,13 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		if err := passwd.RecordSet(ctx, tx, checked); err != nil {
+			return err
+		}
 		if _, err := store.CreateCredential(ctx, tx, store.Credential{
 			UserID:     created.ID,
 			Kind:       "password",
-			Hash:       passwordHash,
+			Hash:       checked.Hash,
 			MustChange: false,
 		}); err != nil {
 			return err
@@ -306,6 +308,10 @@ func (s *Service) register(w http.ResponseWriter, r *http.Request) {
 		})
 	})
 	if err != nil {
+		if errors.Is(err, passwd.ErrPolicyRejected) {
+			writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
+			return
+		}
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			httpapi.WriteProblem(w, r, http.StatusUnprocessableEntity, "registration failed", "registration could not be completed")
@@ -380,42 +386,71 @@ func (s *Service) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
 		return
 	}
-	err := store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
-		userID, kind, payload, err := store.ConsumeVerificationTokenWithPayload(ctx, tx, hashVerificationToken(request.Token))
-		if errors.Is(err, store.ErrNotFound) || (err == nil && kind != "invite") {
+	now := s.now()
+	tokenHash := hashVerificationToken(request.Token)
+	token, err := store.PeekVerificationToken(r.Context(), s.q, tokenHash, now)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && token.Kind != "invite") {
+		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	var invitation struct {
+		Email string `json:"email"`
+	}
+	if err := json.Unmarshal(token.Payload, &invitation); err != nil || strings.TrimSpace(invitation.Email) == "" {
+		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	userID := token.UserID
+	user, err := store.GetUser(r.Context(), s.q, userID)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (user.Status != "invited" || user.Email == nil || !strings.EqualFold(strings.TrimSpace(*user.Email), strings.TrimSpace(invitation.Email)))) {
+		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	checked, err := passwd.CheckSet(r.Context(), s.q, userID, request.Password, s.cfg.PwnedPasswordsEnabled, now)
+	if errors.Is(err, passwd.ErrPolicyRejected) {
+		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
+		return
+	}
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		consumedUserID, kind, payload, err := store.ConsumeVerificationTokenWithPayload(ctx, tx, tokenHash)
+		if errors.Is(err, store.ErrNotFound) || (err == nil && (kind != "invite" || consumedUserID != userID)) {
 			return store.ErrNotFound
 		}
 		if err != nil {
 			return err
 		}
-		var invitation struct {
+		var consumedInvitation struct {
 			Email string `json:"email"`
 		}
-		if err := json.Unmarshal(payload, &invitation); err != nil || strings.TrimSpace(invitation.Email) == "" {
+		if err := json.Unmarshal(payload, &consumedInvitation); err != nil || !strings.EqualFold(strings.TrimSpace(consumedInvitation.Email), strings.TrimSpace(invitation.Email)) {
 			return store.ErrNotFound
 		}
 		user, err := store.GetUser(ctx, tx, userID)
 		if err != nil {
 			return err
 		}
-		if user.Status != "invited" || user.Email == nil || !strings.EqualFold(strings.TrimSpace(*user.Email), strings.TrimSpace(invitation.Email)) {
+		if user.Status != "invited" || user.Email == nil || !strings.EqualFold(strings.TrimSpace(*user.Email), strings.TrimSpace(consumedInvitation.Email)) {
 			return store.ErrNotFound
 		}
-		policy, err := httpapi.ResolvePasswordPolicy(ctx, tx, userID, s.now())
-		if err != nil {
-			return err
-		}
-		if !policy.Validate(request.Password) {
-			return errWeakInvitePassword
-		}
-		passwordHash, err := HashPassword(request.Password)
-		if err != nil {
+		if err := passwd.RecordSet(ctx, tx, checked); err != nil {
 			return err
 		}
 		if _, err := store.CreateCredential(ctx, tx, store.Credential{
 			UserID:     userID,
 			Kind:       "password",
-			Hash:       passwordHash,
+			Hash:       checked.Hash,
 			MustChange: false,
 		}); err != nil {
 			return err
@@ -433,7 +468,7 @@ func (s *Service) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
 		return
 	}
-	if errors.Is(err, errWeakInvitePassword) {
+	if errors.Is(err, passwd.ErrPolicyRejected) {
 		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
 		return
 	}
@@ -529,36 +564,46 @@ func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
 		return
 	}
-
-	var userID string
-	err := store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
-		consumedUserID, kind, err := store.ConsumeVerificationToken(ctx, tx, hashVerificationToken(token))
-		if errors.Is(err, store.ErrNotFound) || (err == nil && kind != "password_reset") {
+	now := s.now()
+	tokenHash := hashVerificationToken(token)
+	verificationToken, err := store.PeekVerificationToken(r.Context(), s.q, tokenHash, now)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && verificationToken.Kind != "password_reset") {
+		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
+		return
+	}
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	userID := verificationToken.UserID
+	checked, err := passwd.CheckSet(r.Context(), s.q, userID, request.NewPassword, s.cfg.PwnedPasswordsEnabled, now)
+	if errors.Is(err, passwd.ErrPolicyRejected) {
+		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
+		return
+	}
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		consumedUserID, kind, err := store.ConsumeVerificationToken(ctx, tx, tokenHash)
+		if errors.Is(err, store.ErrNotFound) || (err == nil && (kind != "password_reset" || consumedUserID != userID)) {
 			return store.ErrNotFound
 		}
 		if err != nil {
 			return err
 		}
-		userID = consumedUserID
-		policy, err := httpapi.ResolvePasswordPolicy(ctx, tx, userID, s.now())
-		if err != nil {
+		if err := passwd.RecordSet(ctx, tx, checked); err != nil {
 			return err
 		}
-		if !policy.Validate(request.NewPassword) {
-			return errWeakPasswordReset
-		}
-		newHash, err := HashPassword(request.NewPassword)
-		if err != nil {
-			return err
-		}
-		rotatedAt := s.now()
+		rotatedAt := now
 		credential, err := store.GetCredential(ctx, tx, userID, "password")
 		if errors.Is(err, pgx.ErrNoRows) {
 			_, err = store.CreateCredential(ctx, tx, store.Credential{
-				UserID: userID, Kind: "password", Hash: newHash, MustChange: false, RotatedAt: &rotatedAt,
+				UserID: userID, Kind: "password", Hash: checked.Hash, MustChange: false, RotatedAt: &rotatedAt,
 			})
 		} else if err == nil {
-			credential.Hash = newHash
+			credential.Hash = checked.Hash
 			credential.RotatedAt = &rotatedAt
 			credential.MustChange = false
 			_, err = store.UpdateCredential(ctx, tx, credential)
@@ -578,7 +623,7 @@ func (s *Service) confirmPasswordReset(w http.ResponseWriter, r *http.Request) {
 		writeAuthProblem(w, r, http.StatusBadRequest, "invalid_token")
 		return
 	}
-	if errors.Is(err, errWeakPasswordReset) {
+	if errors.Is(err, passwd.ErrPolicyRejected) {
 		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
 		return
 	}
@@ -610,11 +655,13 @@ type tokenResponse struct {
 }
 
 type tokenClaims struct {
-	Subject string
-	Team    string
-	Kind    string
-	PermVer int64
-	Expiry  time.Time
+	Subject  string
+	Team     string
+	Kind     string
+	PermVer  int64
+	Expiry   time.Time
+	AuthTime int64
+	AMR      []string
 }
 
 type introspectResponse struct {
@@ -627,9 +674,12 @@ type introspectResponse struct {
 }
 
 type sessionMetadata struct {
-	Kind      string `json:"kind"`
-	IP        string `json:"ip,omitempty"`
-	UserAgent string `json:"user_agent,omitempty"`
+	Kind      string   `json:"kind"`
+	IP        string   `json:"ip,omitempty"`
+	UserAgent string   `json:"user_agent,omitempty"`
+	AuthTime  int64    `json:"auth_time,omitempty"`
+	AMR       []string `json:"amr,omitempty"`
+	authTimeMissing bool     `json:"-"`
 }
 
 func (s *Service) login(w http.ResponseWriter, r *http.Request) {
@@ -699,21 +749,51 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		writePasswordChangeRequired(w, changeToken)
 		return
 	}
-	_, err := store.GetCredential(r.Context(), s.q, user.ID, "totp")
-	if err == nil {
-		mfaToken, err := s.signMFAToken(user.ID)
+	primaryAuthTime := s.now().Unix()
+	policy, err := store.ResolveMFAPolicy(r.Context(), s.q, user.ID, s.now())
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	required := policy.ID != "" && policy.Required
+	_, err = store.GetCredential(r.Context(), s.q, user.ID, "totp")
+	hasTOTP := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		writeInternal(w, r)
+		return
+	}
+	if hasTOTP {
+		mfaToken, err := s.signMFAToken(user.ID, primaryAuthTime, []string{"pwd"})
 		if err != nil {
 			writeInternal(w, r)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"mfa_required": true, "mfa_token": mfaToken})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"mfa_required": true, "mfa_token": mfaToken, "mfa_methods": []string{"otp"},
+		})
 		return
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		writeInternal(w, r)
+	if required && policy.DenyUnenrolled {
+		writeAuthProblem(w, r, http.StatusForbidden, "mfa_enrollment_denied")
 		return
 	}
-	response, err := s.completeLogin(r.Context(), user, credential, request.Password, "user", sessionMetadataFor(r, "user"))
+	if required {
+		enrollmentToken, err := s.signMFAEnrollmentToken(user.ID, primaryAuthTime, []string{"pwd"})
+		if err != nil {
+			writeInternal(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"mfa_enrollment_required": true,
+			"mfa_token":              enrollmentToken,
+			"mfa_methods":            []string{"otp"},
+		})
+		return
+	}
+	metadata := sessionMetadataFor(r, "user")
+	metadata.AuthTime = primaryAuthTime
+	metadata.AMR = []string{"pwd"}
+	response, err := s.completeLogin(r.Context(), user, credential, request.Password, "user", metadata)
 	if err != nil {
 		writeInternal(w, r)
 		return
@@ -791,33 +871,44 @@ func (s *Service) lookupCredential(ctx context.Context, username, kind string) (
 }
 
 func (s *Service) verifyPassword(ctx context.Context, encoded, password string) (bool, bool) {
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
-	select {
-	case s.argonSlots <- struct{}{}:
-		defer func() { <-s.argonSlots }()
-		return VerifyPassword(encoded, password), true
-	case <-timer.C:
-		return false, false
-	case <-ctx.Done():
-		return false, false
-	}
+	valid, err := passwd.VerifyContext(ctx, encoded, password)
+	return valid, err == nil
 }
 
 func (s *Service) completeLogin(ctx context.Context, user store.User, credential store.Credential, password, kind string, metadata sessionMetadata) (tokenResponse, error) {
 	needsRehash := passwordHashNeedsRehash(credential.Hash)
+	var rehashedHash string
+	var rotatedAt time.Time
+	var historyRetention int
+	if needsRehash {
+		var err error
+		rehashedHash, err = HashPassword(password)
+		if err != nil {
+			return tokenResponse{}, err
+		}
+		rotatedAt = s.now()
+		historyRetention, err = store.MaxConfiguredPasswordHistoryCount(ctx, s.q, user.ID, rotatedAt)
+		if err != nil {
+			return tokenResponse{}, err
+		}
+	}
 	var response tokenResponse
 	issue := func(txctx context.Context, q store.Q) error {
 		if needsRehash {
-			hash, err := HashPassword(password)
-			if err != nil {
-				return err
+			if historyRetention > 0 {
+				if err := store.LockPasswordHistory(txctx, q, user.ID); err != nil {
+					return err
+				}
 			}
-			rotatedAt := s.now()
-			credential.Hash = hash
+			credential.Hash = rehashedHash
 			credential.RotatedAt = &rotatedAt
 			if _, err := store.UpdateCredential(txctx, q, credential); err != nil {
 				return err
+			}
+			if historyRetention > 0 {
+				if err := store.RecordPasswordHistoryForCount(txctx, q, user.ID, rehashedHash, rotatedAt, historyRetention); err != nil {
+					return err
+				}
 			}
 		}
 		if err := store.ResetFailedLogins(txctx, q, user.ID); err != nil {
@@ -843,6 +934,7 @@ func (s *Service) completeLogin(ctx context.Context, user store.User, credential
 	}
 	return response, nil
 }
+
 
 func (s *Service) refresh(w http.ResponseWriter, r *http.Request) {
 	if !s.limiter.allowIP(requestIP(r), s.now()) {
@@ -985,11 +1077,21 @@ func (s *Service) issuePair(ctx context.Context, q store.Q, user store.User, kin
 	if !now.Before(familyNotAfter) {
 		return tokenResponse{}, errExpiredRefresh
 	}
+	if metadata.AuthTime == 0 {
+		if kind == "service" {
+			metadata.AuthTime = now.Unix()
+		} else if kind != "user" || !metadata.authTimeMissing {
+			return tokenResponse{}, errors.New("user authentication time is required")
+		}
+	}
+	if len(metadata.AMR) == 0 {
+		metadata.AMR = []string{"pwd"}
+	}
 	team, err := store.GetUserTeamID(ctx, q, user.ID)
 	if err != nil {
 		return tokenResponse{}, err
 	}
-	access, err := s.signAccessToken(user, team, kind)
+	access, err := s.signAccessToken(user, team, kind, metadata.AuthTime, metadata.AMR)
 	if err != nil {
 		return tokenResponse{}, err
 	}
@@ -1069,7 +1171,14 @@ func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Req
 		if err != nil {
 			return err
 		}
+		storedMetadata := sessionMetadataFrom(session)
 		metadata := sessionMetadataFor(r, sessionKind(session))
+		metadata.AuthTime = storedMetadata.AuthTime
+		metadata.authTimeMissing = metadata.AuthTime == 0
+		metadata.AMR = append([]string(nil), storedMetadata.AMR...)
+		if len(metadata.AMR) == 0 {
+			metadata.AMR = []string{"pwd"}
+		}
 		response, err = s.issuePair(txctx, tx, user, metadata.Kind, session.FamilyID, session.FamilyNotAfter, metadata)
 		if err != nil {
 			return err
@@ -1092,7 +1201,7 @@ func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Req
 	return response, err
 }
 
-func (s *Service) signAccessToken(user store.User, team, kind string) (string, error) {
+func (s *Service) signAccessToken(user store.User, team, kind string, authTime int64, amr []string) (string, error) {
 	now := s.now()
 	token := jwt.New()
 	audience := strings.TrimSpace(s.cfg.TokenAudience)
@@ -1100,14 +1209,16 @@ func (s *Service) signAccessToken(user store.User, team, kind string) (string, e
 		audience = issuer
 	}
 	claims := map[string]interface{}{
-		"iss":      issuer,
-		"aud":      audience,
-		"sub":      user.ID,
-		"kind":     kind,
-		"perm_ver": user.PermVer,
-		"iat":      now,
-		"exp":      now.Add(s.cfg.AccessTokenTTL),
-		"jti":      store.NewID(),
+		"iss":       issuer,
+		"aud":       audience,
+		"sub":       user.ID,
+		"kind":      kind,
+		"perm_ver":  user.PermVer,
+		"iat":       now,
+		"exp":       now.Add(s.cfg.AccessTokenTTL),
+		"jti":       store.NewID(),
+		"auth_time": authTime,
+		"amr":       amr,
 	}
 	if team != "" {
 		claims["team"] = team
@@ -1160,7 +1271,24 @@ func (s *Service) parseAccessToken(raw string) (tokenClaims, error) {
 	if !ok || permVer < 0 {
 		return tokenClaims{}, errors.New("invalid perm_ver claim")
 	}
-	return tokenClaims{Subject: token.Subject(), Team: team, Kind: kind, PermVer: permVer, Expiry: token.Expiration()}, nil
+	authTime := int64(0)
+	if _, present := token.Get("auth_time"); present {
+		authTime, ok = int64Claim(token, "auth_time")
+		if !ok || authTime < 0 {
+			return tokenClaims{}, errors.New("invalid auth_time claim")
+		}
+	}
+	amr := []string(nil)
+	if _, present := token.Get("amr"); present {
+		amr, ok = stringSliceClaim(token, "amr")
+		if !ok {
+			return tokenClaims{}, errors.New("invalid amr claim")
+		}
+	}
+	return tokenClaims{
+		Subject: token.Subject(), Team: team, Kind: kind, PermVer: permVer,
+		Expiry: token.Expiration(), AuthTime: authTime, AMR: amr,
+	}, nil
 }
 
 func (s *Service) publicSet() jwk.Set {
@@ -1184,6 +1312,29 @@ func stringClaim(token jwt.Token, name string) (string, bool) {
 	}
 	text, ok := value.(string)
 	return text, ok
+}
+
+func stringSliceClaim(token jwt.Token, name string) ([]string, bool) {
+	value, ok := token.Get(name)
+	if !ok {
+		return nil, false
+	}
+	switch values := value.(type) {
+	case []string:
+		return append([]string(nil), values...), true
+	case []interface{}:
+		result := make([]string, len(values))
+		for i, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			result[i] = text
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func int64Claim(token jwt.Token, name string) (int64, bool) {
@@ -1222,7 +1373,9 @@ func sessionMetadataFor(r *http.Request, kind string) sessionMetadata {
 func sessionMetadataFrom(session store.Session) sessionMetadata {
 	var metadata sessionMetadata
 	if len(session.ClientMeta) > 0 {
-		_ = json.Unmarshal(session.ClientMeta, &metadata)
+		if err := json.Unmarshal(session.ClientMeta, &metadata); err != nil {
+			return sessionMetadata{}
+		}
 	}
 	return metadata
 }

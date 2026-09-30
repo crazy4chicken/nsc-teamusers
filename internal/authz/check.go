@@ -16,6 +16,8 @@ import (
 	"teamusers/internal/store"
 )
 
+const authTimeFutureSkew = 30 * time.Second
+
 type handler struct {
 	resolver *Resolver
 	now      func() time.Time
@@ -36,9 +38,11 @@ func NewRouter(q store.Q, authMW func(http.Handler) http.Handler) chi.Router {
 }
 
 type checkRequest struct {
-	Subject    string       `json:"subject"`
-	Permission string       `json:"permission"`
-	Context    checkContext `json:"context,omitempty"`
+	Subject            string       `json:"subject"`
+	Permission         string       `json:"permission"`
+	AuthTime           int64        `json:"auth_time,omitempty"`
+	MaxAuthAgeSeconds  int64        `json:"max_auth_age_seconds,omitempty"`
+	Context            checkContext `json:"context,omitempty"`
 }
 
 type checkContext struct {
@@ -84,6 +88,11 @@ func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 	if !decodeRequest(w, r, &request) {
 		return
 	}
+	if request.MaxAuthAgeSeconds < 0 {
+		httpapi.WriteProblem(w, r, http.StatusUnprocessableEntity, "Invalid Auth Age", "max_auth_age_seconds must be non-negative")
+		return
+	}
+
 	userID := strings.TrimSpace(request.Subject)
 	if userID == "" {
 		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "subject is required")
@@ -122,9 +131,27 @@ func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(resolveErr, ErrUserDisabled) {
 		result = evaluationResult{Matched: []string{}, Reason: "user disabled"}
 	}
+	if result.Allow && request.MaxAuthAgeSeconds > 0 && !authTimeFresh(request.AuthTime, request.MaxAuthAgeSeconds, now) {
+		result = evaluationResult{Matched: []string{}, Reason: "step_up_required"}
+	}
 	writeJSON(w, http.StatusOK, checkResponse{
 		Allow: result.Allow, Matched: result.Matched, Reason: result.Reason,
 	})
+}
+
+func authTimeFresh(authTime, maxAgeSeconds int64, now time.Time) bool {
+	if authTime <= 0 || maxAgeSeconds <= 0 {
+		return false
+	}
+	age := now.Sub(time.Unix(authTime, 0))
+	if age < -authTimeFutureSkew {
+		return false
+	}
+	const maxDurationSeconds = int64((1<<63 - 1) / int64(time.Second))
+	if maxAgeSeconds > maxDurationSeconds {
+		return true
+	}
+	return age <= time.Duration(maxAgeSeconds)*time.Second
 }
 
 func (h *handler) permissions(w http.ResponseWriter, r *http.Request) {

@@ -26,6 +26,7 @@ const (
 	envAuditRetentionDays   = "TEAMUSERS_AUDIT_RETENTION_DAYS"
 	envAuditForwardEndpoints = "TEAMUSERS_AUDIT_FORWARD_ENDPOINTS"
 	envAuditForwardSecret    = "TEAMUSERS_AUDIT_FORWARD_SECRET"
+	envPwnedPasswordsEnabled = "TEAMUSERS_PWNED_PASSWORDS_ENABLED"
 	envRegistrationMode      = "TEAMUSERS_REGISTRATION_MODE"
 	envTokenAudience         = "TEAMUSERS_TOKEN_AUDIENCE"
 	envLockoutThreshold      = "TEAMUSERS_LOCKOUT_THRESHOLD"
@@ -62,6 +63,7 @@ type Config struct {
 	AuditRetentionDays      int            `json:"audit_retention_days"`
 	AuditForwardEndpoints   []string       `json:"audit_forward_endpoints,omitempty"`
 	AuditForwardSecret      string         `json:"audit_forward_secret,omitempty"`
+	PwnedPasswordsEnabled   bool           `json:"pwned_passwords_enabled"`
 	RegistrationMode      string         `json:"registration_mode"`
 	TokenAudience         string         `json:"token_audience"`
 	AccessTokenTTL        time.Duration  `json:"access_token_ttl"`
@@ -96,6 +98,7 @@ func Load(args ...string) (Config, error) {
 	auditRetentionDays := envOrDefault(envAuditRetentionDays, "0")
 	auditForwardEndpoints := envOrDefault(envAuditForwardEndpoints, "")
 	auditForwardSecret := envOrDefault(envAuditForwardSecret, "")
+	pwnedPasswordsEnabledRaw := envOrDefault(envPwnedPasswordsEnabled, "false")
 	registrationMode := envOrDefault(envRegistrationMode, "closed")
 	tokenAudience := envOrDefault(envTokenAudience, DefaultTokenAudience)
 	accessTokenTTL := envOrDefault(envAccessTokenTTL, DefaultAccessTokenTTL.String())
@@ -106,6 +109,10 @@ func Load(args ...string) (Config, error) {
 	webauthnRPID := envOrDefault(envWebAuthnRPID, DefaultWebAuthnRPID)
 	webauthnOrigin := envOrDefault(envWebAuthnOrigin, DefaultWebAuthnOrigin)
 	trustedProxies := envOrDefault(envTrustedProxies, "")
+	pwnedPasswordsEnabled, pwnedPasswordsEnabledErr := strconv.ParseBool(strings.TrimSpace(pwnedPasswordsEnabledRaw))
+	if pwnedPasswordsEnabledErr != nil {
+		pwnedPasswordsEnabled = false
+	}
 
 	fs.StringVar(&connectionString, "connection-string", connectionString, "PostgreSQL connection string")
 	fs.StringVar(&listenAddress, "listen-address", listenAddress, "HTTP listen address")
@@ -117,6 +124,7 @@ func Load(args ...string) (Config, error) {
 	fs.StringVar(&notificationEndpoints, "notification-endpoints", notificationEndpoints, "comma-separated notification service endpoint URLs")
 	fs.StringVar(&notificationSecret, "notification-secret", notificationSecret, "notification service signing secret")
 	fs.StringVar(&auditRetentionDays, "audit-retention-days", auditRetentionDays, "audit retention in whole days (0 keeps forever)")
+	fs.BoolVar(&pwnedPasswordsEnabled, "pwned-passwords-enabled", pwnedPasswordsEnabled, "enable HIBP breached-password screening")
 	fs.StringVar(&registrationMode, "registration-mode", registrationMode, "registration mode (closed, approval, open)")
 	fs.StringVar(&tokenAudience, "token-audience", tokenAudience, "JWT token audience")
 	fs.StringVar(&accessTokenTTL, "access-token-ttl", accessTokenTTL, "access token lifetime")
@@ -130,6 +138,17 @@ func Load(args ...string) (Config, error) {
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
+	}
+	if pwnedPasswordsEnabledErr != nil {
+		flagSet := false
+		fs.Visit(func(value *flag.Flag) {
+			if value.Name == "pwned-passwords-enabled" {
+				flagSet = true
+			}
+		})
+		if !flagSet {
+			return Config{}, fmt.Errorf("invalid pwned-passwords enabled value %q: %w", pwnedPasswordsEnabledRaw, pwnedPasswordsEnabledErr)
+		}
 	}
 	auditRetentionDaysValue, err := strconv.Atoi(strings.TrimSpace(auditRetentionDays))
 	if err != nil {
@@ -183,6 +202,7 @@ func Load(args ...string) (Config, error) {
 		AuditRetentionDays:    auditRetentionDaysValue,
 		AuditForwardEndpoints: parseNotificationEndpoints(auditForwardEndpoints),
 		AuditForwardSecret:    auditForwardSecret,
+		PwnedPasswordsEnabled: pwnedPasswordsEnabled,
 		RegistrationMode:      strings.ToLower(strings.TrimSpace(registrationMode)),
 		TokenAudience:         strings.TrimSpace(tokenAudience),
 		AccessTokenTTL:        accessTTL,

@@ -41,7 +41,7 @@ export interface VerifierOptions {
 export type TokenKind = "user" | "service";
 export type Audience = string | readonly string[];
 
-/** Identity claims carried by a successfully verified access token. */
+/** Identity and authentication claims carried by a successfully verified access token. */
 export class Claims {
   public readonly subject: string;
   public readonly team: string;
@@ -49,6 +49,8 @@ export class Claims {
   public readonly permVer: number;
   public readonly expiry: Date;
   public readonly audience: Audience;
+  public readonly authTime: number;
+  public readonly amr: readonly string[];
 
   public constructor(values: {
     readonly subject: string;
@@ -57,6 +59,8 @@ export class Claims {
     readonly permVer: number;
     readonly expiry: Date;
     readonly audience: Audience;
+    readonly authTime?: number;
+    readonly amr?: readonly string[];
   }) {
     this.subject = values.subject;
     this.team = values.team;
@@ -64,6 +68,8 @@ export class Claims {
     this.permVer = values.permVer;
     this.expiry = values.expiry;
     this.audience = values.audience;
+    this.authTime = values.authTime ?? 0;
+    this.amr = [...(values.amr ?? [])];
   }
 
   /** JWT `sub` spelling for callers working directly with token claims. */
@@ -74,6 +80,11 @@ export class Claims {
   /** JWT `perm_ver` spelling for callers working directly with token claims. */
   public get perm_ver(): number {
     return this.permVer;
+  }
+
+  /** JWT `auth_time` spelling; Unix timestamp in seconds. */
+  public get auth_time(): number {
+    return this.authTime;
   }
 
   /** JWT expiration as a Unix timestamp in seconds. */
@@ -383,6 +394,23 @@ function claimsFromPayload(
     team = payload.team;
   }
 
+  const authTime = payload.auth_time;
+  if (
+    authTime !== undefined &&
+    (typeof authTime !== "number" || !Number.isSafeInteger(authTime) || authTime < 0)
+  ) {
+    throw new TokenClaimsError("invalid access token auth_time");
+  }
+
+  const amrValue = payload.amr;
+  let amr: string[] = [];
+  if (amrValue !== undefined) {
+    if (!Array.isArray(amrValue) || !amrValue.every((value) => typeof value === "string")) {
+      throw new TokenClaimsError("invalid access token amr");
+    }
+    amr = amrValue;
+  }
+
   return new Claims({
     subject: payload.sub,
     team,
@@ -390,6 +418,8 @@ function claimsFromPayload(
     permVer,
     expiry: new Date(expiry * 1000),
     audience: Array.isArray(audience) ? [...audienceValues] : audienceValues[0],
+    authTime: authTime ?? 0,
+    amr,
   });
 }
 

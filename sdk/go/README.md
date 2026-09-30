@@ -64,6 +64,10 @@ controls JWKS retrieval and is independent from the expected issuer claim.
 | `PermVer` | `int64` | Non-negative permission version (`perm_ver`) |
 | `Audience` | `string` | The single verified JWT audience (`aud`) |
 | `Expiry` | `time.Time` | Verified expiration time (`exp`) |
+| `AuthTime` | `int64` | Authentication time (`auth_time`) in Unix seconds; `0` when absent |
+| `AMR` | `[]string` | Authentication methods (`amr`); nil when absent |
+
+Legacy tokens without `auth_time` or `amr` remain valid and expose the zero values above.
 
 ## Permission cache and authorization
 
@@ -131,6 +135,16 @@ protected := client.Middleware(
 		return iam.Resource{TeamID: r.PathValue("teamID")}
 	})(next),
 )
+```
+
+`RequireFresh` expects verified claims in the request context (otherwise it
+returns HTTP 401). Missing, future, or older `auth_time` returns HTTP 403 with
+reason `step_up_required`; freshness is measured against the supplied
+`time.Duration`:
+
+```go
+fresh := client.RequireFresh(10 * time.Minute)
+protected := client.Middleware(fresh(http.HandlerFunc(handleSensitive)))
 ```
 
 Use `ClaimsFromContext` inside downstream handlers to retrieve verified claims.

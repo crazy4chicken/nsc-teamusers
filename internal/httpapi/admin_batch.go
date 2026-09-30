@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 
+	"time"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -57,6 +59,11 @@ func (h *adminHandler) batchUserStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.Op = strings.ToLower(strings.TrimSpace(request.Op))
+	if request.Op == "disable" {
+		if _, hasSubject := SubjectFrom(r.Context()); hasSubject && writeFreshAuthenticationError(w, r) {
+			return
+		}
+	}
 	if request.Op != "disable" && request.Op != "enable" {
 		WriteProblem(w, r, http.StatusUnprocessableEntity, "Invalid Operation", "op must be disable or enable")
 		return
@@ -230,11 +237,6 @@ func (h *adminHandler) importUsers(w http.ResponseWriter, r *http.Request) {
 			results = append(results, result)
 			continue
 		}
-		if !passwd.DefaultPolicy().Validate(record.Password) {
-			result.Error = "weak_password"
-			results = append(results, result)
-			continue
-		}
 		key := strings.ToLower(username)
 		if _, ok := seen[key]; ok {
 			result.Error = "duplicate_username"
@@ -243,15 +245,17 @@ func (h *adminHandler) importUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		seen[key] = struct{}{}
 
-		hash, err := passwd.Hash(record.Password)
+		userID := store.NewID()
+		checked, err := passwd.CheckSet(r.Context(), h.q, userID, record.Password, h.cfg.PwnedPasswordsEnabled, time.Now().UTC())
 		if err != nil {
-			result.Error = "operation_failed"
+			result.Error = importRowError(err)
 			results = append(results, result)
 			continue
 		}
 		var created store.User
 		err = h.withTx(r.Context(), func(ctx context.Context, tx store.Tx) error {
 			user, err := store.CreateUser(ctx, tx, store.User{
+				ID:          userID,
 				Username:    username,
 				Email:       record.Email,
 				DisplayName: record.DisplayName,
@@ -261,10 +265,13 @@ func (h *adminHandler) importUsers(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			created = user
+			if err := passwd.RecordSet(ctx, tx, checked); err != nil {
+				return err
+			}
 			if _, err := store.CreateCredential(ctx, tx, store.Credential{
 				UserID:     user.ID,
 				Kind:       "password",
-				Hash:       hash,
+				Hash:       checked.Hash,
 				MustChange: true,
 			}); err != nil {
 				return err
@@ -346,6 +353,12 @@ func batchRowError(err error) string {
 }
 
 func importRowError(err error) string {
+	if errors.Is(err, passwd.ErrPasswordStateChanged) {
+		return "password_state_changed"
+	}
+	if errors.Is(err, passwd.ErrPolicyRejected) {
+		return "weak_password"
+	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return "duplicate_username"

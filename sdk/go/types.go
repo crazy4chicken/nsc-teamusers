@@ -10,7 +10,8 @@ import (
 	"github.com/expr-lang/expr/vm"
 )
 
-// Claims contains the identity claims carried by a verified access token.
+// Claims contains identity and authentication claims carried by a verified
+// access token.
 type Claims struct {
 	Subject  string
 	Team     string
@@ -18,6 +19,8 @@ type Claims struct {
 	PermVer  int64
 	Audience string
 	Expiry   time.Time
+	AuthTime int64
+	AMR      []string
 }
 
 // Subject is the subject portion of an authorization condition context.

@@ -144,6 +144,34 @@ func TestAuthzEndToEnd(t *testing.T) {
 	if !check.Allow {
 		t.Fatalf("order read check = %+v, want allow", check)
 	}
+	status, body = stack.jsonRequest(t, http.MethodPost, "/authz/check", map[string]any{
+		"subject": target.ID, "permission": "order:read:team", "auth_time": int64(0), "max_auth_age_seconds": int64(60),
+	}, serviceToken)
+	if status != http.StatusOK {
+		t.Fatalf("stale allowed permission check status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	decodeResponse(t, body, &check)
+	if check.Allow || check.Reason != "step_up_required" {
+		t.Fatalf("stale allowed permission check = %+v, want step_up_required", check)
+	}
+
+	status, body = stack.jsonRequest(t, http.MethodPost, "/authz/check", map[string]any{
+		"subject": target.ID, "permission": "order:delete:any", "auth_time": int64(0), "max_auth_age_seconds": int64(60),
+	}, serviceToken)
+	if status != http.StatusOK {
+		t.Fatalf("stale ungranted permission check status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	decodeResponse(t, body, &check)
+	if check.Allow || check.Reason != "no matching grant" {
+		t.Fatalf("stale ungranted permission check = %+v, want no matching grant", check)
+	}
+
+	status, body = stack.jsonRequest(t, http.MethodPost, "/authz/check", map[string]any{
+		"subject": target.ID, "permission": "order:read:team", "max_auth_age_seconds": int64(-1),
+	}, serviceToken)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("negative max auth age status = %d, want %d: %s", status, http.StatusUnprocessableEntity, body)
+	}
 
 	status, body = stack.jsonRequest(t, http.MethodPost, "/authz/check", map[string]any{
 		"subject":    target.ID,

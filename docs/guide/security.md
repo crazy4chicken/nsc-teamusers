@@ -59,18 +59,60 @@ the same out-of-band controls as other production secrets.
 An admin can remove their own last `iam:*:any` grant; rerun
 `teamusers bootstrap-admin --username <name>` to restore the role and binding.
 
+## Fresh authentication for administrative mutations
+
+Sensitive administrative operations require a user access token whose
+`auth_time` is no more than ten minutes old. A stale timestamp returns
+`403 step_up_required`. This guard applies to:
+
+- `DELETE /users/{id}`, `POST /users/{id}/disable`,
+  `POST /users/{id}/approve`, `POST /users/{id}/credentials`,
+  `DELETE /users/{id}/totp`, `DELETE /users/{id}/sessions`, and
+  `DELETE /users/{id}/sessions/{sid}`.
+- `PUT /roles/{id}/permissions`, `POST /bindings`,
+  `DELETE /bindings/{id}`, `POST /policies/mfa`,
+  `PATCH /policies/mfa/{id}`, `DELETE /policies/mfa/{id}`, and
+  `POST /keys/rotate`.
+- `PATCH /users/{id}` when the patch includes a non-null `email` value or
+  sets `status` to `disabled`; username, display-name, and active-status-only
+  patches do not require fresh authentication.
+- `POST /users/batch` when `op` is `disable`; `enable` does not require
+  fresh authentication.
+- `PUT /groups/{id}/members` and `POST /groups/{id}/members/batch`, which can
+  grant group-derived privileges.
+- `POST /policies/password`, `PATCH /policies/password/{id}`, and
+  `DELETE /policies/password/{id}`, because these operations can weaken
+  password requirements.
+
+`POST /users`, `POST /users/import`, and `DELETE /roles/{id}` remain guarded by
+their normal administrative permissions but do not require fresh
+authentication. Other admin operations continue to use their existing
+permission checks.
+
 ## Password policies
 
 Password requirements are DB-backed rules stored in PostgreSQL and managed
 through the administrative password-policy API. Each rule may set
 `min_length` (from 1 through 1024 Unicode runes), `require_letter`,
-`require_upper`, `require_lower`, `require_digit`, and `require_symbol`.
-Nullable or omitted fields are unset rather than false, so they can fall
-through during resolution. Password policies target the generic subject model;
-see [Subject targeting](/guide/subjects) for the `(subject_kind, subject_id)`
-model and its membership and role-binding traversal.
+`require_upper`, `require_lower`, `require_digit`, `require_symbol`,
+`history_count` (0 through 24), and `breach_check`. Nullable or omitted fields
+are unset rather than false, so they fall through during resolution. Password
+policies target the generic subject model; see [Subject targeting](/guide/subjects)
+for the `(subject_kind, subject_id)` model and its membership and role-binding
+traversal.
 
-A rule is a JSON record whose requirement fields are all optional. This rule
+`history_count` defaults to 0 and prevents reuse of the most recently set
+passwords. The service stores only Argon2id hashes in `password_history`, keeps
+the maximum count configured by matching policies (capped at 24), and prunes
+older entries as passwords are set. `breach_check` defaults to false. When a
+matching rule enables it and `TEAMUSERS_PWNED_PASSWORDS_ENABLED=true` (or
+`--pwned-passwords-enabled`) is set, the service checks the password against
+the HIBP range API using only the first five hexadecimal characters of its
+SHA-1 digest; the plaintext and full digest are never sent. Requests time out
+after five seconds. HIBP errors fail open and emit a WARN log, so screening is
+availability-biased and external calls remain opt-in.
+
+A rule is a JSON record whose policy fields are all optional. This rule
 targets the holders of one role and asks for twenty runes with every
 character class:
 
@@ -84,7 +126,9 @@ character class:
   "require_upper": true,
   "require_lower": true,
   "require_digit": true,
-  "require_symbol": true
+  "require_symbol": true,
+  "history_count": 5,
+  "breach_check": true
 }
 ```
 
@@ -92,18 +136,17 @@ character class:
 curl --fail-with-body -sS -X POST "$IAM_BASE_URL/policies/password" \
   -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data '{"name":"platform administrators","priority":100,"subject_kind":"role","subject_id":"01JROLE…","min_length":20,"require_upper":true,"require_lower":true,"require_digit":true,"require_symbol":true}'
+  --data '{"name":"platform administrators","priority":100,"subject_kind":"role","subject_id":"01JROLE…","min_length":20,"require_upper":true,"require_lower":true,"require_digit":true,"require_symbol":true,"history_count":5,"breach_check":true}'
 ```
 
-`PATCH /policies/password/{id}` changes individual fields; sending a
-requirement field as `null` unsets it so lower-priority rules and the default
-apply again:
+`PATCH /policies/password/{id}` changes individual fields; sending a policy
+field as `null` unsets it so lower-priority rules and the default apply again:
 
 ```sh
 curl --fail-with-body -sS -X PATCH "$IAM_BASE_URL/policies/password/01JPOLICY…" \
   -H "Authorization: Bearer $ADMIN_ACCESS_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data '{"require_symbol":null,"priority":200}'
+  --data '{"require_symbol":null,"history_count":null,"breach_check":null,"priority":200}'
 ```
 
 When multiple rules match a user, rules are merged independently per field.
@@ -118,13 +161,14 @@ For example, when these three rules all match one user:
 | Rule target | Priority | Fields set |
 | --- | --- | --- |
 | Team `engineering` | 10 | `min_length: 16` |
-| User `alice` | 50 | `min_length: 24`, `require_digit: false` |
-| Role `iam-admin` | 100 | `require_symbol: true` |
+| User `alice` | 50 | `min_length: 24`, `require_digit: false`, `history_count: 5` |
+| Role `iam-admin` | 100 | `require_symbol: true`, `breach_check: true` |
 
 the resolved policy uses `min_length: 24` (the user rule outranks the team
 rule), `require_symbol: true` (only the role rule sets it),
-`require_digit: false` (explicitly relaxed by the user rule), and
-`require_letter: true` (from the built-in default, because no rule sets it).
+`require_digit: false` (explicitly relaxed by the user rule),
+`history_count: 5`, `breach_check: true`, and `require_letter: true` (from the
+built-in default, because no rule sets it).
 
 Adding or tightening a policy does not revalidate or invalidate an existing
 password. The new requirements are enforced the next time that user sets or
@@ -154,7 +198,7 @@ curl -fsS "$IAM_BASE_URL/me/password-policy" \
 ```
 
 ```json
-{"min_length":24,"require_letter":true,"require_upper":false,"require_lower":false,"require_digit":false,"require_symbol":true}
+{"min_length":24,"require_letter":true,"require_upper":false,"require_lower":false,"require_digit":false,"require_symbol":true,"history_count":5,"breach_check":false}
 ```
 
 Both endpoints return only the merged policy fields, not the raw rules. The

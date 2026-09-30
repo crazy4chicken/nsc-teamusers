@@ -69,7 +69,7 @@ InvalidClaimsError = TokenClaimsError
 
 @dataclass(frozen=True, slots=True)
 class Claims:
-    """Identity claims carried by a successfully verified access token."""
+    """Identity and authentication claims carried by a verified access token."""
 
     subject: str
     team: str
@@ -77,6 +77,8 @@ class Claims:
     perm_ver: int
     expiry: datetime
     audience: Audience
+    auth_time: int = 0
+    amr: tuple[str, ...] = ()
 
     @property
     def sub(self) -> str:
@@ -89,6 +91,12 @@ class Claims:
         """Camel-case spelling of ``perm_ver`` for cross-SDK callers."""
 
         return self.perm_ver
+
+    @property
+    def authTime(self) -> int:
+        """Camel-case spelling of ``auth_time`` for cross-SDK callers."""
+
+        return self.auth_time
 
     @property
     def exp(self) -> float:
@@ -396,6 +404,28 @@ def _claims_from_payload(
     if not isinstance(team, str):
         raise TokenClaimsError("invalid access token team")
 
+    if "auth_time" in payload:
+        auth_time_raw = payload["auth_time"]
+        if (
+            isinstance(auth_time_raw, bool)
+            or not isinstance(auth_time_raw, (int, float))
+            or not math.isfinite(float(auth_time_raw))
+            or int(auth_time_raw) != auth_time_raw
+            or auth_time_raw < 0
+        ):
+            raise TokenClaimsError("invalid access token auth_time")
+        auth_time = int(auth_time_raw)
+    else:
+        auth_time = 0
+
+    if "amr" in payload:
+        amr_raw = payload["amr"]
+        if not isinstance(amr_raw, list) or any(not isinstance(value, str) for value in amr_raw):
+            raise TokenClaimsError("invalid access token amr")
+        amr = tuple(amr_raw)
+    else:
+        amr = ()
+
     audience: Audience = (
         tuple(audience_values) if isinstance(audience_raw, list) else audience_values[0]
     )
@@ -406,6 +436,8 @@ def _claims_from_payload(
         perm_ver=int(perm_ver_raw),
         expiry=expiry,
         audience=audience,
+        auth_time=auth_time,
+        amr=amr,
     )
 
 

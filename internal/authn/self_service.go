@@ -16,6 +16,7 @@ import (
 	auditlog "teamusers/internal/audit"
 	"teamusers/internal/authz"
 	"teamusers/internal/httpapi"
+	"teamusers/internal/passwd"
 	"teamusers/internal/store"
 )
 
@@ -488,23 +489,22 @@ func (s *Service) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeAuthProblem(w, r, http.StatusUnauthorized, "invalid_credentials")
 		return
 	}
-	policy, err := httpapi.ResolvePasswordPolicy(r.Context(), s.q, subject.UserID, s.now())
+	now := s.now()
+	checked, err := passwd.CheckSet(r.Context(), s.q, subject.UserID, request.NewPassword, s.cfg.PwnedPasswordsEnabled, now)
+	if errors.Is(err, passwd.ErrPolicyRejected) {
+		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
+		return
+	}
 	if err != nil {
 		httpapi.WriteStoreProblem(w, r, err)
 		return
 	}
-	if !policy.Validate(request.NewPassword) {
-		writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
-		return
-	}
-	newHash, err := HashPassword(request.NewPassword)
-	if err != nil {
-		writeInternal(w, r)
-		return
-	}
-	rotatedAt := s.now()
+	rotatedAt := now
 	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
-		credential.Hash = newHash
+		if err := passwd.RecordSet(ctx, tx, checked); err != nil {
+			return err
+		}
+		credential.Hash = checked.Hash
 		credential.RotatedAt = &rotatedAt
 		credential.MustChange = false
 		if _, err := store.UpdateCredential(ctx, tx, credential); err != nil {
@@ -518,6 +518,14 @@ func (s *Service) changePassword(w http.ResponseWriter, r *http.Request) {
 		})
 	})
 	if err != nil {
+		if errors.Is(err, passwd.ErrPasswordStateChanged) {
+			httpapi.WriteProblem(w, r, http.StatusConflict, "Password changed", "password state changed during check; retry")
+			return
+		}
+		if errors.Is(err, passwd.ErrPolicyRejected) {
+			writeAuthProblem(w, r, http.StatusUnprocessableEntity, "weak_password")
+			return
+		}
 		httpapi.WriteStoreProblem(w, r, err)
 		return
 	}

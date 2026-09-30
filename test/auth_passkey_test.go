@@ -11,9 +11,12 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
+
+	"teamusers/internal/store"
 )
 
 func TestPasskeyHTTPPaths(t *testing.T) {
@@ -96,7 +99,134 @@ func TestPasskeyCeremonyWithSoftAuthenticator(t *testing.T) {
 	if _, err := rand.Read(credentialID); err != nil {
 		t.Fatalf("generate soft authenticator credential id: %v", err)
 	}
+	registerSoftPasskey(t, stack, accessToken, privateKey, credentialID)
+	status, body := stack.jsonRequest(t, http.MethodGet, "/me/passkeys", nil, accessToken)
+	if status != http.StatusOK {
+		t.Fatalf("passkey list status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	var passkeys []struct {
+		ID string `json:"id"`
+	}
+	decodeResponse(t, body, &passkeys)
+	if len(passkeys) != 1 || passkeys[0].ID != base64.RawURLEncoding.EncodeToString(credentialID) {
+		t.Fatalf("passkey list = %+v, want credential %s", passkeys, base64.RawURLEncoding.EncodeToString(credentialID))
+	}
 
+	status, body = loginWithSoftPasskey(t, stack, user.Username, user.ID, credentialID, privateKey, false)
+	if status != http.StatusOK {
+		t.Fatalf("login finish status = %d, want %d: %s", status, http.StatusOK, body)
+	}
+	var pair tokenPair
+	decodeResponse(t, body, &pair)
+	assertTokenPair(t, pair)
+}
+
+func TestPasskeyLoginMFACombinations(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ctx := context.Background()
+	cases := []struct {
+		name           string
+		username       string
+		userVerified   bool
+		hasTOTP        bool
+		requiredPolicy bool
+		optionalPolicy bool
+		denyUnenrolled bool
+		want           string
+	}{
+		{name: "UV no TOTP no policy", username: "passkey-mfa-uv-no-totp-no-policy", userVerified: true, want: "tokens"},
+		{name: "UV TOTP no policy", username: "passkey-mfa-uv-totp-no-policy", userVerified: true, hasTOTP: true, want: "tokens"},
+		{name: "UV no TOTP required policy", username: "passkey-mfa-uv-no-totp-policy", userVerified: true, requiredPolicy: true, want: "tokens"},
+		{name: "UV TOTP required policy", username: "passkey-mfa-uv-totp-policy", userVerified: true, hasTOTP: true, requiredPolicy: true, want: "tokens"},
+		{name: "non-UV no TOTP no policy", username: "passkey-mfa-nouv-no-totp-no-policy", want: "tokens"},
+		{name: "non-UV no TOTP optional policy", username: "passkey-mfa-nouv-no-totp-optional-policy", optionalPolicy: true, want: "tokens"},
+		{name: "non-UV TOTP no policy", username: "passkey-mfa-nouv-totp-no-policy", hasTOTP: true, want: "mfa"},
+		{name: "non-UV no TOTP required policy", username: "passkey-mfa-nouv-no-totp-policy", requiredPolicy: true, want: "enrollment"},
+		{name: "non-UV TOTP required policy", username: "passkey-mfa-nouv-totp-policy", hasTOTP: true, requiredPolicy: true, want: "mfa"},
+		{name: "non-UV denied required enrollment", username: "passkey-mfa-nouv-denied-enrollment", requiredPolicy: true, denyUnenrolled: true, want: "denied"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			user := seedPasswordUser(t, ctx, stack.database.pool, testCase.username, "passkey-mfa-password")
+			accessToken := loginUser(t, stack, user.Username, "passkey-mfa-password")
+			privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatalf("generate soft authenticator key: %v", err)
+			}
+			credentialID := make([]byte, 32)
+			if _, err := rand.Read(credentialID); err != nil {
+				t.Fatalf("generate soft authenticator credential id: %v", err)
+			}
+			registerSoftPasskey(t, stack, accessToken, privateKey, credentialID)
+
+			if testCase.hasTOTP {
+				if _, err := store.CreateCredential(ctx, stack.database.pool, store.Credential{
+					UserID: user.ID, Kind: "totp", Hash: "passkey-mfa-totp-seed",
+				}); err != nil {
+					t.Fatalf("create TOTP credential: %v", err)
+				}
+			}
+			policyID := ""
+			if testCase.requiredPolicy || testCase.optionalPolicy {
+				policy, err := store.CreateMFAPolicy(ctx, stack.database.pool, store.MFAPolicy{
+					Name: "passkey MFA " + testCase.username, Priority: 100, SubjectKind: "default",
+					Required: testCase.requiredPolicy, DenyUnenrolled: testCase.denyUnenrolled,
+				})
+				if err != nil {
+					t.Fatalf("create MFA policy: %v", err)
+				}
+				policyID = policy.ID
+			}
+
+			status, body := loginWithSoftPasskey(t, stack, user.Username, user.ID, credentialID, privateKey, testCase.userVerified)
+			if policyID != "" {
+				if err := store.DeleteMFAPolicy(ctx, stack.database.pool, policyID); err != nil {
+					t.Fatalf("delete MFA policy: %v", err)
+				}
+			}
+			switch testCase.want {
+			case "tokens":
+				if status != http.StatusOK {
+					t.Fatalf("login finish status = %d, want %d: %s", status, http.StatusOK, body)
+				}
+				var pair tokenPair
+				decodeResponse(t, body, &pair)
+				assertTokenPair(t, pair)
+			case "mfa":
+				var challenge struct {
+					MFARequired bool   `json:"mfa_required"`
+					MFAToken    string `json:"mfa_token"`
+				}
+				if status != http.StatusOK {
+					t.Fatalf("login finish status = %d, want %d: %s", status, http.StatusOK, body)
+				}
+				decodeResponse(t, body, &challenge)
+				if !challenge.MFARequired || challenge.MFAToken == "" {
+					t.Fatalf("login response = %s, want TOTP challenge", body)
+				}
+			case "enrollment":
+				var enrollment struct {
+					Required bool   `json:"mfa_enrollment_required"`
+					MFAToken string `json:"mfa_token"`
+				}
+				if status != http.StatusOK {
+					t.Fatalf("login finish status = %d, want %d: %s", status, http.StatusOK, body)
+				}
+				decodeResponse(t, body, &enrollment)
+				if !enrollment.Required || enrollment.MFAToken == "" {
+					t.Fatalf("login response = %s, want restricted enrollment challenge", body)
+				}
+			case "denied":
+				if status != http.StatusForbidden || !strings.Contains(string(body), "mfa_enrollment_denied") {
+					t.Fatalf("login finish = %d %s, want mfa_enrollment_denied 403", status, body)
+				}
+			}
+		})
+	}
+}
+
+func registerSoftPasskey(t *testing.T, stack *integrationStack, accessToken string, privateKey *ecdsa.PrivateKey, credentialID []byte) {
+	t.Helper()
 	status, body := stack.jsonRequest(t, http.MethodPost, "/me/passkeys/register/begin", map[string]any{}, accessToken)
 	if status != http.StatusOK {
 		t.Fatalf("register begin status = %d, want %d: %s", status, http.StatusOK, body)
@@ -133,21 +263,12 @@ func TestPasskeyCeremonyWithSoftAuthenticator(t *testing.T) {
 	if status != http.StatusNoContent {
 		t.Fatalf("register finish status = %d, want %d: %s", status, http.StatusNoContent, body)
 	}
+}
 
-	status, body = stack.jsonRequest(t, http.MethodGet, "/me/passkeys", nil, accessToken)
-	if status != http.StatusOK {
-		t.Fatalf("passkey list status = %d, want %d: %s", status, http.StatusOK, body)
-	}
-	var passkeys []struct {
-		ID string `json:"id"`
-	}
-	decodeResponse(t, body, &passkeys)
-	if len(passkeys) != 1 || passkeys[0].ID != base64.RawURLEncoding.EncodeToString(credentialID) {
-		t.Fatalf("passkey list = %+v, want credential %s", passkeys, base64.RawURLEncoding.EncodeToString(credentialID))
-	}
-
-	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/passkey/login/begin", map[string]string{
-		"username": user.Username,
+func loginWithSoftPasskey(t *testing.T, stack *integrationStack, username, userID string, credentialID []byte, privateKey *ecdsa.PrivateKey, userVerified bool) (int, []byte) {
+	t.Helper()
+	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/passkey/login/begin", map[string]string{
+		"username": username,
 	}, "")
 	if status != http.StatusOK {
 		t.Fatalf("login begin status = %d, want %d: %s", status, http.StatusOK, body)
@@ -162,7 +283,7 @@ func TestPasskeyCeremonyWithSoftAuthenticator(t *testing.T) {
 		t.Fatal("login begin returned an empty challenge")
 	}
 	loginClientData := clientDataJSON("webauthn.get", assertion.PublicKey.Challenge, "http://localhost")
-	loginAuthenticatorData := assertionAuthenticatorData("localhost", 1)
+	loginAuthenticatorData := assertionAuthenticatorData("localhost", 1, userVerified)
 	clientDataHash := sha256.Sum256(loginClientData)
 	signedData := append(append([]byte(nil), loginAuthenticatorData...), clientDataHash[:]...)
 	assertionHash := sha256.Sum256(signedData)
@@ -178,16 +299,10 @@ func TestPasskeyCeremonyWithSoftAuthenticator(t *testing.T) {
 			"clientDataJSON":    base64.RawURLEncoding.EncodeToString(loginClientData),
 			"authenticatorData": base64.RawURLEncoding.EncodeToString(loginAuthenticatorData),
 			"signature":         base64.RawURLEncoding.EncodeToString(signature),
-			"userHandle":        base64.RawURLEncoding.EncodeToString([]byte(user.ID)),
+			"userHandle":        base64.RawURLEncoding.EncodeToString([]byte(userID)),
 		},
 	}
-	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/passkey/login/finish", loginResponse, "")
-	if status != http.StatusOK {
-		t.Fatalf("login finish status = %d, want %d: %s", status, http.StatusOK, body)
-	}
-	var pair tokenPair
-	decodeResponse(t, body, &pair)
-	assertTokenPair(t, pair)
+	return stack.jsonRequest(t, http.MethodPost, "/auth/passkey/login/finish", loginResponse, "")
 }
 
 func clientDataJSON(kind, challenge, origin string) []byte {
@@ -217,9 +332,13 @@ func registrationAuthenticatorData(rpid string, credentialID []byte, publicKey e
 	return append(data, coseKey...)
 }
 
-func assertionAuthenticatorData(rpid string, counter uint32) []byte {
+func assertionAuthenticatorData(rpid string, counter uint32, userVerified bool) []byte {
 	rpIDHash := sha256.Sum256([]byte(rpid))
-	return append(rpIDHash[:], 0x01, byte(counter>>24), byte(counter>>16), byte(counter>>8), byte(counter))
+	flags := byte(0x01)
+	if userVerified {
+		flags |= 0x04
+	}
+	return append(rpIDHash[:], flags, byte(counter>>24), byte(counter>>16), byte(counter>>8), byte(counter))
 }
 
 func paddedBytes(value *big.Int, size int) []byte {

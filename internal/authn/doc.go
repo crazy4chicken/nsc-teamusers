@@ -14,6 +14,17 @@ import (
 	"teamusers/internal/store"
 )
 
+
+type loginResponse struct {
+	AccessToken          string   `json:"access_token,omitempty"`
+	RefreshToken         string   `json:"refresh_token,omitempty"`
+	TokenType            string   `json:"token_type,omitempty"`
+	ExpiresIn            int64    `json:"expires_in,omitempty"`
+	MFARequired          bool     `json:"mfa_required,omitempty"`
+	MFAEnrollmentRequired bool    `json:"mfa_enrollment_required,omitempty"`
+	MFAToken             string   `json:"mfa_token,omitempty"`
+	MFAMethods           []string `json:"mfa_methods,omitempty"`
+}
 // DocOperations is the authentication route contract used by the OpenAPI
 // generator.
 var DocOperations = []apidocs.Operation{
@@ -84,24 +95,24 @@ var DocOperations = []apidocs.Operation{
 		Path:        "/auth/login",
 		Tag:         "Authentication",
 		Summary:     "Sign in with a password",
-		Description: "Use when an end user needs an access and refresh token pair. Administrator-provisioned passwords instead return 403 password_change_required with a ten-minute change_token accepted only by POST /me/password; that endpoint still verifies the current password. A valid account with TOTP enabled receives an MFA challenge instead; clients then call POST /auth/login/mfa.",
+		Description: "Use when an end user needs an access and refresh token pair. Administrator-provisioned passwords instead return 403 password_change_required with a ten-minute change_token accepted only by POST /me/password; that endpoint still verifies the current password. Accounts with TOTP enabled or an effective required-MFA policy receive an MFA challenge or a restricted MFA-enrollment token when TOTP must be enrolled. Access tokens include additive amr and auth_time claims, with auth_time recording the primary authentication time.",
 		Request:     loginRequest{},
 		RequestExample: map[string]any{
 			"username": "alice",
 			"password": "AtLeastTwelve1",
 		},
-		Response: tokenResponse{},
+		Response: loginResponse{},
 		ResponseExample: map[string]any{
-			"access_token":  "eyJhbGciOiJFZERTQSIs...",
-			"refresh_token": "refresh-token-opaque",
-			"token_type":    "Bearer",
-			"expires_in":    600,
+			"mfa_required": true,
+			"mfa_token":    "eyJhbGciOiJFZERTQSIs...",
+			"mfa_methods":  []string{"otp"},
 		},
 		Errors: []apidocs.ErrorDoc{
 			{Status: 400, Code: "request body must be valid JSON", Title: "Invalid Request"},
 			{Status: 401, Code: "authentication failed", Title: "Unauthorized"},
 			{Status: 403, Code: "account_pending", Title: "account_pending"},
 			{Status: 403, Code: "password_change_required", Title: "password_change_required"},
+			{Status: 403, Code: "mfa_enrollment_denied", Title: "mfa_enrollment_denied"},
 			{Status: 423, Code: "account_locked", Title: "account_locked"},
 			{Status: 429, Code: "authentication temporarily busy", Title: "Too Many Requests"},
 			{Status: 500, Code: "authentication service unavailable", Title: "Internal Server Error"},
@@ -112,7 +123,7 @@ var DocOperations = []apidocs.Operation{
 		Path:        "/auth/login/mfa",
 		Tag:         "Authentication",
 		Summary:     "Complete MFA login",
-		Description: "Use after password login returns mfa_required. Submit the short-lived MFA token and either a current TOTP code or one unused backup code; success returns the normal token pair.",
+		Description: "Use after password or passkey login returns mfa_required. Submit the short-lived MFA token and either a current TOTP code or one unused backup code; success returns the normal token pair with the original primary-auth auth_time and additive amr claims.",
 		Request:     mfaLoginRequest{},
 		RequestExample: map[string]any{
 			"mfa_token": "eyJhbGciOiJFZERTQSIs...",
@@ -132,6 +143,30 @@ var DocOperations = []apidocs.Operation{
 			{Status: 429, Code: "authentication temporarily busy", Title: "Too Many Requests"},
 			{Status: 500, Code: "authentication service unavailable", Title: "Internal Server Error"},
 		},
+	},
+	{
+		Method:          "POST",
+		Path:            "/auth/login/mfa/enroll/begin",
+		Tag:             "Authentication",
+		Summary:         "Begin required MFA enrollment",
+		Description:     "Use with the restricted mfa_token returned as mfa_enrollment_required. It authorizes only this enrollment flow and returns a pending TOTP secret; it is not an access token.",
+		Request:         mfaEnrollmentRequest{},
+		RequestExample:  map[string]any{"mfa_token": "eyJhbGciOiJFZERTQSIs..."},
+		Response:        totpResponse{},
+		ResponseExample: map[string]any{"secret": "JBSWY3DPEHPK3PXP", "otpauth_url": "otpauth://totp/teamusers:alice?secret=JBSWY3DPEHPK3PXP&issuer=teamusers"},
+		Errors:          []apidocs.ErrorDoc{{Status: 400, Code: "request body must be valid JSON", Title: "Invalid Request"}, {Status: 401, Code: "authentication failed", Title: "Unauthorized"}, {Status: 409, Code: "totp_already_enabled", Title: "totp_already_enabled"}, {Status: 423, Code: "account_locked", Title: "account_locked"}, {Status: 429, Code: "authentication temporarily busy", Title: "Too Many Requests"}, {Status: 500, Code: "authentication service unavailable", Title: "Internal Server Error"}},
+	},
+	{
+		Method:          "POST",
+		Path:            "/auth/login/mfa/enroll/complete",
+		Tag:             "Authentication",
+		Summary:         "Complete required MFA enrollment",
+		Description:     "Use after beginning TOTP enrollment with the same restricted mfa_token. A valid code activates TOTP and returns backup codes with a full token pair whose amr includes otp and whose auth_time remains the primary authentication time.",
+		Request:         mfaEnrollmentRequest{},
+		RequestExample:  map[string]any{"mfa_token": "eyJhbGciOiJFZERTQSIs...", "code": "123456"},
+		Response:        mfaEnrollmentCompleteResponse{},
+		ResponseExample: map[string]any{"access_token": "eyJhbGciOiJFZERTQSIs...", "refresh_token": "refresh-token-opaque", "token_type": "Bearer", "expires_in": 600, "backup_codes": []string{"abcd1234efgh5678"}},
+		Errors:          []apidocs.ErrorDoc{{Status: 400, Code: "request body must be valid JSON", Title: "Invalid Request"}, {Status: 401, Code: "authentication failed", Title: "Unauthorized"}, {Status: 409, Code: "totp_already_enabled", Title: "totp_already_enabled"}, {Status: 423, Code: "account_locked", Title: "account_locked"}, {Status: 429, Code: "authentication temporarily busy", Title: "Too Many Requests"}, {Status: 500, Code: "authentication service unavailable", Title: "Internal Server Error"}},
 	},
 	{
 		Method:      "POST",
@@ -309,7 +344,7 @@ var DocOperations = []apidocs.Operation{
 		Path:        "/auth/passkey/login/finish",
 		Tag:         "Authentication",
 		Summary:     "Finish passkey login",
-		Description: "Use with the browser's PublicKeyCredential assertion response from the begin operation. A valid assertion issues the normal user token pair; failed assertions contribute to account lockout.",
+		Description: "Use with the browser's PublicKeyCredential assertion response from the begin operation. A userVerified assertion satisfies a required MFA policy and returns a full token pair. Without user verification, enrolled TOTP always triggers an MFA challenge; when TOTP is not enrolled, a required MFA policy yields a restricted enrollment token or, when deny_unenrolled is set, a 403 mfa_enrollment_denied. Without either TOTP or a required policy, login returns a full token pair. Successful access tokens include amr and auth_time; failed assertions contribute to account lockout.",
 		Request:     map[string]any{},
 		RequestExample: map[string]any{
 			"id":    "base64url-credential-id",
@@ -321,16 +356,16 @@ var DocOperations = []apidocs.Operation{
 				"signature":         "base64url-signature",
 			},
 		},
-		Response: tokenResponse{},
+		Response: loginResponse{},
 		ResponseExample: map[string]any{
-			"access_token":  "eyJhbGciOiJFZERTQSIs...",
-			"refresh_token": "refresh-token-opaque",
-			"token_type":    "Bearer",
-			"expires_in":    600,
+			"mfa_required": true,
+			"mfa_token":    "eyJhbGciOiJFZERTQSIs...",
+			"mfa_methods":  []string{"otp"},
 		},
 		Errors: []apidocs.ErrorDoc{
 			{Status: 400, Code: "invalid WebAuthn response", Title: "Invalid Request"},
 			{Status: 401, Code: "authentication failed", Title: "Unauthorized"},
+			{Status: 403, Code: "mfa_enrollment_denied", Title: "mfa_enrollment_denied"},
 			{Status: 423, Code: "account_locked", Title: "account_locked"},
 			{Status: 429, Code: "authentication temporarily busy", Title: "Too Many Requests"},
 			{Status: 500, Code: "authentication service unavailable", Title: "Internal Server Error"},

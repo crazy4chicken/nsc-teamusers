@@ -12,7 +12,7 @@ func isolateLoadEnvironment(t *testing.T) {
 	names := []string{
 		envConnectionString, envListenAddress, envListenPort, envNodeID, envLogLevel,
 		envKeyDir, envNATSURL, envNotificationEndpoints, envNotificationSecret,
-		envAuditRetentionDays, envAuditForwardEndpoints, envAuditForwardSecret,
+		envAuditRetentionDays, envAuditForwardEndpoints, envAuditForwardSecret, envPwnedPasswordsEnabled,
 		envRegistrationMode, envTokenAudience, envLockoutThreshold, envLockoutDuration,
 		envAccessTokenTTL, envRefreshTokenTTL, envSessionFamilyTTL,
 		envWebAuthnRPID, envWebAuthnOrigin, envTrustedProxies, "HOST", "PORT",
@@ -133,6 +133,46 @@ func TestAuditRetentionDaysDefaultAndFlagOverride(t *testing.T) {
 	}
 	if cfg.AuditRetentionDays != 30 {
 		t.Fatalf("audit retention days = %d, want 30", cfg.AuditRetentionDays)
+	}
+}
+
+func TestPwnedPasswordsEnabledDefaultEnvAndFlag(t *testing.T) {
+	isolateLoadEnvironment(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load default HIBP setting: %v", err)
+	}
+	if cfg.PwnedPasswordsEnabled {
+		t.Fatal("HIBP screening defaults to enabled, want false")
+	}
+	t.Setenv(envPwnedPasswordsEnabled, "true")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("load HIBP environment setting: %v", err)
+	}
+	if !cfg.PwnedPasswordsEnabled {
+		t.Fatal("HIBP environment setting = false, want true")
+	}
+	cfg, err = Load("--pwned-passwords-enabled=false")
+	if err != nil {
+		t.Fatalf("load HIBP flag override: %v", err)
+	}
+	if cfg.PwnedPasswordsEnabled {
+		t.Fatal("HIBP flag override = true, want false")
+	}
+	t.Setenv(envPwnedPasswordsEnabled, "invalid")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "invalid pwned-passwords enabled value") {
+		t.Fatalf("Load() error = %v, want invalid HIBP toggle rejection", err)
+	}
+	cfg, err = Load("--pwned-passwords-enabled=true")
+	if err != nil || !cfg.PwnedPasswordsEnabled {
+		t.Fatalf("valid HIBP flag did not override invalid environment value: config=%+v err=%v", cfg, err)
+	}
+}
+
+func TestRedactedPreservesHIBPToggle(t *testing.T) {
+	if !((Config{PwnedPasswordsEnabled: true}).Redacted().PwnedPasswordsEnabled) {
+		t.Fatal("redacted config hid the non-secret HIBP toggle")
 	}
 }
 

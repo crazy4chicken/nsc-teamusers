@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -10,6 +12,9 @@ from .permissions import AllowResult, CheckResult, PermissionsClient
 from .verifier import Claims, SDKError, TokenVerificationError, Verifier
 from .types import Resource
 
+
+# Keep aligned with the shared 30-second auth_time future-skew across clients.
+AUTH_TIME_FUTURE_SKEW_SECONDS = 30.0
 
 class UnauthorizedError(SDKError):
     """The request is not authenticated (HTTP 401)."""
@@ -159,6 +164,36 @@ def require(
     return Require(client, request, claims, permission, resource)
 
 
+def RequireFresh(max_age_seconds: float):
+    """Require verified authentication no older than max_age_seconds."""
+
+    def handler(_request: Any, claims: Claims | None = None) -> Claims:
+        if claims is None:
+            raise UnauthorizedError("authentication is required")
+        auth_time = claims.auth_time
+        if (
+            isinstance(max_age_seconds, bool)
+            or not isinstance(max_age_seconds, (int, float))
+            or not math.isfinite(max_age_seconds)
+            or max_age_seconds <= 0
+            or isinstance(auth_time, bool)
+            or not isinstance(auth_time, (int, float))
+            or not math.isfinite(auth_time)
+            or auth_time <= 0
+        ):
+            raise ForbiddenError("step_up_required")
+        age_seconds = time.time() - auth_time
+        if age_seconds < -AUTH_TIME_FUTURE_SKEW_SECONDS or age_seconds > max_age_seconds:
+            raise ForbiddenError("step_up_required")
+        return claims
+
+    return handler
+
+
+def require_fresh(max_age_seconds: float):
+    return RequireFresh(max_age_seconds)
+
+
 @dataclass(slots=True)
 class Client:
     """Verifier plus optional local/remote permission authorization."""
@@ -253,7 +288,9 @@ __all__ = [
     "ForbiddenError",
     "NewClient",
     "Require",
+    "RequireFresh",
     "UnauthorizedError",
     "authenticate",
     "require",
+    "require_fresh",
 ]

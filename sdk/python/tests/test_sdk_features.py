@@ -1,6 +1,7 @@
 import base64
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -12,17 +13,19 @@ from teamusers_sdk import (
     Authenticate,
     CompileCondition,
     Context,
-    Parse,
+    ForbiddenError,
+    KEY_ROTATION_EVENT_SUBJECT,
     MatchKeys,
+    Parse,
     PermissionSubscription,
     PermissionsClient,
+    Request,
+    RequireFresh,
     Resource,
     Subject,
-    Request,
     TokenClaimsError,
     UnauthorizedError,
     Verifier,
-    KEY_ROTATION_EVENT_SUBJECT,
     subscribe_key_rotations,
 )
 
@@ -263,6 +266,25 @@ def test_middleware_errors_and_event_invalidation():
     assert fetched == 2
     assert isinstance(subscription, PermissionSubscription)
     subscription.Close()
+
+
+def test_require_fresh_checks_authentication_time():
+    request = {"headers": {}, "method": "POST"}
+    guard = RequireFresh(60)
+    now = int(time.time())
+    claims = replace(_claims(), auth_time=now, amr=("pwd", "otp"))
+
+    assert guard(request, claims) == claims
+    assert guard(request, replace(claims, auth_time=now + 30)).auth_time == now + 30
+    with pytest.raises(UnauthorizedError):
+        guard(request)
+
+    for auth_time in (0, now - 120, now + 31):
+        with pytest.raises(ForbiddenError, match="step_up_required"):
+            guard(request, replace(claims, auth_time=auth_time))
+
+    with pytest.raises(ForbiddenError, match="step_up_required"):
+        RequireFresh(0)(request, claims)
 
 
 

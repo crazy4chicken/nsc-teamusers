@@ -13,6 +13,8 @@ type Policy struct {
 	RequireLower  bool `json:"require_lower"`
 	RequireDigit  bool `json:"require_digit"`
 	RequireSymbol bool `json:"require_symbol"`
+	HistoryCount  int  `json:"history_count"`
+	BreachCheck   bool `json:"breach_check"`
 }
 
 // DefaultPolicy returns the built-in password requirements: at least 12 runes,
@@ -33,6 +35,8 @@ type PolicyRule struct {
 	RequireLower  *bool
 	RequireDigit  *bool
 	RequireSymbol *bool
+	HistoryCount  *int
+	BreachCheck   *bool
 }
 
 // MergePolicy combines priority-ordered password policy rules. For each field,
@@ -46,6 +50,8 @@ func MergePolicy(rules []PolicyRule) Policy {
 		requireLowerSet  bool
 		requireDigitSet  bool
 		requireSymbolSet bool
+		historyCountSet  bool
+		breachCheckSet   bool
 	)
 
 	for _, rule := range rules {
@@ -72,6 +78,14 @@ func MergePolicy(rules []PolicyRule) Policy {
 		if !requireSymbolSet && rule.RequireSymbol != nil {
 			policy.RequireSymbol = *rule.RequireSymbol
 			requireSymbolSet = true
+		}
+		if !historyCountSet && rule.HistoryCount != nil {
+			policy.HistoryCount = *rule.HistoryCount
+			historyCountSet = true
+		}
+		if !breachCheckSet && rule.BreachCheck != nil {
+			policy.BreachCheck = *rule.BreachCheck
+			breachCheckSet = true
 		}
 	}
 

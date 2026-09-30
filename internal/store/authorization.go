@@ -122,6 +122,9 @@ func DeleteRole(ctx context.Context, q Q, id string) error {
 	if err := DeletePasswordPoliciesForSubject(ctx, q, "role", id); err != nil {
 		return err
 	}
+	if err := DeleteMFAPoliciesForSubject(ctx, q, "role", id); err != nil {
+		return err
+	}
 	_, err := q.Exec(ctx, `DELETE FROM roles WHERE id = $1`, id)
 	return err
 }

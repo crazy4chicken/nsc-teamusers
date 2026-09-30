@@ -293,7 +293,26 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 			return Claims{}, errors.New("invalid access token team")
 		}
 	}
-	return Claims{Subject: subject, Team: team, Kind: kind, PermVer: permVer, Audience: audiences[0], Expiry: expiry}, nil
+	authTime := int64(0)
+	if _, present := token.Get("auth_time"); present {
+		var authTimeOK bool
+		authTime, authTimeOK = int64Claim(token, "auth_time")
+		if !authTimeOK || authTime < 0 {
+			return Claims{}, errors.New("invalid access token auth_time")
+		}
+	}
+	amr := []string(nil)
+	if _, present := token.Get("amr"); present {
+		var amrOK bool
+		amr, amrOK = stringSliceClaim(token, "amr")
+		if !amrOK {
+			return Claims{}, errors.New("invalid access token amr")
+		}
+	}
+	return Claims{
+		Subject: subject, Team: team, Kind: kind, PermVer: permVer,
+		Audience: audiences[0], Expiry: expiry, AuthTime: authTime, AMR: amr,
+	}, nil
 }
 
 func normalizeIssuerURL(raw string) (string, string, error) {
@@ -336,6 +355,31 @@ func stringClaim(token jwt.Token, name string) (string, bool) {
 	}
 	text, ok := value.(string)
 	return text, ok
+}
+
+func stringSliceClaim(token jwt.Token, name string) ([]string, bool) {
+	value, ok := token.Get(name)
+	if !ok {
+		return nil, false
+	}
+	switch values := value.(type) {
+	case []string:
+		result := make([]string, len(values))
+		copy(result, values)
+		return result, true
+	case []interface{}:
+		result := make([]string, len(values))
+		for i, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			result[i] = text
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func int64Claim(token jwt.Token, name string) (int64, bool) {

@@ -125,6 +125,39 @@ export function Require(
   return requirePermission(authorizer, fourth, fifth)(second, third as Claims | undefined);
 }
 
+const AUTH_TIME_FUTURE_SKEW_MS = 30_000;
+
+/** Require authentication within maxAgeMs; verified claims come from Authenticate. */
+export function requireFresh(
+  maxAgeMs: number,
+): (request: MiddlewareRequest, claims?: Claims) => Promise<Claims> {
+  return async (_request: MiddlewareRequest, providedClaims?: Claims): Promise<Claims> => {
+    if (providedClaims === undefined) {
+      throw new UnauthorizedError("authentication is required");
+    }
+    const authTimeMs = providedClaims.authTime * 1000;
+    const ageMs = Date.now() - authTimeMs;
+    if (
+      !Number.isFinite(maxAgeMs) ||
+      maxAgeMs <= 0 ||
+      !Number.isFinite(authTimeMs) ||
+      authTimeMs <= 0 ||
+      ageMs < -AUTH_TIME_FUTURE_SKEW_MS ||
+      ageMs > maxAgeMs
+    ) {
+      throw new ForbiddenError("step_up_required");
+    }
+    return providedClaims;
+  };
+}
+
+/** Go-style spelling for the RequireFresh middleware helper. */
+export function RequireFresh(
+  maxAgeMs: number,
+): (request: MiddlewareRequest, claims?: Claims) => Promise<Claims> {
+  return requireFresh(maxAgeMs);
+}
+
 function bearerToken(header: string | undefined): string | undefined {
   if (header === undefined) return undefined;
   const parts = header.trim().split(/\s+/u);

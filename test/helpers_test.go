@@ -86,7 +86,8 @@ type permissionsResponse struct {
 }
 
 type checkResponse struct {
-	Allow bool `json:"allow"`
+	Allow  bool   `json:"allow"`
+	Reason string `json:"reason"`
 }
 
 type auditResponse struct {
@@ -331,6 +332,7 @@ var testBootstrapAdminPermissionKeys = []string{
 	"iam:audit:any",
 	"iam:sessions:any",
 	"iam:policies:any",
+	"iam:mfa:any",
 	"iam:keys:any",
 	"iam:*:any",
 }

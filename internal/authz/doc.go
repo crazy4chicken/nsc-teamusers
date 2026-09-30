@@ -14,12 +14,14 @@ var DocOperations = []apidocs.Operation{
 		Path:        "/authz/check",
 		Tag:         "Authorization",
 		Summary:     "Evaluate a permission",
-		Description: "Use from a trusted application service to make a single authorization decision for a user and resource context. The caller must use a service-kind bearer token; deny keys prefixed with ! take precedence over matching allows, and condition failures fail closed.",
+		Description: "Use from a trusted application service to make a single authorization decision for a user and resource context. The caller must use a service-kind bearer token; deny keys prefixed with ! take precedence over matching allows, and condition failures fail closed. Set max_auth_age_seconds to require recent authentication and pass auth_time from the user's token; a missing, future, or stale auth_time returns allow=false with reason step_up_required.",
 		Security:    "service",
 		Request:     checkRequest{},
 		RequestExample: map[string]any{
-			"subject":    "01J8Z3USER000000000000001",
-			"permission": "orders:read:team",
+			"subject":              "01J8Z3USER000000000000001",
+			"permission":           "orders:read:team",
+			"auth_time":            int64(1727712000),
+			"max_auth_age_seconds": int64(600),
 			"context": map[string]any{
 				"resource": map[string]any{
 					"owner_id": "01J8Z3OWNER000000000000001",

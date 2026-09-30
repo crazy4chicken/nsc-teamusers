@@ -15,29 +15,30 @@ func CreatePasswordPolicy(ctx context.Context, q Q, policy PasswordPolicy) (Pass
 	return scanPasswordPolicy(q.QueryRow(ctx, `
 		INSERT INTO password_policies (
 			id, name, priority, subject_kind, subject_id, min_length,
-			require_letter, require_upper, require_lower, require_digit, require_symbol
+			require_letter, require_upper, require_lower, require_digit, require_symbol,
+			history_count, breach_check
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id, name, priority, subject_kind, subject_id, min_length,
 			require_letter, require_upper, require_lower, require_digit, require_symbol,
-			created_at, updated_at`,
+			history_count, breach_check, created_at, updated_at`,
 		policy.ID, policy.Name, policy.Priority, policy.SubjectKind, policy.SubjectID,
 		policy.MinLength, policy.RequireLetter, policy.RequireUpper, policy.RequireLower,
-		policy.RequireDigit, policy.RequireSymbol))
+		policy.RequireDigit, policy.RequireSymbol, policy.HistoryCount, policy.BreachCheck))
 }
 
 func GetPasswordPolicy(ctx context.Context, q Q, id string) (PasswordPolicy, error) {
 	return scanPasswordPolicy(q.QueryRow(ctx, `
 		SELECT id, name, priority, subject_kind, subject_id, min_length,
 			require_letter, require_upper, require_lower, require_digit, require_symbol,
-			created_at, updated_at
+			history_count, breach_check, created_at, updated_at
 		FROM password_policies WHERE id = $1`, id))
 }
 func GetPasswordPolicyForUpdate(ctx context.Context, q Q, id string) (PasswordPolicy, error) {
 	return scanPasswordPolicy(q.QueryRow(ctx, `
 		SELECT id, name, priority, subject_kind, subject_id, min_length,
 			require_letter, require_upper, require_lower, require_digit, require_symbol,
-			created_at, updated_at
+			history_count, breach_check, created_at, updated_at
 		FROM password_policies WHERE id = $1 FOR UPDATE`, id))
 }
 
@@ -49,13 +50,13 @@ func ListPasswordPolicies(ctx context.Context, q Q, cursor string, limit int) ([
 		rows, err = q.Query(ctx, `
 			SELECT id, name, priority, subject_kind, subject_id, min_length,
 				require_letter, require_upper, require_lower, require_digit, require_symbol,
-				created_at, updated_at
+				history_count, breach_check, created_at, updated_at
 			FROM password_policies ORDER BY id LIMIT $1`, limit)
 	} else {
 		rows, err = q.Query(ctx, `
 			SELECT id, name, priority, subject_kind, subject_id, min_length,
 				require_letter, require_upper, require_lower, require_digit, require_symbol,
-				created_at, updated_at
+				history_count, breach_check, created_at, updated_at
 			FROM password_policies WHERE id > $1 ORDER BY id LIMIT $2`, cursor, limit)
 	}
 	if err != nil {
@@ -82,14 +83,14 @@ func UpdatePasswordPolicy(ctx context.Context, q Q, policy PasswordPolicy) (Pass
 		SET name = $2, priority = $3, subject_kind = $4, subject_id = $5,
 			min_length = $6, require_letter = $7, require_upper = $8,
 			require_lower = $9, require_digit = $10, require_symbol = $11,
-			updated_at = now()
+			history_count = $12, breach_check = $13, updated_at = now()
 		WHERE id = $1
 		RETURNING id, name, priority, subject_kind, subject_id, min_length,
 			require_letter, require_upper, require_lower, require_digit, require_symbol,
-			created_at, updated_at`,
+			history_count, breach_check, created_at, updated_at`,
 		policy.ID, policy.Name, policy.Priority, policy.SubjectKind, policy.SubjectID,
 		policy.MinLength, policy.RequireLetter, policy.RequireUpper, policy.RequireLower,
-		policy.RequireDigit, policy.RequireSymbol))
+		policy.RequireDigit, policy.RequireSymbol, policy.HistoryCount, policy.BreachCheck))
 }
 
 func DeletePasswordPolicy(ctx context.Context, q Q, id string) error {
@@ -139,7 +140,7 @@ func ListEffectivePasswordPolicies(ctx context.Context, q Q, userID string, now 
 		)
 		SELECT p.id, p.name, p.priority, p.subject_kind, p.subject_id, p.min_length,
 			p.require_letter, p.require_upper, p.require_lower, p.require_digit, p.require_symbol,
-			p.created_at, p.updated_at
+			p.history_count, p.breach_check, p.created_at, p.updated_at
 		FROM password_policies p
 		WHERE (p.subject_kind = 'user' AND p.subject_id = $1)
 		   OR (p.subject_kind = 'team' AND EXISTS (
@@ -182,12 +183,12 @@ func ListEffectivePasswordPolicies(ctx context.Context, q Q, userID string, now 
 
 func scanPasswordPolicy(row pgx.Row) (PasswordPolicy, error) {
 	var policy PasswordPolicy
-	var minLength pgtype.Int4
-	var requireLetter, requireUpper, requireLower, requireDigit, requireSymbol pgtype.Bool
+	var minLength, historyCount pgtype.Int4
+	var requireLetter, requireUpper, requireLower, requireDigit, requireSymbol, breachCheck pgtype.Bool
 	if err := row.Scan(
 		&policy.ID, &policy.Name, &policy.Priority, &policy.SubjectKind, &policy.SubjectID,
 		&minLength, &requireLetter, &requireUpper, &requireLower, &requireDigit, &requireSymbol,
-		&policy.CreatedAt, &policy.UpdatedAt,
+		&historyCount, &breachCheck, &policy.CreatedAt, &policy.UpdatedAt,
 	); err != nil {
 		return PasswordPolicy{}, err
 	}
@@ -200,6 +201,11 @@ func scanPasswordPolicy(row pgx.Row) (PasswordPolicy, error) {
 	policy.RequireLower = passwordPolicyBoolPointer(requireLower)
 	policy.RequireDigit = passwordPolicyBoolPointer(requireDigit)
 	policy.RequireSymbol = passwordPolicyBoolPointer(requireSymbol)
+	if historyCount.Valid {
+		value := int(historyCount.Int32)
+		policy.HistoryCount = &value
+	}
+	policy.BreachCheck = passwordPolicyBoolPointer(breachCheck)
 	return policy, nil
 }
 

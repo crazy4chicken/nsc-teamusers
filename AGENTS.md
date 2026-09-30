@@ -44,9 +44,9 @@ is unset. No in-memory substitute is accepted.
 ## Architecture invariants (do not break)
 
 - **Tokens prove identity only.** Permissions are NEVER embedded in JWTs.
-  Claims contract consumed by all three SDKs: `iss, sub, team, kind,
-  perm_ver, iat, exp, jti`. Changing claim names/shapes is a breaking
-  cross-repo change.
+  Claims contract consumed by all three SDKs: `iss, aud, sub, team, kind,
+  perm_ver, iat, exp, jti, auth_time, amr`. Additive-only; changing existing
+  claim names/shapes is a breaking cross-repo change.
 - **Effective set = direct bindings U group bindings -> roles -> permission
   keys**, minus failed ABAC conditions, expired bindings, disabled users.
   Explicit deny (`!` prefix) always beats allow; wildcards match within one

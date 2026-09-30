@@ -70,13 +70,13 @@ func TestParseAccessTokenClaims(t *testing.T) {
 		}, wantErr: true},
 	}
 
-	valid, err := service.signAccessToken(store.User{ID: "user-1", PermVer: 1}, "", "user")
+	valid, err := service.signAccessToken(store.User{ID: "user-1", PermVer: 1}, "", "user", now.Unix(), []string{"pwd"})
 	if err != nil {
 		t.Fatalf("sign valid access token: %v", err)
 	}
 	if claims, err := service.parseAccessToken(valid); err != nil {
 		t.Fatalf("parse valid access token: %v", err)
-	} else if claims.Subject != "user-1" || claims.Kind != "user" || claims.PermVer != 1 {
+	} else if claims.Subject != "user-1" || claims.Kind != "user" || claims.PermVer != 1 || claims.AuthTime != now.Unix() || len(claims.AMR) != 1 || claims.AMR[0] != "pwd" {
 		t.Fatalf("valid access claims = %+v", claims)
 	}
 
@@ -98,7 +98,7 @@ func TestParseAccessTokenAcceptsUserAndServiceKinds(t *testing.T) {
 	now := time.Now().UTC()
 	service := newJWTTestService(t, now)
 	for _, kind := range []string{"user", "service"} {
-		raw, err := service.signAccessToken(store.User{ID: "kind-user", PermVer: 4}, "", kind)
+		raw, err := service.signAccessToken(store.User{ID: "kind-user", PermVer: 4}, "", kind, now.Unix(), []string{"pwd"})
 		if err != nil {
 			t.Fatalf("sign %s access token: %v", kind, err)
 		}
@@ -115,14 +115,14 @@ func TestParseAccessTokenAcceptsUserAndServiceKinds(t *testing.T) {
 func TestMFAAndAccessTokenPurposesDoNotCrossAuthenticate(t *testing.T) {
 	now := time.Now().UTC()
 	service := newJWTTestService(t, now)
-	mfaToken, err := service.signMFAToken("purpose-user")
+	mfaToken, err := service.signMFAToken("purpose-user", now.Unix(), []string{"pwd"})
 	if err != nil {
 		t.Fatalf("sign MFA token: %v", err)
 	}
 	if _, err := service.parseAccessToken(mfaToken); err == nil {
 		t.Fatal("MFA token was accepted as an access token")
 	}
-	accessToken, err := service.signAccessToken(store.User{ID: "purpose-user", PermVer: 0}, "", "user")
+	accessToken, err := service.signAccessToken(store.User{ID: "purpose-user", PermVer: 0}, "", "user", now.Unix(), []string{"pwd"})
 	if err != nil {
 		t.Fatalf("sign access token: %v", err)
 	}
@@ -134,12 +134,12 @@ func TestMFAAndAccessTokenPurposesDoNotCrossAuthenticate(t *testing.T) {
 func TestParseMFATokenAudience(t *testing.T) {
 	now := time.Now().UTC()
 	service := newJWTTestService(t, now)
-	valid, err := service.signMFAToken("mfa-user")
+	valid, err := service.signMFAToken("mfa-user", now.Unix(), []string{"pwd"})
 	if err != nil {
 		t.Fatalf("sign valid MFA token: %v", err)
 	}
-	if userID, err := service.parseMFAToken(valid); err != nil || userID != "mfa-user" {
-		t.Fatalf("parse valid MFA token = %q, %v", userID, err)
+	if pending, err := service.parseMFAToken(valid); err != nil || pending.UserID != "mfa-user" {
+		t.Fatalf("parse valid MFA token = %+v, %v", pending, err)
 	}
 	key := service.keys[service.activeKid]
 	for _, tt := range []struct {

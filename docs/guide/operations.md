@@ -35,6 +35,7 @@ default**. The supported environment variables are:
 | `TEAMUSERS_SESSION_FAMILY_TTL` | `2160h` | Absolute session-family lifetime (`--session-family-ttl`); parsed by `time.ParseDuration` and must be at least the refresh-token TTL. |
 | `TEAMUSERS_LOCKOUT_THRESHOLD` | `5` | Failed password or MFA attempts before lockout. |
 | `TEAMUSERS_LOCKOUT_DURATION` | `15m` | Duration of an account lockout; parsed by `time.ParseDuration`. |
+| `TEAMUSERS_PWNED_PASSWORDS_ENABLED` | `false` | Enables HIBP screening for password policies with `breach_check: true` (`--pwned-passwords-enabled`). |
 | `TEAMUSERS_WEBAUTHN_RP_ID` | `localhost` | WebAuthn relying-party ID. |
 | `TEAMUSERS_WEBAUTHN_ORIGIN` | `http://localhost` | WebAuthn browser origin. |
 

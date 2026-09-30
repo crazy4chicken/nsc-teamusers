@@ -68,7 +68,10 @@ def test_verifies_token_and_caches_jwks() -> None:
         return jwks
 
     verifier = Verifier("https://issuer.example/", fetcher=fetcher)
-    claims = verifier.verify(_token(private_key, team="platform"))
+    auth_time = int(time.time()) - 12
+    claims = verifier.verify(
+        _token(private_key, team="platform", auth_time=auth_time, amr=["pwd", "otp"])
+    )
 
     assert isinstance(claims, Claims)
     assert claims.subject == "sdk-user"
@@ -78,9 +81,15 @@ def test_verifies_token_and_caches_jwks() -> None:
     assert claims.perm_ver == 2
     assert claims.permVer == 2
     assert claims.audience == "teamusers"
+    assert claims.auth_time == auth_time
+    assert claims.authTime == auth_time
+    assert claims.amr == ("pwd", "otp")
     assert requests == ["https://issuer.example/.well-known/jwks.json"]
 
-    assert verifier.verify(_token(private_key)).subject == "sdk-user"
+    legacy = verifier.verify(_token(private_key))
+    assert legacy.subject == "sdk-user"
+    assert legacy.auth_time == 0
+    assert legacy.amr == ()
     assert len(requests) == 1
 
 
@@ -99,6 +108,15 @@ def test_expected_audience_and_claim_validation() -> None:
         verifier.verify(_token(private_key, aud="orders", kind="unknown"))
     with pytest.raises(TokenClaimsError):
         verifier.verify(_token(private_key, aud="orders", perm_ver=-1))
+
+    for invalid_claims in (
+        {"auth_time": -1},
+        {"auth_time": True},
+        {"amr": "pwd"},
+        {"amr": ["pwd", 1]},
+    ):
+        with pytest.raises(TokenClaimsError):
+            verifier.verify(_token(private_key, aud="orders", **invalid_claims))
 
 
 def test_signature_and_expiration_fail_with_typed_errors() -> None:

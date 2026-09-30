@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -56,6 +57,187 @@ type totpConfirmRequest struct {
 type totpResponse struct {
 	Secret     string `json:"secret"`
 	OTPAuthURL string `json:"otpauth_url"`
+}
+
+type mfaEnrollmentRequest struct {
+	MFAToken string `json:"mfa_token"`
+	Code     string `json:"code,omitempty"`
+}
+
+type mfaEnrollmentCompleteResponse struct {
+	AccessToken  string   `json:"access_token"`
+	RefreshToken string   `json:"refresh_token"`
+	TokenType    string   `json:"token_type"`
+	ExpiresIn    int64    `json:"expires_in"`
+	BackupCodes  []string `json:"backup_codes"`
+}
+
+func (s *Service) beginMFATOTPEnrollment(w http.ResponseWriter, r *http.Request) {
+	var request mfaEnrollmentRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if !s.limiter.allowIP(requestIP(r), s.now()) {
+		writeRateLimited(w, r)
+		return
+	}
+	pending, err := s.parseMFAEnrollmentToken(strings.TrimSpace(request.MFAToken))
+	if err != nil {
+		writeUnauthorized(w, r)
+		return
+	}
+	user, err := store.GetUser(r.Context(), s.q, pending.UserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeUnauthorized(w, r)
+		} else {
+			httpapi.WriteStoreProblem(w, r, err)
+		}
+		return
+	}
+	if user.Status != "active" {
+		writeUnauthorized(w, r)
+		return
+	}
+	if user.LockedUntil != nil && user.LockedUntil.After(s.now()) {
+		writeAuthProblem(w, r, http.StatusLocked, "account_locked")
+		return
+	}
+	if _, err := store.GetCredential(r.Context(), s.q, user.ID, "totp"); err == nil {
+		writeAuthProblem(w, r, http.StatusConflict, "totp_already_enabled")
+		return
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	secret, err := GenerateSecret()
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		if _, err := store.GetCredential(ctx, tx, user.ID, "totp"); err == nil {
+			return errTOTPAlreadyEnabled
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		pendingCredential := store.Credential{UserID: user.ID, Kind: "totp_pending", Hash: secret}
+		if _, err := store.UpdateCredential(ctx, tx, pendingCredential); err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if _, err := store.CreateCredential(ctx, tx, pendingCredential); err != nil {
+				return err
+			}
+		}
+		return s.appendAuthAudit(ctx, tx, "auth.totp.enrolled", user.ID, user.ID)
+	})
+	if errors.Is(err, errTOTPAlreadyEnabled) {
+		writeAuthProblem(w, r, http.StatusConflict, "totp_already_enabled")
+		return
+	}
+	if err != nil {
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, totpResponse{
+		Secret:     secret,
+		OTPAuthURL: fmt.Sprintf("otpauth://totp/teamusers:%s?secret=%s&issuer=teamusers", url.PathEscape(user.Username), secret),
+	})
+}
+
+func (s *Service) completeMFATOTPEnrollment(w http.ResponseWriter, r *http.Request) {
+	var request mfaEnrollmentRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	if !s.limiter.allowIP(requestIP(r), s.now()) {
+		writeRateLimited(w, r)
+		return
+	}
+	pending, err := s.parseMFAEnrollmentToken(strings.TrimSpace(request.MFAToken))
+	if err != nil {
+		writeUnauthorized(w, r)
+		return
+	}
+	code := strings.TrimSpace(request.Code)
+	if code == "" {
+		writeUnauthorized(w, r)
+		return
+	}
+	user, err := store.GetUser(r.Context(), s.q, pending.UserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeUnauthorized(w, r)
+		} else {
+			httpapi.WriteStoreProblem(w, r, err)
+		}
+		return
+	}
+	if user.Status != "active" {
+		writeUnauthorized(w, r)
+		return
+	}
+	if user.LockedUntil != nil && user.LockedUntil.After(s.now()) {
+		writeAuthProblem(w, r, http.StatusLocked, "account_locked")
+		return
+	}
+	pendingCredential, err := store.GetCredential(r.Context(), s.q, user.ID, "totp_pending")
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeUnauthorized(w, r)
+		return
+	}
+	if err != nil {
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	if !ValidateCode(pendingCredential.Hash, code, s.now()) {
+		writeUnauthorized(w, r)
+		return
+	}
+	codes, encodedDigests, err := generateBackupCodes()
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	var tokens tokenResponse
+	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		if _, err := store.GetCredential(ctx, tx, user.ID, "totp"); err == nil {
+			return errTOTPAlreadyEnabled
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if _, err := store.ActivateTOTPCredential(ctx, tx, user.ID); err != nil {
+			return err
+		}
+		if _, err := store.CreateCredential(ctx, tx, store.Credential{
+			UserID: user.ID, Kind: "backup_codes", Hash: string(encodedDigests),
+		}); err != nil {
+			return err
+		}
+		metadata := mfaCompletionMetadata(sessionMetadataFor(r, "user"), pending, "otp")
+		var err error
+		tokens, err = s.issuePair(ctx, tx, user, "user", "", time.Time{}, metadata)
+		if err != nil {
+			return err
+		}
+		if err := s.appendAuthAudit(ctx, tx, "auth.totp.confirmed", user.ID, user.ID); err != nil {
+			return err
+		}
+		return s.appendAuthAudit(ctx, tx, "auth.login.succeeded", user.ID, user.ID)
+	})
+	if errors.Is(err, errTOTPAlreadyEnabled) {
+		writeAuthProblem(w, r, http.StatusConflict, "totp_already_enabled")
+		return
+	}
+	if err != nil {
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, mfaEnrollmentCompleteResponse{
+		AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken,
+		TokenType: tokens.TokenType, ExpiresIn: tokens.ExpiresIn, BackupCodes: codes,
+	})
 }
 
 type backupCodesResponse struct {

@@ -10,6 +10,7 @@ import {
   MatchKeys,
   PermissionsClient,
   Require,
+  RequireFresh,
   subscribeKeyRotations,
   TokenClaimsError,
   TokenVerificationError,
@@ -38,10 +39,13 @@ test("verifies an Ed25519 access token and caches the JWKS", async () => {
       };
     },
   });
+  const authTime = Math.floor(Date.now() / 1000) - 12;
   const token = await new SignJWT({
     kind: "user",
     team: "platform",
     perm_ver: 2,
+    auth_time: authTime,
+    amr: ["pwd", "otp"],
   })
     .setProtectedHeader({ alg: "EdDSA", kid: "test-key" })
     .setIssuer("teamusers")
@@ -60,6 +64,9 @@ test("verifies an Ed25519 access token and caches the JWKS", async () => {
   assert.equal(claims.permVer, 2);
   assert.equal(claims.perm_ver, 2);
   assert.equal(claims.audience, "teamusers");
+  assert.equal(claims.authTime, authTime);
+  assert.equal(claims.auth_time, authTime);
+  assert.deepEqual(claims.amr, ["pwd", "otp"]);
   assert.equal(fetchCount, 1);
 
   const secondClaims = await verifier.verify(token);
@@ -97,6 +104,8 @@ test("supports an expected audience and rejects invalid application claims", asy
   const claims = await verifier.verify(validToken);
   assert.equal(claims.kind, "service");
   assert.equal(claims.permVer, 0);
+  assert.equal(claims.authTime, 0);
+  assert.deepEqual(claims.amr, []);
 
   const missingKind = await new SignJWT({ perm_ver: 0 })
     .setProtectedHeader({ alg: "EdDSA", kid: "audience-key" })
@@ -106,6 +115,23 @@ test("supports an expected audience and rejects invalid application claims", asy
     .setExpirationTime("5m")
     .sign(privateKey);
   await assert.rejects(verifier.verify(missingKind), TokenClaimsError);
+  const invalidAuthTime = await new SignJWT({ kind: "service", perm_ver: 0, auth_time: -1 })
+    .setProtectedHeader({ alg: "EdDSA", kid: "audience-key" })
+    .setIssuer("teamusers")
+    .setAudience("api")
+    .setSubject("svc")
+    .setExpirationTime("5m")
+    .sign(privateKey);
+  await assert.rejects(verifier.verify(invalidAuthTime), TokenClaimsError);
+
+  const invalidAMR = await new SignJWT({ kind: "service", perm_ver: 0, amr: "pwd" })
+    .setProtectedHeader({ alg: "EdDSA", kid: "audience-key" })
+    .setIssuer("teamusers")
+    .setAudience("api")
+    .setSubject("svc")
+    .setExpirationTime("5m")
+    .sign(privateKey);
+  await assert.rejects(verifier.verify(invalidAMR), TokenClaimsError);
 });
 
 test("rejects an audience array that contains an extra value", async () => {
@@ -220,6 +246,42 @@ test("middleware returns claims and raises typed 401/403 errors", async () => {
   await assert.rejects(Authenticate({ headers: {}, method: "GET" }, verifier), UnauthorizedError);
   const guard = Require({ allow: async () => ({ allow: false, reason: "condition denied" }) }, "orders:read:team");
   await assert.rejects(guard({ headers: {}, method: "GET" }, claims), ForbiddenError);
+});
+
+test("RequireFresh accepts recent auth_time and the shared future skew", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const claims = new Claims({
+    subject: "usr_1",
+    team: "",
+    kind: "user",
+    permVer: 1,
+    expiry: new Date(Date.now() + 60_000),
+    audience: "teamusers",
+    authTime: now,
+    amr: ["pwd", "otp"],
+  });
+  const guard = RequireFresh(60_000);
+  const request = { headers: {}, method: "POST" };
+  assert.equal(await guard(request, claims), claims);
+  await assert.rejects(guard(request), UnauthorizedError);
+
+  const withAuthTime = (authTime: number) => new Claims({
+    subject: claims.subject,
+    team: claims.team,
+    kind: claims.kind,
+    permVer: claims.permVer,
+    expiry: claims.expiry,
+    audience: claims.audience,
+    authTime,
+  });
+  const withinSkew = withAuthTime(now + 30);
+  assert.equal(await guard(request, withinSkew), withinSkew);
+  for (const authTime of [now - 120, now + 31]) {
+    await assert.rejects(
+      guard(request, withAuthTime(authTime)),
+      (error: unknown) => error instanceof ForbiddenError && error.message === "step_up_required",
+    );
+  }
 });
 
 test("event subscription invalidates affected users", async () => {

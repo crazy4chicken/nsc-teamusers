@@ -52,14 +52,28 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 	now := time.Now().UTC()
 	valid := signSDKTestToken(t, privateKey, map[string]any{
 		"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+		"auth_time": now.Add(-time.Minute).Unix(), "amr": []string{"pwd", "otp"},
 		"iat": now, "exp": now.Add(5 * time.Minute),
 	})
 	claims, err := verifier.Verify(t.Context(), valid)
 	if err != nil {
 		t.Fatalf("verify valid SDK token: %v", err)
 	}
-	if claims.Subject != "sdk-user" || claims.Kind != "user" || claims.PermVer != 2 || claims.Audience != "teamusers" {
+	if claims.Subject != "sdk-user" || claims.Kind != "user" || claims.PermVer != 2 || claims.Audience != "teamusers" ||
+		claims.AuthTime != now.Add(-time.Minute).Unix() || len(claims.AMR) != 2 || claims.AMR[0] != "pwd" || claims.AMR[1] != "otp" {
 		t.Fatalf("verified SDK claims = %+v", claims)
+	}
+
+	legacy := signSDKTestToken(t, privateKey, map[string]any{
+		"iss": "teamusers", "aud": "teamusers", "sub": "legacy-user", "kind": "user", "perm_ver": int64(2),
+		"iat": now, "exp": now.Add(5 * time.Minute),
+	})
+	legacyClaims, err := verifier.Verify(t.Context(), legacy)
+	if err != nil {
+		t.Fatalf("verify legacy SDK token: %v", err)
+	}
+	if legacyClaims.AuthTime != 0 || len(legacyClaims.AMR) != 0 {
+		t.Fatalf("legacy SDK claims = %+v, want absent authentication evidence", legacyClaims)
 	}
 
 	cases := []struct {
@@ -108,6 +122,20 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 		{
 			name:  "wrong algorithm",
 			token: replaceSDKAlgorithm(t, valid, "RS256"),
+		},
+		{
+			name: "invalid auth_time",
+			token: signSDKTestToken(t, privateKey, map[string]any{
+				"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+				"auth_time": int64(-1), "iat": now, "exp": now.Add(5 * time.Minute),
+			}),
+		},
+		{
+			name: "invalid amr",
+			token: signSDKTestToken(t, privateKey, map[string]any{
+				"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+				"amr": "pwd", "iat": now, "exp": now.Add(5 * time.Minute),
+			}),
 		},
 	}
 	for _, tt := range cases {

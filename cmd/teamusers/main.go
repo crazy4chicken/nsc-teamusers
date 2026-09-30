@@ -56,6 +56,7 @@ var bootstrapAdminPermissions = [...]struct {
 	{key: "iam:audit:any", description: "Read the audit log"},
 	{key: "iam:sessions:any", description: "Manage user sessions"},
 	{key: "iam:policies:any", description: "Manage password policies"},
+	{key: "iam:mfa:any", description: "Manage MFA policies"},
 	{key: "iam:keys:any", description: "Rotate signing keys"},
 	{key: "iam:*:any", description: "All IAM administration"},
 }

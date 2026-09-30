@@ -295,6 +295,8 @@ func TestPasswordPolicyFieldLevelMerge(t *testing.T) {
 		"subject_id":    target.ID,
 		"require_lower": true,
 		"require_upper": true,
+		"history_count": 5,
+		"breach_check":  true,
 	})
 	highPriority := createPasswordPolicyTestRule(t, stack, adminToken, map[string]any{
 		"priority":       20,
@@ -302,6 +304,8 @@ func TestPasswordPolicyFieldLevelMerge(t *testing.T) {
 		"subject_id":     target.ID,
 		"require_upper":  false,
 		"require_symbol": true,
+		"history_count":  3,
+		"breach_check":   false,
 	})
 
 	targetToken := loginUser(t, stack, target.Username, "MergeTargetPassword1")
@@ -311,8 +315,8 @@ func TestPasswordPolicyFieldLevelMerge(t *testing.T) {
 	}
 	var policy passwd.Policy
 	decodeResponse(t, body, &policy)
-	if policy.MinLength != 12 || !policy.RequireLetter || policy.RequireUpper || !policy.RequireLower || !policy.RequireDigit || !policy.RequireSymbol {
-		t.Fatalf("merged password policy = %+v, want default min_length=12, letter/digit plus lower and symbol, with high-priority upper=false (low=%s high=%s)", policy, lowPriority.ID, highPriority.ID)
+	if policy.MinLength != 12 || !policy.RequireLetter || policy.RequireUpper || !policy.RequireLower || !policy.RequireDigit || !policy.RequireSymbol || policy.HistoryCount != 3 || policy.BreachCheck {
+		t.Fatalf("merged password policy = %+v, want default min_length=12, letter/digit plus lower and symbol, high-priority upper=false/history_count=3/breach_check=false (low=%s high=%s)", policy, lowPriority.ID, highPriority.ID)
 	}
 }
 
@@ -419,6 +423,16 @@ func TestPasswordPolicyAdminAPI(t *testing.T) {
 			t.Fatalf("min_length=%d status = %d, want %d: %s", minLength, status, http.StatusUnprocessableEntity, body)
 		}
 	}
+	for _, historyCount := range []int{-1, 25} {
+		status, body = stack.jsonRequest(t, http.MethodPost, "/policies/password", map[string]any{
+			"subject_kind":  "user",
+			"subject_id":    target.ID,
+			"history_count": historyCount,
+		}, adminToken)
+		if status != http.StatusUnprocessableEntity {
+			t.Fatalf("history_count=%d status = %d, want %d: %s", historyCount, status, http.StatusUnprocessableEntity, body)
+		}
+	}
 	for _, priority := range []int64{1 << 31, -(1 << 31) - 1} {
 		status, body = stack.jsonRequest(t, http.MethodPost, "/policies/password", map[string]any{
 			"subject_kind": "user",
@@ -436,6 +450,8 @@ func TestPasswordPolicyAdminAPI(t *testing.T) {
 		"min_length":     20,
 		"require_upper":  true,
 		"require_symbol": false,
+		"history_count":  4,
+		"breach_check":   true,
 	})
 	status, body = stack.jsonRequest(t, http.MethodPatch, "/policies/password/"+patchRule.ID, map[string]any{
 		"unexpected_key": true,
@@ -447,14 +463,16 @@ func TestPasswordPolicyAdminAPI(t *testing.T) {
 	status, body = stack.jsonRequest(t, http.MethodPatch, "/policies/password/"+patchRule.ID, map[string]any{
 		"min_length":    nil,
 		"require_upper": nil,
+		"history_count": nil,
+		"breach_check":  nil,
 	}, adminToken)
 	if status != http.StatusOK {
 		t.Fatalf("clear password policy fields status = %d, want %d: %s", status, http.StatusOK, body)
 	}
 	var patched store.PasswordPolicy
 	decodeResponse(t, body, &patched)
-	if patched.MinLength != nil || patched.RequireUpper != nil || patched.RequireSymbol == nil || *patched.RequireSymbol {
-		t.Fatalf("patched password policy = %+v, want min_length and require_upper cleared while require_symbol remains false", patched)
+	if patched.MinLength != nil || patched.RequireUpper != nil || patched.RequireSymbol == nil || *patched.RequireSymbol || patched.HistoryCount != nil || patched.BreachCheck != nil {
+		t.Fatalf("patched password policy = %+v, want min_length, require_upper, history_count, and breach_check cleared while require_symbol remains false", patched)
 	}
 
 	auditRule := createPasswordPolicyTestRule(t, stack, adminToken, map[string]any{
@@ -498,6 +516,8 @@ func TestPasswordPolicyQueryEndpoints(t *testing.T) {
 		"subject_id":    target.ID,
 		"min_length":    17,
 		"require_upper": true,
+		"history_count": 4,
+		"breach_check":  true,
 	})
 	targetToken := loginUser(t, stack, target.Username, "QueryTargetPassword1")
 	nonAdmin := seedPasswordUser(t, context.Background(), stack.database.pool, "password-policy-query-non-admin", "QueryNonAdminPassword1")
@@ -513,7 +533,7 @@ func TestPasswordPolicyQueryEndpoints(t *testing.T) {
 	}
 	var selfPolicy passwd.Policy
 	decodeResponse(t, body, &selfPolicy)
-	want := passwd.Policy{MinLength: 17, RequireLetter: true, RequireUpper: true, RequireDigit: true}
+	want := passwd.Policy{MinLength: 17, RequireLetter: true, RequireUpper: true, RequireDigit: true, HistoryCount: 4, BreachCheck: true}
 	if selfPolicy != want {
 		t.Fatalf("self password policy = %+v, want %+v", selfPolicy, want)
 	}

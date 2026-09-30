@@ -132,6 +132,40 @@ func (c *Client) Require(permission string, resourceFrom func(*http.Request) Res
 	}
 }
 
+// RequireFresh returns middleware that rejects missing, future, or older than
+// maxAge authentication timestamps with a step-up-required 403 response.
+func (c *Client) RequireFresh(maxAge time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if next == nil {
+				writeDecision(w, http.StatusInternalServerError, "next handler is nil")
+				return
+			}
+			claims, ok := ClaimsFromContext(r.Context())
+			if !ok {
+				writeUnauthorized(w, "authentication is required")
+				return
+			}
+			if !authTimeIsFresh(claims.AuthTime, maxAge, time.Now()) {
+				writeDecision(w, http.StatusForbidden, "step_up_required")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// authTimeFutureSkew is the shared 30-second allowance for issuer clock differences.
+const authTimeFutureSkew = 30 * time.Second
+
+func authTimeIsFresh(authTime int64, maxAge time.Duration, now time.Time) bool {
+	if authTime <= 0 || maxAge <= 0 {
+		return false
+	}
+	age := now.Sub(time.Unix(authTime, 0))
+	return age >= -authTimeFutureSkew && age <= maxAge
+}
+
 // Allow evaluates a request against the local permission cache and falls back
 // to the authoritative remote check when the cache cannot be fetched.
 func (c *Client) Allow(ctx context.Context, claims Claims, permission string, resource Resource) (bool, string) {

@@ -19,9 +19,11 @@ from .middleware import (
     ForbiddenError,
     NewClient,
     Require,
+    RequireFresh,
     UnauthorizedError,
     authenticate,
     require,
+    require_fresh,
 )
 from .permissions import (
     AllowResult,
@@ -129,6 +131,7 @@ __all__ = [
     "Request",
     "RequestContext",
     "Require",
+    "RequireFresh",
     "Resource",
     "ResourceContext",
     "SDKError",
@@ -151,6 +154,7 @@ __all__ = [
     "match_keys",
     "parse_permission",
     "require",
+    "require_fresh",
     "subscribe_permissions",
     "subscribe_key_rotations",
     "validate_permission_key",

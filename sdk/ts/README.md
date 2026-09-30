@@ -47,6 +47,10 @@ signature, issuer, expiration, audience, and required application claims.
 | `permVer` (`perm_ver`) | `number` | Non-negative permission version |
 | `expiry` (`exp`) | `Date` | Expiration time |
 | `audience` (`aud`) | `string` or `readonly string[]` | The single verified JWT audience |
+| `authTime` (`auth_time`) | `number` | Authentication time in Unix seconds; `0` when absent |
+| `amr` | `readonly string[]` | Authentication methods; empty when absent |
+
+Legacy tokens without `auth_time` or `amr` remain valid and expose the defaults above.
 
 Verification failures use typed exceptions: `JWKSFetchError` for key retrieval,
 `TokenVerificationError` for signature/JOSE failures, and `TokenClaimsError`
@@ -125,6 +129,18 @@ const guard = Require(client, "orders:read:team", (req) => ({
   team_id: String(req.teamId),
 }));
 await guard(request, claims);
+```
+
+`RequireFresh(maxAgeMs)` checks verified authentication evidence using
+milliseconds for `maxAgeMs`. Missing, future, or stale `auth_time` throws
+`ForbiddenError` with reason `step_up_required`; missing verified claims throws
+`UnauthorizedError`:
+
+```ts
+import { RequireFresh } from "teamusers-sdk";
+
+const recent = RequireFresh(10 * 60 * 1000);
+await recent(request, claims);
 ```
 
 ## Permission invalidation events

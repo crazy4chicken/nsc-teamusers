@@ -128,6 +128,21 @@ type PasswordPolicy struct {
 	RequireLower  *bool     `json:"require_lower,omitempty"`
 	RequireDigit  *bool     `json:"require_digit,omitempty"`
 	RequireSymbol *bool     `json:"require_symbol,omitempty"`
+	HistoryCount  *int      `json:"history_count,omitempty"`
+	BreachCheck   *bool     `json:"breach_check,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// MFAPolicy mirrors the mfa_policies table.
+type MFAPolicy struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Priority    int       `json:"priority"`
+	SubjectKind string    `json:"subject_kind"`
+	SubjectID   string    `json:"subject_id"`
+	Required    bool      `json:"required"`
+	DenyUnenrolled bool      `json:"deny_unenrolled"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }

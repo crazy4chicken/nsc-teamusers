@@ -27,6 +27,8 @@ type passwordPolicyCreateRequest struct {
 	RequireLower  *bool  `json:"require_lower,omitempty"`
 	RequireDigit  *bool  `json:"require_digit,omitempty"`
 	RequireSymbol *bool  `json:"require_symbol,omitempty"`
+	HistoryCount  *int   `json:"history_count,omitempty"`
+	BreachCheck   *bool  `json:"breach_check,omitempty"`
 }
 
 type passwordPolicyPatchRequest struct {
@@ -40,6 +42,8 @@ type passwordPolicyPatchRequest struct {
 	RequireLower  *bool   `json:"require_lower,omitempty"`
 	RequireDigit  *bool   `json:"require_digit,omitempty"`
 	RequireSymbol *bool   `json:"require_symbol,omitempty"`
+	HistoryCount  *int    `json:"history_count,omitempty"`
+	BreachCheck   *bool   `json:"breach_check,omitempty"`
 }
 
 func (h *adminHandler) listPasswordPolicies(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +76,7 @@ func (h *adminHandler) createPasswordPolicy(w http.ResponseWriter, r *http.Reque
 	request.Name = strings.TrimSpace(request.Name)
 	request.SubjectKind = strings.TrimSpace(request.SubjectKind)
 	request.SubjectID = strings.TrimSpace(request.SubjectID)
-	if err := validatePasswordPolicyFields(request.SubjectKind, request.SubjectID, request.MinLength, request.Priority); err != nil {
+	if err := validatePasswordPolicyFields(request.SubjectKind, request.SubjectID, request.MinLength, request.HistoryCount, request.Priority); err != nil {
 		if writeValidationError(w, r, err) {
 			return
 		}
@@ -96,6 +100,8 @@ func (h *adminHandler) createPasswordPolicy(w http.ResponseWriter, r *http.Reque
 			RequireLower:  request.RequireLower,
 			RequireDigit:  request.RequireDigit,
 			RequireSymbol: request.RequireSymbol,
+			HistoryCount:  request.HistoryCount,
+			BreachCheck:   request.BreachCheck,
 		})
 		created = createdPolicy
 		if err != nil {
@@ -195,8 +201,14 @@ func (h *adminHandler) patchPasswordPolicy(w http.ResponseWriter, r *http.Reques
 		if presence["require_symbol"] {
 			before.RequireSymbol = request.RequireSymbol
 		}
+		if presence["history_count"] {
+			before.HistoryCount = request.HistoryCount
+		}
+		if presence["breach_check"] {
+			before.BreachCheck = request.BreachCheck
+		}
 		subjectChanged := before.SubjectKind != original.SubjectKind || before.SubjectID != original.SubjectID
-		if err := validatePasswordPolicyFields(before.SubjectKind, before.SubjectID, before.MinLength, before.Priority); err != nil {
+		if err := validatePasswordPolicyFields(before.SubjectKind, before.SubjectID, before.MinLength, before.HistoryCount, before.Priority); err != nil {
 			return err
 		}
 		if subjectChanged {
@@ -249,7 +261,7 @@ func (h *adminHandler) deletePasswordPolicy(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func validatePasswordPolicyFields(subjectKind, subjectID string, minLength *int, priority int) error {
+func validatePasswordPolicyFields(subjectKind, subjectID string, minLength, historyCount *int, priority int) error {
 	switch subjectKind {
 	case "user", "team", "group", "role":
 	default:
@@ -263,6 +275,9 @@ func validatePasswordPolicyFields(subjectKind, subjectID string, minLength *int,
 	}
 	if minLength != nil && (*minLength < 1 || *minLength > 1024) {
 		return unprocessableError("min_length must be between 1 and 1024")
+	}
+	if historyCount != nil && (*historyCount < 0 || *historyCount > store.PasswordHistoryLimit) {
+		return unprocessableError(fmt.Sprintf("history_count must be between 0 and %d", store.PasswordHistoryLimit))
 	}
 	return nil
 }
@@ -339,6 +354,7 @@ func decodePasswordPolicyPatch(w http.ResponseWriter, r *http.Request) (password
 		"name": {}, "priority": {}, "subject_kind": {}, "subject_id": {},
 		"min_length": {}, "require_letter": {}, "require_upper": {},
 		"require_lower": {}, "require_digit": {}, "require_symbol": {},
+		"history_count": {}, "breach_check": {},
 	}
 	presence := make(map[string]bool, len(values))
 	var request passwordPolicyPatchRequest
@@ -369,6 +385,10 @@ func decodePasswordPolicyPatch(w http.ResponseWriter, r *http.Request) (password
 			decodeErr = json.Unmarshal(raw, &request.RequireDigit)
 		case "require_symbol":
 			decodeErr = json.Unmarshal(raw, &request.RequireSymbol)
+		case "history_count":
+			decodeErr = json.Unmarshal(raw, &request.HistoryCount)
+		case "breach_check":
+			decodeErr = json.Unmarshal(raw, &request.BreachCheck)
 		}
 		if decodeErr != nil {
 			return passwordPolicyPatchRequest{}, nil, fmt.Errorf("%s must have a valid value", field)

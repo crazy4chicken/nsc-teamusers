@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-webauthn/webauthn/protocol"
 	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
+	"github.com/jackc/pgx/v5"
 
 	"teamusers/internal/config"
 	"teamusers/internal/httpapi"
@@ -374,12 +375,68 @@ func (s *Service) finishPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w, r)
 		return
 	}
-	response, err := s.completePasskeyLogin(r.Context(), resolvedUser, *credential, sessionMetadataFor(r, "user"))
+	policy, err := store.ResolveMFAPolicy(r.Context(), s.q, resolvedUser.ID, s.now())
+	if err != nil {
+		writeInternal(w, r)
+		return
+	}
+	metadata := sessionMetadataFor(r, "user")
+	metadata.AuthTime = s.now().Unix()
+	metadata.AMR = passkeyAMR(credential.Flags.UserVerified)
+	requiredMFA := policy.ID != "" && policy.Required
+	if !credential.Flags.UserVerified {
+		_, totpErr := store.GetCredential(r.Context(), s.q, resolvedUser.ID, "totp")
+		if totpErr != nil && !errors.Is(totpErr, pgx.ErrNoRows) {
+			writeInternal(w, r)
+			return
+		}
+		hasTOTP := totpErr == nil
+		if hasTOTP || requiredMFA {
+			if requiredMFA && !hasTOTP && policy.DenyUnenrolled {
+				writeAuthProblem(w, r, http.StatusForbidden, "mfa_enrollment_denied")
+				return
+			}
+			var pendingToken string
+			if hasTOTP {
+				pendingToken, err = s.signMFAToken(resolvedUser.ID, metadata.AuthTime, metadata.AMR)
+			} else {
+				pendingToken, err = s.signMFAEnrollmentToken(resolvedUser.ID, metadata.AuthTime, metadata.AMR)
+			}
+			if err != nil {
+				writeInternal(w, r)
+				return
+			}
+			if err := s.recordPasskeyMFARequired(r.Context(), resolvedUser, *credential); err != nil {
+				writeInternal(w, r)
+				return
+			}
+			if hasTOTP {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"mfa_required": true, "mfa_token": pendingToken, "mfa_methods": []string{"otp"},
+				})
+			} else {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"mfa_enrollment_required": true,
+					"mfa_token":              pendingToken,
+					"mfa_methods":            []string{"otp"},
+				})
+			}
+			return
+		}
+	}
+	response, err := s.completePasskeyLogin(r.Context(), resolvedUser, *credential, metadata)
 	if err != nil {
 		writeInternal(w, r)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func passkeyAMR(userVerified bool) []string {
+	if userVerified {
+		return []string{"webauthn", "mfa"}
+	}
+	return []string{"webauthn"}
 }
 
 func (s *Service) recordPasskeyFailure(ctx context.Context, user store.User) (bool, error) {
@@ -414,6 +471,24 @@ func (s *Service) completePasskeyLogin(ctx context.Context, user store.User, cre
 		return tokenResponse{}, err
 	}
 	return response, nil
+}
+
+func (s *Service) recordPasskeyMFARequired(ctx context.Context, user store.User, credential webauthnlib.Credential) error {
+	issue := func(txctx context.Context, q store.Q) error {
+		if err := store.UpdatePasskey(txctx, q, user.ID, credential); err != nil {
+			return err
+		}
+		if err := store.ResetFailedLogins(txctx, q, user.ID); err != nil {
+			return err
+		}
+		return s.appendAuthAudit(txctx, q, "auth.passkey.login.mfa_required", user.ID, user.ID)
+	}
+	if s.pool != nil {
+		return store.WithTx(ctx, s.pool, func(txctx context.Context, tx store.Tx) error {
+			return issue(txctx, tx)
+		})
+	}
+	return issue(ctx, s.q)
 }
 
 type passkeyResponse struct {

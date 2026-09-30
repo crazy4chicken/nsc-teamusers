@@ -209,6 +209,9 @@ func adminPermissionArea(path string) string {
 	case "invitations", "users":
 		return "users"
 	case "policies":
+		if len(segments) > 1 && segments[1] == "mfa" {
+			return "mfa"
+		}
 		return "policies"
 	case "teams":
 		return "teams"
@@ -424,6 +427,10 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 	cfg = cfg.WithDefaults()
 	h := &adminHandler{q: q, audit: audit, cfg: cfg, keyRotator: keyRotator}
 	router := chi.NewRouter()
+	freshAuthMiddleware := func(next http.Handler) http.Handler { return next }
+	if authMW != nil {
+		freshAuthMiddleware = requireFreshAuthentication
+	}
 	if authMW != nil {
 		router.Use(authMW)
 		router.Use(h.requireSubject)
@@ -465,14 +472,14 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 		r.Get("/{id}", h.getUser)
 		r.Get("/{id}/password-policy", h.getUserPasswordPolicy)
 		r.Patch("/{id}", h.patchUser)
-		r.Delete("/{id}", h.deleteUser)
-		r.Post("/{id}/disable", h.disableUser)
-		r.Post("/{id}/approve", h.approveUser)
-		r.Post("/{id}/credentials", h.createUserCredential)
-		r.Delete("/{id}/totp", h.deleteUserTOTP)
+		r.With(freshAuthMiddleware).Delete("/{id}", h.deleteUser)
+		r.With(freshAuthMiddleware).Post("/{id}/disable", h.disableUser)
+		r.With(freshAuthMiddleware).Post("/{id}/approve", h.approveUser)
+		r.With(freshAuthMiddleware).Post("/{id}/credentials", h.createUserCredential)
+		r.With(freshAuthMiddleware).Delete("/{id}/totp", h.deleteUserTOTP)
 		r.Get("/{id}/sessions", h.listUserSessions)
-		r.Delete("/{id}/sessions", h.deleteAllUserSessions)
-		r.Delete("/{id}/sessions/{sid}", h.deleteUserSession)
+		r.With(freshAuthMiddleware).Delete("/{id}/sessions", h.deleteAllUserSessions)
+		r.With(freshAuthMiddleware).Delete("/{id}/sessions/{sid}", h.deleteUserSession)
 	})
 	router.Route("/teams", func(r chi.Router) {
 		r.Get("/", h.listTeams)
@@ -487,23 +494,28 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 		r.Get("/{id}", h.getGroup)
 		r.Patch("/{id}", h.patchGroup)
 		r.Delete("/{id}", h.deleteGroup)
-		r.Post("/{id}/members/batch", h.batchGroupMembers)
-		r.Put("/{id}/members", h.putMember)
+		r.With(freshAuthMiddleware).Post("/{id}/members/batch", h.batchGroupMembers)
+		r.With(freshAuthMiddleware).Put("/{id}/members", h.putMember)
 		r.Delete("/{id}/members", h.deleteMember)
 		r.Delete("/{id}/members/{userID}", h.deleteMember)
 	})
 	router.Get("/policies/password", h.listPasswordPolicies)
-	router.Post("/policies/password", h.createPasswordPolicy)
+	router.With(freshAuthMiddleware).Post("/policies/password", h.createPasswordPolicy)
 	router.Get("/policies/password/{id}", h.getPasswordPolicy)
-	router.Patch("/policies/password/{id}", h.patchPasswordPolicy)
-	router.Delete("/policies/password/{id}", h.deletePasswordPolicy)
+	router.With(freshAuthMiddleware).Patch("/policies/password/{id}", h.patchPasswordPolicy)
+	router.With(freshAuthMiddleware).Delete("/policies/password/{id}", h.deletePasswordPolicy)
+	router.Get("/policies/mfa", h.listMFAPolicies)
+	router.With(freshAuthMiddleware).Post("/policies/mfa", h.createMFAPolicy)
+	router.Get("/policies/mfa/{id}", h.getMFAPolicy)
+	router.With(freshAuthMiddleware).Patch("/policies/mfa/{id}", h.patchMFAPolicy)
+	router.With(freshAuthMiddleware).Delete("/policies/mfa/{id}", h.deleteMFAPolicy)
 	router.Route("/roles", func(r chi.Router) {
 		r.Get("/", h.listRoles)
 		r.Post("/", h.createRole)
 		r.Get("/{id}", h.getRole)
 		r.Patch("/{id}", h.patchRole)
 		r.Delete("/{id}", h.deleteRole)
-		r.Put("/{id}/permissions", h.setRolePermissions)
+		r.With(freshAuthMiddleware).Put("/{id}/permissions", h.setRolePermissions)
 	})
 	router.Route("/permissions", func(r chi.Router) {
 		r.Get("/", h.listPermissions)
@@ -511,14 +523,14 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 	})
 	router.Route("/bindings", func(r chi.Router) {
 		r.Get("/", h.listBindings)
-		r.Post("/", h.createBinding)
-		r.Delete("/{id}", h.deleteBinding)
+		r.With(freshAuthMiddleware).Post("/", h.createBinding)
+		r.With(freshAuthMiddleware).Delete("/{id}", h.deleteBinding)
 	})
 	router.Route("/audit", func(r chi.Router) {
 		r.Get("/", h.listAudit)
 		r.Get("/export", h.exportAudit)
 	})
-	router.Post("/keys/rotate", h.rotateSigningKey)
+	router.With(freshAuthMiddleware).Post("/keys/rotate", h.rotateSigningKey)
 	return router
 }
 
@@ -530,6 +542,39 @@ func (h *adminHandler) requireSubject(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func writeFreshAuthenticationError(w http.ResponseWriter, r *http.Request) bool {
+	subject, ok := SubjectFrom(r.Context())
+	if !ok {
+		WriteProblem(w, r, http.StatusUnauthorized, "Unauthorized", "an authenticated subject is required")
+		return true
+	}
+	if !freshAuthTime(subject.AuthTime, 10*time.Minute, time.Now()) {
+		WriteProblem(w, r, http.StatusForbidden, "Step-up Required", "step_up_required")
+		return true
+	}
+	return false
+}
+
+func requireFreshAuthentication(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if writeFreshAuthenticationError(w, r) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// adminAuthTimeFutureSkew is the shared 30-second allowance for issuer clock differences.
+const adminAuthTimeFutureSkew = 30 * time.Second
+
+func freshAuthTime(authTime int64, maxAge time.Duration, now time.Time) bool {
+	if authTime <= 0 || maxAge <= 0 {
+		return false
+	}
+	age := now.Sub(time.Unix(authTime, 0))
+	return age >= -adminAuthTimeFutureSkew && age <= maxAge
 }
 
 func (h *adminHandler) withTx(ctx context.Context, fn func(context.Context, store.Tx) error) error {

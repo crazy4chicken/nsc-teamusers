@@ -81,13 +81,26 @@ func (h *adminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 	if password == "" {
 		password = request.InitialPassword
 	}
-	if password != "" && !passwd.DefaultPolicy().Validate(password) {
-		WriteProblem(w, r, http.StatusUnprocessableEntity, "weak_password", "weak_password")
-		return
+	userID := ""
+	var checked passwd.CheckedSet
+	if password != "" {
+		userID = store.NewID()
+		var err error
+		checked, err = passwd.CheckSet(r.Context(), h.q, userID, password, h.cfg.PwnedPasswordsEnabled, time.Now().UTC())
+		if errors.Is(err, passwd.ErrPolicyRejected) {
+			WriteProblem(w, r, http.StatusUnprocessableEntity, "weak_password", "weak_password")
+			return
+		}
+		if err != nil {
+			WriteStoreProblem(w, r, err)
+			return
+		}
 	}
+
 	var created store.User
 	err := h.withTx(r.Context(), func(ctx context.Context, tx store.Tx) error {
 		user, err := store.CreateUser(ctx, tx, store.User{
+			ID:          userID,
 			Username:    request.Username,
 			Email:       request.Email,
 			DisplayName: request.DisplayName,
@@ -98,14 +111,13 @@ func (h *adminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 		}
 		created = user
 		if password != "" {
-			hash, err := passwd.Hash(password)
-			if err != nil {
+			if err := passwd.RecordSet(ctx, tx, checked); err != nil {
 				return err
 			}
 			if _, err := store.CreateCredential(ctx, tx, store.Credential{
 				UserID:     user.ID,
 				Kind:       "password",
-				Hash:       hash,
+				Hash:       checked.Hash,
 				MustChange: true,
 			}); err != nil {
 				return err
@@ -123,6 +135,10 @@ func (h *adminHandler) createUser(w http.ResponseWriter, r *http.Request) {
 		})
 	})
 	if err != nil {
+		if errors.Is(err, passwd.ErrPolicyRejected) {
+			WriteProblem(w, r, http.StatusUnprocessableEntity, "weak_password", "weak_password")
+			return
+		}
 		WriteStoreProblem(w, r, err)
 		return
 	}
@@ -133,6 +149,11 @@ func (h *adminHandler) patchUser(w http.ResponseWriter, r *http.Request) {
 	var request patchUserRequest
 	if !decodeJSON(w, r, &request) {
 		return
+	}
+	if request.Email != nil || (request.Status != nil && strings.TrimSpace(*request.Status) == "disabled") {
+		if _, hasSubject := SubjectFrom(r.Context()); hasSubject && writeFreshAuthenticationError(w, r) {
+			return
+		}
 	}
 	if request.Username == nil && request.Email == nil && request.DisplayName == nil && request.Status == nil {
 		WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "at least one user field is required")
@@ -336,25 +357,30 @@ func (h *adminHandler) createUserCredential(w http.ResponseWriter, r *http.Reque
 		WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "kind must be password or service")
 		return
 	}
-	plaintext := request.Password
-	if request.Kind == "password" {
-		policy, err := ResolvePasswordPolicy(r.Context(), h.q, id, time.Now().UTC())
+	var hash string
+	var err error
+	if request.Kind == "service" {
+		hash, err = passwd.Hash(secret)
 		if err != nil {
 			WriteStoreProblem(w, r, err)
 			return
 		}
-		if !policy.Validate(plaintext) {
+	}
+	var checked passwd.CheckedSet
+	if request.Kind == "password" {
+		if _, err := store.GetUser(r.Context(), h.q, id); err != nil {
+			WriteStoreProblem(w, r, err)
+			return
+		}
+		checked, err = passwd.CheckSet(r.Context(), h.q, id, request.Password, h.cfg.PwnedPasswordsEnabled, time.Now().UTC())
+		if errors.Is(err, passwd.ErrPolicyRejected) {
 			WriteProblem(w, r, http.StatusUnprocessableEntity, "weak_password", "weak_password")
 			return
 		}
-	}
-	if request.Kind == "service" {
-		plaintext = secret
-	}
-	hash, err := passwd.Hash(plaintext)
-	if err != nil {
-		WriteStoreProblem(w, r, err)
-		return
+		if err != nil {
+			WriteStoreProblem(w, r, err)
+			return
+		}
 	}
 	var user store.User
 	err = h.withTx(r.Context(), func(ctx context.Context, tx store.Tx) error {
@@ -363,7 +389,14 @@ func (h *adminHandler) createUserCredential(w http.ResponseWriter, r *http.Reque
 			return err
 		}
 		user = loaded
-		credential := store.Credential{UserID: id, Kind: request.Kind, Hash: hash, MustChange: request.Kind == "password"}
+		credentialHash := hash
+		if request.Kind == "password" {
+			if err := passwd.RecordSet(ctx, tx, checked); err != nil {
+				return err
+			}
+			credentialHash = checked.Hash
+		}
+		credential := store.Credential{UserID: id, Kind: request.Kind, Hash: credentialHash, MustChange: request.Kind == "password"}
 		if _, err := store.UpdateCredential(ctx, tx, credential); err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				return err
@@ -376,6 +409,14 @@ func (h *adminHandler) createUserCredential(w http.ResponseWriter, r *http.Reque
 		return err
 	})
 	if err != nil {
+		if errors.Is(err, passwd.ErrPasswordStateChanged) {
+			WriteProblem(w, r, http.StatusConflict, "Password changed", "password state changed during check; retry")
+			return
+		}
+		if errors.Is(err, passwd.ErrPolicyRejected) {
+			WriteProblem(w, r, http.StatusUnprocessableEntity, "weak_password", "weak_password")
+			return
+		}
 		WriteStoreProblem(w, r, err)
 		return
 	}

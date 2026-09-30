@@ -39,6 +39,19 @@ func CreateVerificationToken(ctx context.Context, q Q, token VerificationToken) 
 		token.ID, token.UserID, token.Kind, token.TokenHash, token.ExpiresAt, token.UsedAt, token.Payload))
 }
 
+// PeekVerificationToken reads an unexpired, unused token without consuming it.
+// Expired, used, or unknown tokens all return ErrNotFound.
+func PeekVerificationToken(ctx context.Context, q Q, tokenHash string, now time.Time) (VerificationToken, error) {
+	token, err := scanVerificationToken(q.QueryRow(ctx, `
+		SELECT id, user_id, kind, token_hash, expires_at, used_at, created_at, payload
+		FROM verification_tokens
+		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2`, tokenHash, now))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return VerificationToken{}, ErrNotFound
+	}
+	return token, err
+}
+
 // ConsumeVerificationToken atomically marks an unexpired token as used and
 // returns its owning user and token kind. Expired, used, or unknown tokens all
 // return ErrNotFound so callers cannot distinguish those cases.

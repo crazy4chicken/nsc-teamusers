@@ -52,6 +52,10 @@ application claims.
 | `perm_ver` (`permVer`) | `int` | Non-negative permission version |
 | `expiry` (`exp`) | `datetime` | Expiration in UTC; `exp` exposes Unix seconds |
 | `audience` (`aud`) | `str` or `tuple[str, ...]` | Verified JWT audience; lists must contain exactly one value |
+| `auth_time` (`authTime`) | `int` | Authentication time in Unix seconds; `0` when absent |
+| `amr` | `tuple[str, ...]` | Authentication methods; empty when absent |
+
+Legacy tokens without `auth_time` or `amr` remain valid and expose the defaults above.
 
 Verification failures use typed exceptions: `JWKSFetchError` for key retrieval,
 `TokenVerificationError` for signature/JOSE failures, and
@@ -103,6 +107,18 @@ check = Require(client, request, claims, "orders:read:team", {"team_id": "team-1
 `UnauthorizedError` (HTTP 401). `Require` returns `Claims` or raises
 `ForbiddenError` (HTTP 403). Both accept the minimal request shape
 `{"headers": ..., "method": ...}`.
+
+`RequireFresh(max_age_seconds)` returns a guard measured in seconds. It accepts
+the request and already verified claims, returning the claims when `auth_time`
+is fresh; missing, future, or stale timestamps raise `ForbiddenError` with
+`step_up_required`. Missing claims raise `UnauthorizedError`:
+
+```python
+from teamusers_sdk import RequireFresh
+
+fresh = RequireFresh(600)
+claims = fresh(request, claims)
+```
 
 ## Event invalidation
 
