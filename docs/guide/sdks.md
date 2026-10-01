@@ -8,7 +8,7 @@ needed. No token introspection call is required on the hot path.
 | SDK | Package | In-repo reference |
 | --- | --- | --- |
 | Go | `github.com/crazy4chicken/nsc-teamusers/sdk/go` | `sdk/go/README.md` |
-| TypeScript | `nsc-teamusers-sdk` | `sdk/ts/README.md` |
+| TypeScript | `teamusers-sdk` | `sdk/ts/README.md` |
 | Python | `teamusers-sdk` | `sdk/python/README.md` |
 
 All three expose the same four building blocks:
@@ -46,7 +46,7 @@ client := iam.NewClient(verifier, permissions)
 ```
 
 ```ts [TypeScript]
-import { Client, PermissionsClient, Verifier } from "nsc-teamusers-sdk";
+import { Client, PermissionsClient, Verifier } from "teamusers-sdk";
 
 const verifier = new Verifier("https://iam.example.com", {
   audience: "orders",
@@ -61,7 +61,15 @@ const client = new Client(verifier, permissions);
 ```
 
 ```python [Python]
-from teamusers_sdk import Client, PermissionsClient, Verifier
+from teamusers_sdk import (
+    Authenticate,
+    Client,
+    PermissionsClient,
+    RejectImpersonated,
+    Require,
+    RequireFresh,
+    Verifier,
+)
 
 verifier = Verifier(
     "https://iam.example.com",
@@ -92,7 +100,7 @@ consumers, WebSocket upgrades.
 ```go [Go]
 claims, err := verifier.Verify(ctx, bearerToken)
 if err != nil {
-	// TokenVerificationError: bad signature, issuer, audience, or expiry.
+	// Verification failed: bad signature, issuer, audience, or expiry.
 	return ErrUnauthenticated
 }
 fmt.Println(claims.Subject, claims.Team, claims.Kind)
@@ -129,12 +137,12 @@ fallback. The `Resource` you pass is what ABAC conditions match against
 ::: code-group
 
 ```go [Go]
-mux.Handle("POST /documents/{id}/share",
+mux.Handle("POST /teams/{team}/documents/{id}/share",
 	client.Middleware(
 		client.Require("documents:share:team", func(r *http.Request) iam.Resource {
 			return iam.Resource{
-				OwnerID: r.PathValue("owner"),
-				TeamID:  r.PathValue("team"),
+				TeamID: r.PathValue("team"),
+				Attrs:  map[string]any{"document_id": r.PathValue("id")},
 			}
 		})(shareHandler),
 	),
@@ -142,10 +150,11 @@ mux.Handle("POST /documents/{id}/share",
 ```
 
 ```ts [TypeScript]
-// Middleware-composable form: returns a guard you can chain.
-const guard = Require(client, "documents:share:team", (request) => ({
-  owner_id: request.params.owner,
-  team_id: request.params.team,
+// Middleware-composable form: returns a guard you can chain. Resource values
+// come from your router/framework, not from the SDK's request shape.
+const guard = Require(client, "documents:share:team", () => ({
+  team_id: teamID,
+  attrs: { document_id: documentID },
 }));
 
 const claims = await guard(request); // throws ForbiddenError with the deny reason
@@ -153,10 +162,10 @@ const claims = await guard(request); // throws ForbiddenError with the deny reas
 
 ```python [Python]
 # Direct form: raises ForbiddenError on deny.
-claims = sdk.Require(
+claims = Require(
     client, request, claims,
     "documents:share:team",
-    {"owner_id": owner_id, "team_id": team_id},
+    {"team_id": team_id, "attrs": {"document_id": document_id}},
 )
 ```
 
@@ -199,17 +208,17 @@ await Require(client, "billing:payout:any")(request, claims);
 ```
 
 ```python [Python]
-claims = sdk.Authenticate(request, verifier)
-sdk.RejectImpersonated()(request, claims)
-sdk.RequireFresh(10 * 60)(request, claims)
-sdk.Require(client, request, claims, "billing:payout:any")
+claims = Authenticate(request, verifier)
+RejectImpersonated()(request, claims)
+RequireFresh(10 * 60)(request, claims)
+Require(client, request, claims, "billing:payout:any")
 ```
 
 :::
 
 Impersonated sessions are also visible to your own audit trail: `claims.Actor`
-(Go) / `claims.actor` / `claims.actor` holds the admin's user ID when
-`claims.Impersonated` is true.
+(Go) / `claims.actor` (TypeScript) / `claims.actor` (Python) holds the admin's
+user ID when `claims.Impersonated` (Go) / `claims.impersonated` is true.
 
 ## Keeping caches fresh with events
 
@@ -241,7 +250,7 @@ defer permSub.Close()
 ```
 
 ```ts [TypeScript]
-import { subscribeKeyRotations, subscribePermissions } from "nsc-teamusers-sdk";
+import { subscribeKeyRotations, subscribePermissions } from "teamusers-sdk";
 
 const keySub = await subscribeKeyRotations(verifier, process.env.TEAMUSERS_NATS_URL);
 const permSub = await subscribePermissions(permissions, process.env.TEAMUSERS_NATS_URL);
@@ -268,9 +277,11 @@ correctness requirement.
 
 ## Choosing local vs. remote authorization
 
-The default `Client` resolves permissions locally from the cached snapshot and
-only calls `/authz/check` when the snapshot is missing or its `perm_ver` is
-behind. Pass the `remoteOnly` option (`remote_only` in Python) when your
+The default `Client` evaluates locally against the cached permission snapshot
+(fetched per subject and keyed by the token's `perm_ver`), and falls back to
+the authoritative `/authz/check` endpoint only when the snapshot cannot be
+fetched — a `perm_ver` mismatch fails closed rather than serving a stale
+grant. Pass the `remoteOnly` option (`remote_only` in Python) when your
 service must never rely on a cached decision — for example a settlement
 service where a minutes-old permission grant is unacceptable:
 
@@ -297,11 +308,12 @@ off for high-throughput read paths.
 
 | Layer | Go | TypeScript | Python |
 | --- | --- | --- | --- |
-| Bad token | `TokenVerificationError` | `TokenVerificationError` | `TokenVerificationError` |
+| Bad token | plain `error` from `Verify` | `TokenVerificationError` | `TokenVerificationError` |
 | No credentials | 401 via middleware | `UnauthorizedError` | `UnauthorizedError` |
 | Permission denied | 403 via middleware | `ForbiddenError` | `ForbiddenError` |
 | Step-up required | 403 `step_up_required` | `ForbiddenError("step_up_required")` | `ForbiddenError("step_up_required")` |
 | Impersonated rejected | 403 `impersonation_forbidden` | `ForbiddenError("impersonation_forbidden")` | `ForbiddenError("impersonation_forbidden")` |
 
-Every error type carries a stable `code` field; match on the code, never on
-the message text.
+The TypeScript and Python error types carry a stable `code` field; match on
+the code, never on the message text. The Go SDK returns plain errors — treat
+any `Verify` failure as unauthenticated and rely on middleware status codes.
