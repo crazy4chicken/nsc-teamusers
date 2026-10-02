@@ -169,6 +169,9 @@ importers:
       vitepress:
         specifier: ^1.6.4
         version: 1.6.4(@algolia/client-search@5.59.0)(@types/node@24.13.6)(fuse.js@7.5.0)(postcss@8.5.28)(search-insights@2.17.3)
+      vitepress-plugin-tabs:
+        specifier: ^0.9.1
+        version: 0.9.1(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@24.13.6)(fuse.js@7.5.0)(postcss@8.5.28)(search-insights@2.17.3))(vue@3.5.43)
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -963,6 +966,12 @@ packages:
       terser:
         optional: true
 
+  vitepress-plugin-tabs@0.9.1:
+    resolution: {integrity: sha512-cRys9pWhyl5YnxXZ3BAdSDW8DriuXBewYhmUu4bBlnzksEDjzbKUwbNi30T74Vi1UXnY1a19Ap6DJDTOWJWdzA==}
+    peerDependencies:
+      vitepress: ^1.0.0 || ^2.0.0-alpha.17
+      vue: ^3.5.0
+
   vitepress@1.6.4:
     resolution: {integrity: sha512-+2ym1/+0VVrbhNyRoFFesVvBvHAVMZMK0rw60E3X/5349M1GuVdKeazuksqopEdvkKwKGs21Q729jX81/bkBJg==}
     hasBin: true
@@ -1755,6 +1764,11 @@ snapshots:
     optionalDependencies:
       '@types/node': 24.13.6
       fsevents: 2.3.3
+
+  vitepress-plugin-tabs@0.9.1(vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@24.13.6)(fuse.js@7.5.0)(postcss@8.5.28)(search-insights@2.17.3))(vue@3.5.43):
+    dependencies:
+      vitepress: 1.6.4(@algolia/client-search@5.59.0)(@types/node@24.13.6)(fuse.js@7.5.0)(postcss@8.5.28)(search-insights@2.17.3)
+      vue: 3.5.43
 
   vitepress@1.6.4(@algolia/client-search@5.59.0)(@types/node@24.13.6)(fuse.js@7.5.0)(postcss@8.5.28)(search-insights@2.17.3):
     dependencies:

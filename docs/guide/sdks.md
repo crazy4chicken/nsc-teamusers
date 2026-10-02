@@ -25,9 +25,11 @@ All three expose the same four building blocks:
 
 ## Setup
 
-::: code-group
+:::tabs key:sdk-lang variant:code
 
-```go [Go]
+== Go
+
+```go
 import iam "github.com/crazy4chicken/nsc-teamusers/sdk/go"
 
 verifier := iam.NewVerifier(
@@ -45,7 +47,9 @@ permissions := iam.NewPermissionsClient(
 client := iam.NewClient(verifier, permissions)
 ```
 
-```ts [TypeScript]
+== TypeScript
+
+```ts
 import { Client, PermissionsClient, Verifier } from "teamusers-sdk";
 
 const verifier = new Verifier("https://iam.example.com", {
@@ -60,7 +64,9 @@ const permissions = new PermissionsClient("https://iam.example.com", {
 const client = new Client(verifier, permissions);
 ```
 
-```python [Python]
+== Python
+
+```python
 from teamusers_sdk import (
     Authenticate,
     Client,
@@ -95,9 +101,11 @@ re-fetch on unknown `kid` (subject to the minimum refresh interval).
 Use this when you are not behind HTTP middleware — gRPC interceptors, queue
 consumers, WebSocket upgrades.
 
-::: code-group
+:::tabs key:sdk-lang variant:code
 
-```go [Go]
+== Go
+
+```go
 claims, err := verifier.Verify(ctx, bearerToken)
 if err != nil {
 	// Verification failed: bad signature, issuer, audience, or expiry.
@@ -106,7 +114,9 @@ if err != nil {
 fmt.Println(claims.Subject, claims.Team, claims.Kind)
 ```
 
-```ts [TypeScript]
+== TypeScript
+
+```ts
 try {
   const claims = await verifier.verify(bearerToken);
   console.log(claims.subject, claims.team, claims.kind);
@@ -118,7 +128,9 @@ try {
 }
 ```
 
-```python [Python]
+== Python
+
+```python
 try:
     claims = verifier.verify(bearer_token)
     print(claims.subject, claims.team, claims.kind)
@@ -134,9 +146,11 @@ except TokenVerificationError:
 fallback. The `Resource` you pass is what ABAC conditions match against
 (`resource.owner_id`, `resource.team_id`, `resource.attrs`).
 
-::: code-group
+:::tabs key:sdk-lang variant:code
 
-```go [Go]
+== Go
+
+```go
 mux.Handle("POST /teams/{team}/documents/{id}/share",
 	client.Middleware(
 		client.Require("documents:share:team", func(r *http.Request) iam.Resource {
@@ -149,7 +163,9 @@ mux.Handle("POST /teams/{team}/documents/{id}/share",
 )
 ```
 
-```ts [TypeScript]
+== TypeScript
+
+```ts
 // Middleware-composable form: returns a guard you can chain. Resource values
 // come from your router/framework, not from the SDK's request shape.
 const guard = Require(client, "documents:share:team", () => ({
@@ -160,7 +176,9 @@ const guard = Require(client, "documents:share:team", () => ({
 const claims = await guard(request); // throws ForbiddenError with the deny reason
 ```
 
-```python [Python]
+== Python
+
+```python
 # Direct form: raises ForbiddenError on deny.
 claims = Require(
     client, request, claims,
@@ -188,9 +206,11 @@ Two additional guards plug into the same middleware chain:
   parties). The service already blocks impersonated tokens from every `/me`
   mutation; this guard extends the same posture to your own endpoints.
 
-::: code-group
+:::tabs key:sdk-lang variant:code
 
-```go [Go]
+== Go
+
+```go
 handler := client.Middleware(
 	client.RejectImpersonated()(
 		client.RequireFresh(10 * time.Minute)(
@@ -200,14 +220,18 @@ handler := client.Middleware(
 )
 ```
 
-```ts [TypeScript]
+== TypeScript
+
+```ts
 const claims = await Authenticate(request, verifier);
 await RejectImpersonated()(request, claims);
 await RequireFresh(10 * 60 * 1000)(request, claims);
 await Require(client, "billing:payout:any")(request, claims);
 ```
 
-```python [Python]
+== Python
+
+```python
 claims = Authenticate(request, verifier)
 RejectImpersonated()(request, claims)
 RequireFresh(10 * 60)(request, claims)
@@ -227,9 +251,11 @@ Without events, revocations propagate within
 window narrows to seconds: `key.rotated` forces a JWKS refresh and the
 `perm.changed`/`user.*`/`team.*` subjects invalidate permission snapshots.
 
-::: code-group
+:::tabs key:sdk-lang variant:code
 
-```go [Go]
+== Go
+
+```go
 // Requires building with -tags nats.
 keySub, err := verifier.SubscribeKeyRotations(os.Getenv("TEAMUSERS_NATS_URL"))
 if err != nil {
@@ -249,7 +275,9 @@ if err != nil {
 defer permSub.Close()
 ```
 
-```ts [TypeScript]
+== TypeScript
+
+```ts
 import { subscribeKeyRotations, subscribePermissions } from "teamusers-sdk";
 
 const keySub = await subscribeKeyRotations(verifier, process.env.TEAMUSERS_NATS_URL);
@@ -259,7 +287,9 @@ await keySub?.close();
 await permSub?.close();
 ```
 
-```python [Python]
+== Python
+
+```python
 from teamusers_sdk import events
 
 key_sub = events.subscribe_key_rotations(verifier, nats_url)
@@ -285,17 +315,23 @@ grant. Pass the `remoteOnly` option (`remote_only` in Python) when your
 service must never rely on a cached decision — for example a settlement
 service where a minutes-old permission grant is unacceptable:
 
-::: code-group
+:::tabs key:sdk-lang variant:code
 
-```go [Go]
+== Go
+
+```go
 client := iam.NewClient(verifier, permissions, iam.WithRemoteOnly(true))
 ```
 
-```ts [TypeScript]
+== TypeScript
+
+```ts
 const client = new Client(verifier, permissions, { remoteOnly: true });
 ```
 
-```python [Python]
+== Python
+
+```python
 client = Client(verifier=verifier, permissions=permissions, remote_only=True)
 ```
 

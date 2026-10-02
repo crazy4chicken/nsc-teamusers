@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitepress'
+import { tabsMarkdownPlugin } from 'vitepress-plugin-tabs'
 
 const base = '/nsc-teamusers/'
 
@@ -8,6 +9,11 @@ export default defineConfig({
   base,
   cleanUrls: true,
   lastUpdated: true,
+  markdown: {
+    config(md) {
+      md.use(tabsMarkdownPlugin)
+    }
+  },
   themeConfig: {
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
