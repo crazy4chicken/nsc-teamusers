@@ -89,7 +89,8 @@ is unset. No in-memory substitute is accepted.
    `[!]resource:action:scope` at write time; scope is `own|team|any|*`.
 5. **SDK parity:** authz semantics, claim shapes, event payloads, or
    endpoint behavior changes must be mirrored in `sdk/go`, `sdk/ts`,
-   `sdk/python` (each has its own tests/CI publish workflow).
+   `sdk/python` (each has its own tests/CI publish workflow); version
+   bumps follow the `## SDK versioning` rules below.
 6. **Secrets:** never log credentials/tokens/keys; extend config redaction
    when adding secret-bearing config. Passwords stay argon2id.
 7. **Tests:** behavior changes ship with integration coverage in `test/`
@@ -98,6 +99,24 @@ is unset. No in-memory substitute is accepted.
 8. **Events:** new authz-affecting mutation -> new/updated outbox topic +
    relay mapping + SDK handler. `notify.*` topics are notification-service
    directives, not fleet events; don't mix the two channels.
+
+## SDK versioning
+
+SDK versions live in `sdk/ts/package.json`, `sdk/python/pyproject.toml`,
+and annotated `sdk/go/vX.Y.Z` git tags for the Go module. Bumps follow
+semver strictly (breaking -> major, additive -> minor, fix -> patch).
+Unless the user
+explicitly requests a version bump, only advance the `-preview.N`
+pre-release suffix (e.g. `0.3.0-preview.1` -> `0.3.0-preview.2`);
+previews never hang off an already-released stable version. When the
+current version is a stable release (no suffix), the first preview of
+the next release follows semver against the pending changes: additive ->
+`x.y.z` to `x.(y+1).0-preview.1`, breaking -> `(x+1).0.0-preview.1`.
+User-invisible changes and small bug fixes do NOT open a new preview
+cycle: bump PATCH directly (`x.y.z` -> `x.y.(z+1)`); on an existing
+preview line they keep advancing `-preview.N`. ANY major/minor/patch
+movement — including a PATCH bump for a small fix — MUST be confirmed
+with the user before the final commit; it is never taken unilaterally.
 
 ## Configuration surface
 
