@@ -33,9 +33,11 @@ import (
 	"teamusers/migrations"
 )
 
-const (
-	version = "dev"
+// version is set at link time by the release workflow
+// (-ldflags "-X main.version=vX.Y.Z"); dev builds report "dev".
+var version = "dev"
 
+const (
 	migrationAdvisoryKey = "teamusers:migrations"
 	migrationTimeout     = 2 * time.Minute
 	shutdownTimeout      = 10 * time.Second

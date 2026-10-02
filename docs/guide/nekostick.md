@@ -77,26 +77,23 @@ extension, the service entity above becomes a declarative compose
 configuration. The following `svchost-compose.yaml` is a complete template:
 
 ```yaml
-strictSources: false
+strictSources: true
 serviceScope: global
 services:
   teamusers:
     source:
-      # Exactly one of path/url/release. path installs a binary already on
-      # the node; release requires a GitHub release asset named
-      # teamusers_<version>_<arch>.zip, which this repository does not
-      # publish yet.
-      path: /opt/teamusers/teamusers
-      sha256: "<64-hex SHA-256 of the binary>" # pin the artifact; omit only with strictSources: false
+      # Pushing a v* tag builds and publishes teamusers_<version>_<arch>.zip
+      # assets (x64, arm64) via the release workflow.
+      release: "github:crazy4chicken/nsc-teamusers@v0.5.0"
+      sha256: "<SHA-256 of teamusers_0.5.0_x64.zip>"
     args: ["run"]
     env:
-      # Secrets pass through from the host environment instead of being
-      # stored in this file (host Environment values are plaintext anyway,
-      # but keep the YAML itself clean for version control).
-      TEAMUSERS_CONNECTION_STRING: "${HOST:TEAMUSERS_CONNECTION_STRING}"
-      TEAMUSERS_NOTIFICATION_SECRET: "${HOST:TEAMUSERS_NOTIFICATION_SECRET}"
+      TEAMUSERS_CONNECTION_STRING: "postgres://teamusers:s3cret@10.0.0.2:5432/teamusers"
       TEAMUSERS_KEY_DIR: /var/lib/teamusers/keys
       TEAMUSERS_NODE_ID: teamusers
+      TEAMUSERS_TOKEN_AUDIENCE: nekostick
+      TEAMUSERS_WEBAUTHN_ORIGIN: "https://id.example.com"
+      TEAMUSERS_NATS_URL: "nats://10.0.0.3:4222"
       TEAMUSERS_LOG_LEVEL: info
     start: eager    # authentication is on the fleet's critical path
     restart: on-failure
@@ -111,19 +108,24 @@ services:
 
 Notes:
 
+- Only `TEAMUSERS_CONNECTION_STRING` is strictly required; the rest are the
+  practical production set (audience, WebAuthn origin, NATS for event
+  fan-out). Add OIDC/SCIM/audit-forwarding variables as those features are
+  adopted.
 - Do not pass `PORT`/`HOST` in `args` or `env`: the host injects them per
   launch, and `teamusers` binds the injected lease by default.
 - The service CWD is the svchost service root, not the artifact directory —
   keep `TEAMUSERS_KEY_DIR` and any state paths absolute, as above.
+- One `sha256` pins one architecture's ZIP; on mixed-architecture fleets
+  either drop `strictSources` (the lock still pins the first observed
+  digest per node) or split per-architecture documents under
+  `serviceScope: document`.
 - `route.prefix` + `strip: true` is the compose equivalent of
   `ForwardingMode=Strip`; the API is root-relative inside the child, so never
   drop `strip` unless the service is mounted at the site root.
 - The health check type is `http` against `/healthz` (not the default
   `process` or a TCP check); `/readyz` remains available to the host for
   database-readiness gating.
-- Secrets in `env` still land in Nekostick's plaintext PostgreSQL
-  configuration even when written as `${HOST:...}` pass-throughs — the
-  template keeps them out of source control, not out of the host database.
 
 ## Listener leases
 
