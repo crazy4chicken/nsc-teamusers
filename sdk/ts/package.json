@@ -4,6 +4,11 @@
   "description": "TypeScript SDK for teamusers: token verification, permission caching, ABAC, and middleware",
   "type": "module",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/crazy4chicken/nsc-teamusers",
+    "directory": "sdk/ts"
+  },
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
