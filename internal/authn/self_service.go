@@ -16,6 +16,7 @@ import (
 
 	auditlog "teamusers/internal/audit"
 	"teamusers/internal/authz"
+	"teamusers/internal/domain"
 	"teamusers/internal/httpapi"
 	"teamusers/internal/passwd"
 	"teamusers/internal/store"
@@ -29,6 +30,10 @@ type meProfileResponse struct {
 	Status          string     `json:"status"`
 	EmailVerifiedAt *time.Time `json:"email_verified_at,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
+}
+
+type mePermissionsResponse struct {
+	Permissions []string `json:"permissions"`
 }
 
 type passwordChangeRequest struct {
@@ -101,6 +106,56 @@ func (s *Service) passwordPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, policy)
+}
+
+func (s *Service) listOwnPermissions(w http.ResponseWriter, r *http.Request) {
+	subject, ok := httpapi.SubjectFrom(r.Context())
+	if !ok || subject.UserID == "" {
+		writeUnauthorized(w, r)
+		return
+	}
+	set, err := authz.Resolve(r.Context(), s.q, subject.UserID)
+	if err != nil && !errors.Is(err, authz.ErrUserDisabled) {
+		httpapi.WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, mePermissionsResponse{
+		Permissions: effectivePermissionKeys(set),
+	})
+}
+
+// effectivePermissionKeys returns unconditional allow keys that remain allowed after deny precedence.
+func effectivePermissionKeys(set *authz.Set) []string {
+	if set == nil {
+		return []string{}
+	}
+	grants := make([]domain.Permission, 0, len(set.Grants))
+	requests := make([]domain.Permission, 0, len(set.Grants))
+	for _, grant := range set.Grants {
+		if grant.Condition != nil {
+			continue
+		}
+		grants = append(grants, grant.Permission)
+		if !grant.Permission.Deny {
+			requests = append(requests, grant.Permission)
+		}
+	}
+	resolutions := domain.Resolve(grants, requests)
+	permissions := make([]string, 0, len(requests))
+	seen := make(map[string]struct{}, len(requests))
+	for i, resolution := range resolutions {
+		if !resolution.Matched || !resolution.Allowed {
+			continue
+		}
+		key := requests[i].String()
+		if _, found := seen[key]; found {
+			continue
+		}
+		seen[key] = struct{}{}
+		permissions = append(permissions, key)
+	}
+	sort.Strings(permissions)
+	return permissions
 }
 
 func (s *Service) patchProfile(w http.ResponseWriter, r *http.Request) {

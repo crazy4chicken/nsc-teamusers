@@ -257,7 +257,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 		t.Fatal("non-matching ABAC check allowed a different owner")
 	}
 
-	disabledPair := loginUser(t, stack, "alice", "alice-password1")
+	disabledPair := loginUserPair(t, stack, "alice", "alice-password1")
 	status, body = stack.jsonRequest(t, http.MethodPost, "/users/"+target.ID+"/disable", nil, adminToken)
 	if status != http.StatusOK {
 		t.Fatalf("disable user status = %d, want %d: %s", status, http.StatusOK, body)

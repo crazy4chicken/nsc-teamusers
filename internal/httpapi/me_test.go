@@ -19,6 +19,7 @@ func TestImpersonatedMeRouterAllowsOnlyDocumentedReads(t *testing.T) {
 	}
 	router := NewMeRouter(auth, MeHandlers{
 		Profile:                   respond,
+		Permissions:               respond,
 		PasswordPolicy:            respond,
 		PatchProfile:              respond,
 		ChangePassword:            respond,
@@ -73,6 +74,7 @@ func TestImpersonatedMeRouterAllowsOnlyDocumentedReads(t *testing.T) {
 		{http.MethodPost, "/me/passkeys/register/finish"},
 		{http.MethodDelete, "/me/passkeys/credential-id"},
 		{http.MethodGet, "/me/passkeys"},
+		{http.MethodGet, "/me/permissions"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -81,5 +83,24 @@ func TestImpersonatedMeRouterAllowsOnlyDocumentedReads(t *testing.T) {
 				t.Fatalf("%s %s response = %d %s, want impersonation_forbidden 403", tc.method, tc.path, response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestMeRouterRegistersPermissionsRoute(t *testing.T) {
+	auth := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			subject := Subject{UserID: "current-user", Kind: "user"}
+			next.ServeHTTP(w, r.WithContext(ContextWithSubject(r.Context(), subject)))
+		})
+	}
+	router := NewMeRouter(auth, MeHandlers{
+		Permissions: func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		},
+	})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/me/permissions", nil))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("GET /me/permissions status = %d, want %d", response.Code, http.StatusNoContent)
 	}
 }

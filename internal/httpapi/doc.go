@@ -37,6 +37,10 @@ type docProfileResponse struct {
 	CreatedAt       time.Time  `json:"created_at"`
 }
 
+type docMePermissionsResponse struct {
+	Permissions []string `json:"permissions"`
+}
+
 type docProfilePatchRequest struct {
 	Username    string `json:"username,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
@@ -925,6 +929,19 @@ var DocOperations = []apidocs.Operation{
 		ResponseExample: map[string]any{"min_length": 12, "require_letter": true, "require_upper": false, "require_lower": false, "require_digit": true, "require_symbol": false, "history_count": 5, "breach_check": true},
 		Errors:          []apidocs.ErrorDoc{docUnauthorized, docInternal},
 	},
+
+	{
+		Method:          "GET",
+		Path:            "/me/permissions",
+		Tag:             "Self-service",
+		Summary:         "List effective permissions",
+		Description:     "Returns the authenticated user's effective unconditional ALLOW permission keys by expanding direct and group role bindings. Expired bindings are excluded and matching explicit deny grants override allows. Bindings with non-empty ABAC conditions are omitted because this endpoint has no request-specific resource context to evaluate them. Disabled users resolve to an empty permission set.",
+		Security:        "user",
+		Response:        docMePermissionsResponse{},
+		ResponseExample: map[string]any{"permissions": []string{"docs:read:team", "orders:read:own"}},
+		Errors:          []apidocs.ErrorDoc{docUnauthorized, docError(403, "impersonation_forbidden", "impersonation_forbidden"), docNotFound, docInternal},
+	},
+
 	{
 		Method:          "PATCH",
 		Path:            "/me",

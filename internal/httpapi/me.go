@@ -12,6 +12,7 @@ import (
 // HTTP routing package to authentication internals.
 type MeHandlers struct {
 	Profile                   http.HandlerFunc
+	Permissions               http.HandlerFunc
 	PasswordPolicy            http.HandlerFunc
 	PatchProfile              http.HandlerFunc
 	ChangePassword            http.HandlerFunc
@@ -52,6 +53,7 @@ func NewMeRouter(authMW func(http.Handler) http.Handler, handlers MeHandlers) ch
 	router.Use(restrictImpersonatedMeAccess)
 	router.Get("/me", handlers.Profile)
 	router.Get("/me/password-policy", handlers.PasswordPolicy)
+	router.Get("/me/permissions", handlers.Permissions)
 	router.Patch("/me", handlers.PatchProfile)
 	router.Post("/me/password", handlers.ChangePassword)
 	router.Post("/me/email", handlers.ChangeEmail)

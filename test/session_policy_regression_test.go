@@ -39,7 +39,7 @@ func TestServiceSessionsIgnoreUserSessionPolicies(t *testing.T) {
 		return pair
 	}
 	first := issueServicePair()
-	second := issueServicePair()
+	_ = issueServicePair()
 	firstID := refreshSessionID(first.RefreshToken)
 
 	var activeSessions int

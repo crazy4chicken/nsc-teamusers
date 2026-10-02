@@ -429,6 +429,23 @@ func loginUser(t *testing.T, stack *integrationStack, username, password string)
 	return pair.AccessToken
 }
 
+// loginUserPair behaves like loginUser but returns the full token pair for
+// tests that need the refresh token (for example to derive session IDs).
+func loginUserPair(t *testing.T, stack *integrationStack, username, password string) tokenPair {
+	t.Helper()
+	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
+		"username": username,
+		"password": password,
+	}, "")
+	if status != http.StatusOK {
+		t.Fatalf("login %q status = %d, want %d: %s", username, status, http.StatusOK, body)
+	}
+	var pair tokenPair
+	decodeResponse(t, body, &pair)
+	assertTokenPair(t, pair)
+	return pair
+}
+
 func (s *integrationStack) jsonRequest(t *testing.T, method, path string, requestBody any, bearer string) (int, []byte) {
 	t.Helper()
 	return s.jsonRequestHeaders(t, method, path, requestBody, bearer, nil)
