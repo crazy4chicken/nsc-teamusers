@@ -42,7 +42,7 @@ func TestSensitiveAdminMutationsRequireFreshAuthentication(t *testing.T) {
 	staleAuthTime := time.Now().Add(-11 * time.Minute).Unix()
 	authMW := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			permission := adminPermissionForPath(r.URL.Path)
+			permission := AdminPermissionForPath(r.URL.Path)
 			ctx := context.WithValue(r.Context(), freshAuthPermissionKey{}, permission)
 			ctx = ContextWithSubject(ctx, Subject{UserID: "admin_test", Kind: "user", AuthTime: staleAuthTime})
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -92,7 +92,7 @@ func TestAdminMutationsOutsideFreshAuthBoundaryRemainUnguarded(t *testing.T) {
 	staleAuthTime := time.Now().Add(-11 * time.Minute).Unix()
 	authMW := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			permission := adminPermissionForPath(r.URL.Path)
+			permission := AdminPermissionForPath(r.URL.Path)
 			ctx := context.WithValue(r.Context(), freshAuthPermissionKey{}, permission)
 			ctx = ContextWithSubject(ctx, Subject{UserID: "admin_test", Kind: "user", AuthTime: staleAuthTime})
 			next.ServeHTTP(w, r.WithContext(ctx))

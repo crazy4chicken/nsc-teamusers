@@ -21,14 +21,19 @@ type RouterBuilder func(config.Config, store.Q) (chi.Router, error)
 // RouterChildBuilder constructs a package-owned child router for route discovery.
 type RouterChildBuilder func(config.Config, store.Q) (chi.Router, error)
 
+// PermissionDeriver maps a method and path to any- and team-scoped permission keys.
+type PermissionDeriver func(method, path string) (anyKey, teamKey string)
+
 var (
-	builderMu sync.RWMutex
-	builder   RouterBuilder
+	builderMu           sync.RWMutex
+	builder             RouterBuilder
 	routerChildBuilders []RouterChildBuilder
 
-	operationsMu    sync.RWMutex
-	operationSet    []Operation
-	operationGroups [][]Operation
+	operationsMu        sync.RWMutex
+	operationSet        []Operation
+	operationGroups     [][]Operation
+	permissionDeriverMu sync.RWMutex
+	permissionDeriver   PermissionDeriver
 )
 
 // RegisterRouterBuilder supplies the concrete application wiring without making
@@ -51,6 +56,23 @@ func RegisterRouterChildBuilder(next RouterChildBuilder) {
 	builderMu.Lock()
 	routerChildBuilders = append(routerChildBuilders, next)
 	builderMu.Unlock()
+}
+
+// RegisterPermissionDeriver configures route-specific permission derivation.
+func RegisterPermissionDeriver(next PermissionDeriver) {
+	if next == nil {
+		return
+	}
+	permissionDeriverMu.Lock()
+	permissionDeriver = next
+	permissionDeriverMu.Unlock()
+}
+
+func registeredPermissionDeriver() PermissionDeriver {
+	permissionDeriverMu.RLock()
+	current := permissionDeriver
+	permissionDeriverMu.RUnlock()
+	return current
 }
 
 // RegisterOperations records one handler package's operation metadata.

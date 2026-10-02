@@ -8,6 +8,7 @@ type ApiOperation = RecordValue & {
   tags?: unknown
   summary?: unknown
   description?: unknown
+  'x-teamusers-permission'?: unknown
   requestBody?: unknown
   responses?: unknown
 }
@@ -102,6 +103,16 @@ function renderOperation(lines: string[], route: ApiRoute): void {
   }
   if (typeof operation.description === 'string' && operation.description !== '') {
     lines.push(operation.description, '')
+  }
+  const permission = asRecord(operation['x-teamusers-permission'])
+  if (typeof permission.any === 'string' && permission.any !== '') {
+    const team = typeof permission.team === 'string' && permission.team !== ''
+      ? ` (or \`${permission.team}\` scoped to the target team)`
+      : ''
+    const note = typeof permission.note === 'string' && permission.note !== ''
+      ? ` ${permission.note}`
+      : ''
+    lines.push(`**Required permission** — \`${permission.any}\`${team}${note}`, '')
   }
 
   const parameters = pathParameters(route.path)

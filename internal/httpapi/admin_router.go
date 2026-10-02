@@ -53,8 +53,8 @@ func (h *adminHandler) requirePermission(next http.Handler) http.Handler {
 			return
 		}
 
-		area := adminPermissionArea(r.URL.Path)
-		key := adminPermissionForPath(r.URL.Path)
+		area := AdminPermissionArea(r.URL.Path)
+		key := AdminPermissionForPath(r.URL.Path)
 		if area == "" || key == "" {
 			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
 			return
@@ -80,7 +80,7 @@ func (h *adminHandler) requirePermission(next http.Handler) http.Handler {
 
 		teamID := ""
 		targeted := false
-		if isTeamScopedAdminArea(area) {
+		if IsTeamScopedAdminArea(area) {
 			var targetErr error
 			teamID, targeted, targetErr = h.resolveAdminTeam(r.Context(), r, area)
 			if targetErr != nil {
@@ -103,7 +103,7 @@ func (h *adminHandler) requirePermission(next http.Handler) http.Handler {
 			next.ServeHTTP(w, withAdminGrantScope(r, adminGrantScopeAny))
 			return
 		}
-		if !isTeamScopedAdminArea(area) {
+		if !IsTeamScopedAdminArea(area) {
 			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
 			return
 		}
@@ -197,7 +197,8 @@ func adminPathSegments(path string) []string {
 	return strings.Split(trimmed, "/")
 }
 
-func adminPermissionArea(path string) string {
+// AdminPermissionArea returns the IAM permission area for an admin route path.
+func AdminPermissionArea(path string) string {
 	segments := adminPathSegments(path)
 	if len(segments) == 0 {
 		return ""
@@ -234,13 +235,24 @@ func adminPermissionArea(path string) string {
 	}
 }
 
-func isTeamScopedAdminArea(area string) bool {
+// IsTeamScopedAdminArea reports whether an admin permission area can be granted
+// at team scope.
+func IsTeamScopedAdminArea(area string) bool {
 	switch area {
 	case "teams", "groups", "roles", "bindings":
 		return true
 	default:
 		return false
 	}
+}
+
+// AdminPermissionForPath returns the any-scoped IAM permission for an admin route.
+func AdminPermissionForPath(path string) string {
+	area := AdminPermissionArea(path)
+	if area == "" {
+		return ""
+	}
+	return "iam:" + area + ":any"
 }
 
 func (h *adminHandler) resolveAdminTeam(ctx context.Context, r *http.Request, area string) (string, bool, error) {
@@ -378,14 +390,6 @@ func adminBodyField(r *http.Request, field string) (json.RawMessage, bool, error
 	}
 	value, present := values[field]
 	return value, present, nil
-}
-
-func adminPermissionForPath(path string) string {
-	area := adminPermissionArea(path)
-	if area == "" {
-		return ""
-	}
-	return "iam:" + area + ":any"
 }
 
 type adminHandler struct {

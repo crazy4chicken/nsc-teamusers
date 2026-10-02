@@ -19,6 +19,15 @@ func main() {
 }
 
 func generate() error {
+	apidocs.RegisterPermissionDeriver(func(_ string, path string) (anyKey, teamKey string) {
+		area := httpapi.AdminPermissionArea(path)
+		anyKey = httpapi.AdminPermissionForPath(path)
+		if anyKey != "" && httpapi.IsTeamScopedAdminArea(area) {
+			teamKey = "iam:" + area + ":team"
+		}
+		return anyKey, teamKey
+	})
+
 	operations := apidocs.All(authn.DocOperations, httpapi.DocOperations, httpapi.DocOIDCOperations, httpapi.DocSCIMOperations, httpapi.DocImpersonationOperations, authz.DocOperations)
 	apidocs.SetOperations(operations)
 	operations, err := apidocs.Operations()

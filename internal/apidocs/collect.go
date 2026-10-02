@@ -38,12 +38,19 @@ func collect(router chi.Router, metadata []Operation) ([]Operation, error) {
 	}
 
 	operations := make([]Operation, 0, len(walked))
+	deriver := registeredPermissionDeriver()
 	for _, route := range walked {
 		key := operationKey(route.method, route.path)
 		operation, ok := byKey[key]
 		if !ok {
 			return nil, fmt.Errorf("walked route %s has no operation metadata", key)
 		}
+		var anyKey, teamKey string
+		if deriver != nil {
+			anyKey, teamKey = deriver(route.method, route.path)
+		}
+		operation.DerivedPermissionAny = anyKey
+		operation.DerivedPermissionTeam = teamKey
 		operations = append(operations, operation)
 	}
 	missing := make([]string, 0)

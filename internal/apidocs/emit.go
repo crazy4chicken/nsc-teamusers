@@ -98,7 +98,7 @@ type yamlEntry struct {
 type orderedMap []yamlEntry
 
 func operationYAML(operation Operation) orderedMap {
-	entries := make([]yamlEntry, 0, 7)
+	entries := make([]yamlEntry, 0, 8)
 	if operation.Tag != "" {
 		entries = append(entries, yamlEntry{key: "tags", value: []any{operation.Tag}})
 	}
@@ -210,6 +210,16 @@ func operationYAML(operation Operation) orderedMap {
 		security = []any{orderedMap{{key: "bearerAuth", value: []any{}}}}
 	}
 	entries = append(entries, yamlEntry{key: "security", value: security})
+	if operation.DerivedPermissionAny != "" {
+		permission := orderedMap{{key: "any", value: operation.DerivedPermissionAny}}
+		if operation.DerivedPermissionTeam != "" {
+			permission = append(permission, yamlEntry{key: "team", value: operation.DerivedPermissionTeam})
+		}
+		if operation.PermissionNote != "" {
+			permission = append(permission, yamlEntry{key: "note", value: operation.PermissionNote})
+		}
+		entries = append(entries, yamlEntry{key: "x-teamusers-permission", value: permission})
+	}
 	return orderedMap(entries)
 }
 

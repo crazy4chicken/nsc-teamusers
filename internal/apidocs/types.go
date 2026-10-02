@@ -4,17 +4,20 @@ import "reflect"
 
 // Operation describes one HTTP operation in the generated OpenAPI document.
 type Operation struct {
-	Method          string
-	Path            string
-	Tag             string
-	Summary         string
-	Description     string
-	Security        string
-	Request         any
-	Response        any
-	RequestExample  any
-	ResponseExample any
-	Errors          []ErrorDoc
+	Method                string
+	Path                  string
+	Tag                   string
+	Summary               string
+	Description           string
+	DerivedPermissionAny  string
+	DerivedPermissionTeam string
+	PermissionNote        string
+	Security              string
+	Request               any
+	Response              any
+	RequestExample        any
+	ResponseExample       any
+	Errors                []ErrorDoc
 }
 
 // ErrorDoc describes one documented problem response.
