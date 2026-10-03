@@ -176,7 +176,7 @@ func parseBootstrapAdminArgs(args []string) (string, []string, error) {
 func runBootstrapAdmin(cfg config.Config, username string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), bootstrapTimeout)
 	defer cancel()
-	pool, err := store.NewPool(ctx, cfg.ConnectionString)
+	pool, err := store.NewPool(ctx, cfg.ConnectionString, cfg.DBSchema)
 	if err != nil {
 		return fmt.Errorf("bootstrap-admin: connect PostgreSQL: %w", err)
 	}
@@ -574,13 +574,13 @@ func run(cfg config.Config) error {
 	defer stop()
 
 	migrationContext, cancelMigration := context.WithTimeout(signalContext, migrationTimeout)
-	err := applyMigrations(migrationContext, cfg.ConnectionString)
+	err := applyMigrations(migrationContext, cfg.ConnectionString, cfg.DBSchema)
 	cancelMigration()
 	if err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 
-	pool, err := store.NewPool(signalContext, cfg.ConnectionString)
+	pool, err := store.NewPool(signalContext, cfg.ConnectionString, cfg.DBSchema)
 	if err != nil {
 		return err
 	}
@@ -783,7 +783,7 @@ func runLoginActivityReaper(ctx context.Context, q store.Q, retentionDays int, l
 	}
 }
 
-func applyMigrations(ctx context.Context, connectionString string) error {
+func applyMigrations(ctx context.Context, connectionString string, schema string) error {
 	db, err := goose.OpenDBWithDriver("pgx", connectionString)
 	if err != nil {
 		return err
@@ -793,6 +793,19 @@ func applyMigrations(ctx context.Context, connectionString string) error {
 	db.SetMaxIdleConns(1)
 	if err := db.PingContext(ctx); err != nil {
 		return err
+	}
+	schema = strings.TrimSpace(schema)
+	if schema != "" {
+		identifier := pgx.Identifier{schema}.Sanitize()
+		// Single-connection database: the session settings below hold for the
+		// whole migration run.
+		if _, err := db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+identifier); err != nil {
+			return fmt.Errorf("ensure schema %s (needs database CREATE privilege): %w", schema, err)
+		}
+		if _, err := db.ExecContext(ctx, "SET search_path TO "+identifier+", public"); err != nil {
+			return fmt.Errorf("set search_path to %s: %w", schema, err)
+		}
+		goose.SetTableName(identifier + ".goose_db_version")
 	}
 
 	if _, err := db.ExecContext(ctx,
@@ -832,8 +845,8 @@ func doctor(args ...string) bool {
 		Config:  cfg.Redacted(),
 		KeyDir:  checkKeyDir(cfg.KeyDir),
 	}
-	report.Database = checkDatabase(ctx, cfg.ConnectionString)
-	report.Migrations = checkMigrations(ctx, cfg.ConnectionString)
+	report.Database = checkDatabase(ctx, cfg.ConnectionString, cfg.DBSchema)
+	report.Migrations = checkMigrations(ctx, cfg.ConnectionString, cfg.DBSchema)
 	report.OK = report.Database.OK && report.Migrations.OK && report.KeyDir.OK
 	if err := writeJSON(os.Stdout, report); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -842,8 +855,8 @@ func doctor(args ...string) bool {
 	return report.OK
 }
 
-func checkDatabase(ctx context.Context, connectionString string) checkOutput {
-	pool, err := store.NewPool(ctx, connectionString)
+func checkDatabase(ctx context.Context, connectionString string, schema string) checkOutput {
+	pool, err := store.NewPool(ctx, connectionString, schema)
 	if err != nil {
 		return checkOutput{Error: err.Error()}
 	}
@@ -854,7 +867,7 @@ func checkDatabase(ctx context.Context, connectionString string) checkOutput {
 	return checkOutput{OK: true}
 }
 
-func checkMigrations(ctx context.Context, connectionString string) checkOutput {
+func checkMigrations(ctx context.Context, connectionString string, schema string) checkOutput {
 	expected := expectedMigrationVersion()
 	db, err := goose.OpenDBWithDriver("pgx", connectionString)
 	if err != nil {
@@ -868,6 +881,12 @@ func checkMigrations(ctx context.Context, connectionString string) checkOutput {
 		return checkOutput{ExpectedVersion: expected, Error: err.Error()}
 	}
 	goose.SetBaseFS(migrations.FS)
+	if trimmed := strings.TrimSpace(schema); trimmed != "" {
+		goose.SetTableName(pgx.Identifier{trimmed}.Sanitize() + ".goose_db_version")
+		if _, err := db.ExecContext(ctx, "SET search_path TO "+pgx.Identifier{trimmed}.Sanitize()+", public"); err != nil {
+			return checkOutput{ExpectedVersion: expected, Error: err.Error()}
+		}
+	}
 	current, err := goose.GetDBVersionContext(ctx, db)
 	if err != nil {
 		return checkOutput{ExpectedVersion: expected, Error: err.Error()}

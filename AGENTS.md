@@ -133,6 +133,10 @@ with the user before the final commit; it is never taken unilaterally.
 
 Env + flags, precedence: CLI > `TEAMUSERS_*` > `PORT`/`HOST` (Nekostick
 injected) > defaults. Current env vars: `TEAMUSERS_CONNECTION_STRING`,
+`TEAMUSERS_DB_SCHEMA` (optional; when set to a valid identifier the schema is
+created if missing, every connection uses it as `search_path`, and the goose
+version table lives inside it — needs database-level CREATE privilege the
+first time),
 `TEAMUSERS_LISTEN_ADDRESS`, `TEAMUSERS_LISTEN_PORT`, `TEAMUSERS_KEY_DIR`,
 `TEAMUSERS_NATS_URL`, `TEAMUSERS_NODE_ID`,
 `TEAMUSERS_NOTIFICATION_ENDPOINTS`, `TEAMUSERS_NOTIFICATION_SECRET`,

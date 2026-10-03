@@ -229,7 +229,7 @@ func newIntegrationDatabase(t *testing.T) *integrationDatabase {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	adminPool, err := store.NewPool(ctx, adminDSN)
+	adminPool, err := store.NewPool(ctx, adminDSN, "")
 	if err != nil {
 		t.Fatalf("connect PostgreSQL admin pool: %v", err)
 	}

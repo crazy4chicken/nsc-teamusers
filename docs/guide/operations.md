@@ -17,6 +17,7 @@ default**. The supported environment variables are:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TEAMUSERS_CONNECTION_STRING` | empty | PostgreSQL DSN; required by `run` and `doctor`. |
+| `TEAMUSERS_DB_SCHEMA` | empty (default schema) | Optional PostgreSQL schema for all teamusers objects. When set to a valid identifier the schema is created if missing, every connection searches it first, and the goose version table lives inside it. The role needs database-level `CREATE` privilege on first use (or an administrator pre-creates the schema with `AUTHORIZATION`). |
 | `TEAMUSERS_LISTEN_ADDRESS` | `127.0.0.1` | HTTP bind address. |
 | `TEAMUSERS_LISTEN_PORT` | `0` | HTTP port; `0` asks the OS for an ephemeral port. |
 | `TEAMUSERS_TRUSTED_PROXIES` | empty | Comma-separated trusted proxy CIDRs or IPs; forwarded hops are walked right-to-left to select the rightmost non-trusted address. The trusted edge proxy must overwrite client-supplied `X-Forwarded-For` before forwarding. |

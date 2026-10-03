@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 const (
 	envConnectionString           = "TEAMUSERS_CONNECTION_STRING"
+	envDBSchema                   = "TEAMUSERS_DB_SCHEMA"
 	envListenAddress              = "TEAMUSERS_LISTEN_ADDRESS"
 	envListenPort                 = "TEAMUSERS_LISTEN_PORT"
 	envNodeID                     = "TEAMUSERS_NODE_ID"
@@ -64,6 +66,7 @@ const (
 // default order, respectively.
 type Config struct {
 	ConnectionString           string         `json:"connection_string,omitempty"`
+	DBSchema                   string         `json:"db_schema,omitempty"`
 	ListenAddress              string         `json:"listen_address"`
 	ListenPort                 int            `json:"listen_port"`
 	NodeID                     string         `json:"node_id,omitempty"`
@@ -108,6 +111,7 @@ func Load(args ...string) (Config, error) {
 	fs := flag.NewFlagSet("teamusers", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	connectionString := envOrDefault(envConnectionString, "")
+	dbSchema := envOrDefault(envDBSchema, "")
 	listenAddress := envOrDefault(envListenAddress, envOrDefault("HOST", "127.0.0.1"))
 	nodeID := envOrDefault(envNodeID, "")
 	logLevel := envOrDefault(envLogLevel, "info")
@@ -249,6 +253,7 @@ func Load(args ...string) (Config, error) {
 
 	cfg := Config{
 		ConnectionString:           connectionString,
+		DBSchema:                   dbSchema,
 		ListenAddress:              listenAddress,
 		ListenPort:                 port,
 		NodeID:                     nodeID,
@@ -316,9 +321,14 @@ func (c Config) WithDefaults() Config {
 	return c
 }
 
+var dbSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+
 // Validate checks settings that are meaningful for every command. Database
 // connectivity is checked by run and doctor, where a live database is needed.
 func (c Config) Validate() error {
+	if schema := strings.TrimSpace(c.DBSchema); schema != "" && !dbSchemaPattern.MatchString(schema) {
+		return fmt.Errorf("db schema must match [a-z_][a-z0-9_]*, got %q", c.DBSchema)
+	}
 	if strings.TrimSpace(c.ListenAddress) == "" {
 		return errors.New("listen address must not be empty")
 	}

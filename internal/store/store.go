@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -26,8 +27,10 @@ type Tx interface {
 }
 
 // NewPool parses the connection string and opens a pgx connection pool. The
-// caller owns the returned pool and must call Close when it is done.
-func NewPool(ctx context.Context, connectionString string) (*pgxpool.Pool, error) {
+// caller owns the returned pool and must call Close when it is done. When
+// schema is non-empty it is created if missing and every pooled connection
+// searches it first, so unqualified table names resolve inside it.
+func NewPool(ctx context.Context, connectionString string, schema string) (*pgxpool.Pool, error) {
 	if connectionString == "" {
 		return nil, errors.New("connection string must not be empty")
 	}
@@ -35,9 +38,25 @@ func NewPool(ctx context.Context, connectionString string) (*pgxpool.Pool, error
 	if err != nil {
 		return nil, fmt.Errorf("parse connection string: %w", err)
 	}
+	schema = strings.TrimSpace(schema)
+	if schema != "" {
+		identifier := pgx.Identifier{schema}.Sanitize()
+		poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+			if _, err := conn.Exec(ctx, "SET search_path TO "+identifier+", public"); err != nil {
+				return fmt.Errorf("set search_path to %s: %w", schema, err)
+			}
+			return nil
+		}
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("open PostgreSQL pool: %w", err)
+	}
+	if schema != "" {
+		if _, err := pool.Exec(ctx, "CREATE SCHEMA IF NOT EXISTS "+pgx.Identifier{schema}.Sanitize()); err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("ensure schema %s (needs database CREATE privilege): %w", schema, err)
+		}
 	}
 	return pool, nil
 }
