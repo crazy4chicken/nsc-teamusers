@@ -334,7 +334,6 @@ var testBootstrapAdminPermissionKeys = []string{
 	"iam:audit:any",
 	"iam:sessions:any",
 	"iam:policies:any",
-	"iam:mfa:any",
 	"iam:keys:any",
 	"iam:impersonate:any",
 	"iam:*:any",

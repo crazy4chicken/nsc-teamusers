@@ -210,9 +210,6 @@ func AdminPermissionArea(path string) string {
 	case "invitations", "users":
 		return "users"
 	case "policies":
-		if len(segments) > 1 && segments[1] == "mfa" {
-			return "mfa"
-		}
 		return "policies"
 	case "teams":
 		return "teams"

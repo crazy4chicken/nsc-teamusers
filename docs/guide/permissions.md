@@ -13,7 +13,7 @@ scope is a platform grant and is valid for every administrative area. The
 - `iam:groups:any` / `iam:groups:team`
 - `iam:roles:any` / `iam:roles:team`
 - `iam:bindings:any` / `iam:bindings:team`
-- `iam:policies:any` — Manage password policies. This is security-critical:
+- `iam:policies:any` — Manage password and MFA policies. This is security-critical:
   granting it can weaken any account's password requirements.
 - `iam:*:any` — Platform wildcard for every current and future
   `iam:<area>:any` permission.

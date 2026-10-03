@@ -553,7 +553,7 @@ var DocOperations = []apidocs.Operation{
 	{
 		Method:          "GET",
 		Path:            "/policies/password",
-		Tag:             "Password Policies",
+		Tag:             "Policies",
 		Summary:         "List password policies",
 		Description:     "Use to page through password policies targeting users, teams, groups, or roles.",
 		Security:        "admin",
@@ -564,7 +564,7 @@ var DocOperations = []apidocs.Operation{
 	{
 		Method:          "POST",
 		Path:            "/policies/password",
-		Tag:             "Password Policies",
+		Tag:             "Policies",
 		Summary:         "Create a password policy",
 		Description:     "Use to create a password policy for an existing user, team, group, or role. When policies overlap, higher priority wins independently for each field; an unset field falls through to lower-priority policies and then to the built-in default.",
 		PermissionNote:  "Requires authentication within the previous ten minutes; otherwise returns 403 step_up_required.",
@@ -578,7 +578,7 @@ var DocOperations = []apidocs.Operation{
 	{
 		Method:          "GET",
 		Path:            "/policies/password/{id}",
-		Tag:             "Password Policies",
+		Tag:             "Policies",
 		Summary:         "Get a password policy",
 		Description:     "Use to retrieve one password policy by ID before editing or removing it.",
 		Security:        "admin",
@@ -589,7 +589,7 @@ var DocOperations = []apidocs.Operation{
 	{
 		Method:          "PATCH",
 		Path:            "/policies/password/{id}",
-		Tag:             "Password Policies",
+		Tag:             "Policies",
 		Summary:         "Update a password policy",
 		Description:     "Use to partially update a password policy. Omitted fields remain unchanged; send null for nullable policy fields to clear them. When policies overlap, higher priority wins independently for each field; an unset field falls through to lower-priority policies and then to the built-in default.",
 		PermissionNote:  "Requires authentication within the previous ten minutes; otherwise returns 403 step_up_required.",
@@ -603,7 +603,7 @@ var DocOperations = []apidocs.Operation{
 	{
 		Method:         "DELETE",
 		Path:           "/policies/password/{id}",
-		Tag:            "Password Policies",
+		Tag:            "Policies",
 		Summary:        "Delete a password policy",
 		Description:    "Use to remove a password policy. The deletion is audited and returns no body.",
 		PermissionNote: "Requires authentication within the previous ten minutes; otherwise returns 403 step_up_required.",
@@ -613,7 +613,7 @@ var DocOperations = []apidocs.Operation{
 	{
 		Method:          "GET",
 		Path:            "/policies/mfa",
-		Tag:             "MFA Policies",
+		Tag:             "Policies",
 		Summary:         "List MFA policies",
 		Description:     "Use to page through policies that require or allow MFA for users, teams, groups, roles, or all users. Changes are audited and apply at the next login without revoking existing sessions.",
 		Security:        "admin",
@@ -624,7 +624,7 @@ var DocOperations = []apidocs.Operation{
 	{
 		Method:          "POST",
 		Path:            "/policies/mfa",
-		Tag:             "MFA Policies",
+		Tag:             "Policies",
 		Summary:         "Create an MFA policy",
 		Description:     "Use to create an MFA requirement for an existing team, group, role, or the default population. The highest-priority matching policy applies at password or passkey login; policy mutations are audited.",
 		Security:        "admin",
@@ -637,7 +637,7 @@ var DocOperations = []apidocs.Operation{
 	{
 		Method:          "GET",
 		Path:            "/policies/mfa/{id}",
-		Tag:             "MFA Policies",
+		Tag:             "Policies",
 		Summary:         "Get an MFA policy",
 		Description:     "Use to retrieve one MFA policy before editing or removing it.",
 		Security:        "admin",
@@ -648,7 +648,7 @@ var DocOperations = []apidocs.Operation{
 	{
 		Method:          "PATCH",
 		Path:            "/policies/mfa/{id}",
-		Tag:             "MFA Policies",
+		Tag:             "Policies",
 		Summary:         "Update an MFA policy",
 		Description:     "Use to partially update an MFA policy. Omitted fields remain unchanged; subject changes must refer to an existing team, group, or role.",
 		Security:        "admin",
@@ -661,7 +661,7 @@ var DocOperations = []apidocs.Operation{
 	{
 		Method:      "DELETE",
 		Path:        "/policies/mfa/{id}",
-		Tag:         "MFA Policies",
+		Tag:         "Policies",
 		Summary:     "Delete an MFA policy",
 		Description: "Use to remove an MFA policy. The deletion is audited and returns no body.",
 		Security:    "admin",
