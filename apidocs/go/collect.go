@@ -9,7 +9,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func collect(router chi.Router, metadata []Operation) ([]Operation, error) {
+// Collect validates router routes against metadata and applies derived permissions.
+func Collect(router chi.Router, metadata []Operation, deriver PermissionDeriver) ([]Operation, error) {
 	if router == nil {
 		return nil, fmt.Errorf("cannot collect operations from a nil router")
 	}
@@ -38,7 +39,6 @@ func collect(router chi.Router, metadata []Operation) ([]Operation, error) {
 	}
 
 	operations := make([]Operation, 0, len(walked))
-	deriver := registeredPermissionDeriver()
 	for _, route := range walked {
 		key := operationKey(route.method, route.path)
 		operation, ok := byKey[key]

@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"teamusers/internal/apidocs"
+	"github.com/crazy4chicken/nsc-teamusers/apidocs/go"
+
+	"teamusers/internal/apidocsgen"
 	"teamusers/internal/authn"
 	"teamusers/internal/authz"
 	"teamusers/internal/httpapi"
@@ -19,7 +21,8 @@ func main() {
 }
 
 func generate() error {
-	apidocs.RegisterPermissionDeriver(func(_ string, path string) (anyKey, teamKey string) {
+	operations := apidocs.All(authn.DocOperations, httpapi.DocOperations, httpapi.DocOIDCOperations, httpapi.DocSCIMOperations, httpapi.DocImpersonationOperations, authz.DocOperations)
+	operations, err := apidocsgen.Operations(operations, func(_ string, path string) (anyKey, teamKey string) {
 		area := httpapi.AdminPermissionArea(path)
 		anyKey = httpapi.AdminPermissionForPath(path)
 		if anyKey != "" && httpapi.IsTeamScopedAdminArea(area) {
@@ -27,10 +30,6 @@ func generate() error {
 		}
 		return anyKey, teamKey
 	})
-
-	operations := apidocs.All(authn.DocOperations, httpapi.DocOperations, httpapi.DocOIDCOperations, httpapi.DocSCIMOperations, httpapi.DocImpersonationOperations, authz.DocOperations)
-	apidocs.SetOperations(operations)
-	operations, err := apidocs.Operations()
 	if err != nil {
 		return fmt.Errorf("collect API operations: %w", err)
 	}
@@ -53,7 +52,22 @@ func writeSpec(path string, operations []apidocs.Operation) error {
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
-	if err := apidocs.Emit(operations, temporary); err != nil {
+	teamusersOptions := apidocs.EmitOptions{
+		Title:   "Teamusers API",
+		Version: "1.0.0",
+		Servers: []apidocs.Server{{
+			URL:         "http://localhost:8080",
+			Description: "Nekostick /iam Strip forwarding",
+		}},
+		SecurityScheme: apidocs.SecurityScheme{
+			Name:         "bearerAuth",
+			Type:         "http",
+			Scheme:       "bearer",
+			BearerFormat: "EdDSA JWT",
+		},
+		PermissionExtension: "x-teamusers-permission",
+	}
+	if err := apidocs.Emit(operations, temporary, teamusersOptions); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("emit document: %w", err)
 	}

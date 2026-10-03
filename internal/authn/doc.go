@@ -6,12 +6,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"teamusers/internal/apidocs"
-	"teamusers/internal/audit"
-	"teamusers/internal/authz"
-	"teamusers/internal/config"
-	"teamusers/internal/httpapi"
-	"teamusers/internal/store"
+"github.com/crazy4chicken/nsc-teamusers/apidocs/go"
+
+"teamusers/internal/apidocsgen"
+"teamusers/internal/audit"
+"teamusers/internal/authz"
+"teamusers/internal/config"
+"teamusers/internal/httpapi"
+"teamusers/internal/store"
 )
 
 type loginResponse struct {
@@ -374,8 +376,7 @@ var DocOperations = []apidocs.Operation{
 }
 
 func init() {
-	apidocs.RegisterOperations(DocOperations)
-	apidocs.RegisterRouterBuilder(func(cfg config.Config, q store.Q) (chi.Router, error) {
+		apidocsgen.RegisterRouterBuilder(func(cfg config.Config, q store.Q) (chi.Router, error) {
 		server := httpapi.NewServer(cfg, nil)
 		auditWriter := audit.NewWriter()
 		service, err := New(Deps{Config: cfg, Q: q, Pool: nil, Audit: auditWriter})

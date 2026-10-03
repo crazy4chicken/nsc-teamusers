@@ -20,8 +20,12 @@ internal/
   httpapi/              chi routers: runtime plane, /me plane, admin plane, middleware
   events/               outbox relay -> NATS JetStream; notify.* -> HMAC HTTP
   audit/                append-only audit writer
-  apidocs/              route<->operation-metadata pairing, OpenAPI emission
+  apidocsgen/           teamusers-side wiring for spec generation (builders, fake store)
 migrations/             goose SQL, numbered NNNN_name.sql, Up/Down mandatory
+apidocs/go/             standalone Go module (github.com/crazy4chicken/nsc-teamusers/apidocs/go):
+                        chi route walking, route<->metadata pairing, OpenAPI emission;
+                        distributed via apidocs/go/vX.Y.Z tags
+apidocs/vitepress/      npm package teamusers-apidocs-vitepress (API reference renderer)
 sdk/go|ts|python/       local-verification SDKs (JWKS cache, perm cache, middleware)
 test/                   end-to-end integration tests (TEAMUSERS_TEST_PG-gated)
 docs/                   VitePress site; api/reference + public/openapi.yaml generated
@@ -76,7 +80,7 @@ is unset. No in-memory substitute is accepted.
 ## Rules for changes
 
 1. **New/changed route** -> register handler AND add/update its `Operation`
-   metadata in `internal/httpapi/doc.go`. `internal/apidocs/collect.go`
+   metadata in `internal/httpapi/doc.go`. `apidocs/go/collect.go`
    enforces bidirectional pairing: `go run ./cmd/genspec` fails if a walked
    route lacks metadata or metadata matches no route. Never hand-edit
    `docs/public/openapi.yaml` or `docs/api/reference/` (generated).
@@ -103,7 +107,14 @@ is unset. No in-memory substitute is accepted.
 ## SDK versioning
 
 SDK versions live in `sdk/ts/package.json`, `sdk/python/pyproject.toml`,
-and annotated `sdk/go/vX.Y.Z` git tags for the Go module. Bumps follow
+and annotated `sdk/go/vX.Y.Z` git tags for the Go module. The extracted
+docs tooling follows the same scheme in its own namespaces: the
+`apidocs/go` module ships via annotated `apidocs/go/vX.Y.Z` tags (the
+root `go.mod` uses a `replace` to `./apidocs/go`, so tag versions matter
+only for external consumers) and the `apidocs/vitepress` npm package
+`teamusers-apidocs-vitepress` versions in `apidocs/vitepress/package.json`
+with publish automation in `.github/workflows/apidocs_publish_npm.yml`.
+Bumps follow
 semver strictly (breaking -> major, additive -> minor, fix -> patch).
 Unless the user
 explicitly requests a version bump, only advance the `-preview.N`

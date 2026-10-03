@@ -1,6 +1,6 @@
 package httpapi
 
-import "teamusers/internal/apidocs"
+import "github.com/crazy4chicken/nsc-teamusers/apidocs/go"
 
 // DocSCIMOperations documents the bearer-protected SCIM 2.0 surface.
 var DocSCIMOperations = []apidocs.Operation{
@@ -204,6 +204,3 @@ var DocSCIMOperations = []apidocs.Operation{
 	},
 }
 
-func init() {
-	apidocs.RegisterOperations(DocSCIMOperations)
-}

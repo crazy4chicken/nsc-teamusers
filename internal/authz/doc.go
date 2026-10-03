@@ -1,6 +1,6 @@
 package authz
 
-import "teamusers/internal/apidocs"
+import "github.com/crazy4chicken/nsc-teamusers/apidocs/go"
 
 func docError(status int, code, title string) apidocs.ErrorDoc {
 	return apidocs.ErrorDoc{Status: status, Code: code, Title: title}
@@ -57,6 +57,3 @@ var DocOperations = []apidocs.Operation{
 	},
 }
 
-func init() {
-	apidocs.RegisterOperations(DocOperations)
-}

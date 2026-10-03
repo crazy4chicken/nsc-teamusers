@@ -1,6 +1,6 @@
 package httpapi
 
-import "teamusers/internal/apidocs"
+import "github.com/crazy4chicken/nsc-teamusers/apidocs/go"
 
 // DocImpersonationOperations describes the administrative impersonation route.
 var DocImpersonationOperations = []apidocs.Operation{
@@ -37,6 +37,3 @@ var DocImpersonationOperations = []apidocs.Operation{
 	},
 }
 
-func init() {
-	apidocs.RegisterOperations(DocImpersonationOperations)
-}

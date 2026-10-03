@@ -5,8 +5,8 @@
   "scripts": {
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "predocs:dev": "go run ./cmd/genspec",
-    "predocs:build": "go run ./cmd/genspec"
+    "predocs:dev": "pnpm --filter teamusers-apidocs-vitepress build && go run ./cmd/genspec",
+    "predocs:build": "pnpm --filter teamusers-apidocs-vitepress build && go run ./cmd/genspec"
   },
   "keywords": [],
   "license": "AGPL-3.0-only",
@@ -20,6 +20,7 @@
   "packageManager": "pnpm@12.6.0",
   "type": "module",
   "devDependencies": {
+    "teamusers-apidocs-vitepress": "workspace:*",
     "vitepress": "^1.6.4",
     "vitepress-plugin-tabs": "^0.9.1",
     "yaml": "^2.9.1"

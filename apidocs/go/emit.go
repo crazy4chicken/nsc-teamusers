@@ -13,10 +13,28 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Emit writes a deterministic OpenAPI 3.1 document for operations.
-func Emit(ops []Operation, w io.Writer) error {
+// Emit writes a deterministic OpenAPI 3.1 document using the supplied options.
+func Emit(ops []Operation, w io.Writer, options EmitOptions) error {
 	if w == nil {
 		return fmt.Errorf("OpenAPI writer must not be nil")
+	}
+	if options.Title == "" {
+		options.Title = "API"
+	}
+	if options.Version == "" {
+		options.Version = "1.0.0"
+	}
+	if options.SecurityScheme == (SecurityScheme{}) {
+		options.SecurityScheme = SecurityScheme{
+			Name:         "bearerAuth",
+			Type:         "http",
+			Scheme:       "bearer",
+			BearerFormat: "JWT",
+		}
+	}
+	if options.PermissionExtension == "" {
+		// Must match the key read by the teamusers-apidocs-vitepress renderer.
+		options.PermissionExtension = "x-teamusers-permission"
 	}
 	tags := make(map[string]struct{})
 	for _, operation := range ops {
@@ -53,33 +71,55 @@ func Emit(ops []Operation, w io.Writer) error {
 		for _, operation := range operations {
 			operationEntries = append(operationEntries, yamlEntry{
 				key:   strings.ToLower(operation.Method),
-				value: operationYAML(operation),
+				value: operationYAML(operation, options),
 			})
 		}
 		pathEntries = append(pathEntries, yamlEntry{key: path, value: orderedMap(operationEntries)})
 	}
 
+	servers := make([]any, 0, len(options.Servers))
+	for _, server := range options.Servers {
+		servers = append(servers, orderedMap{
+			{key: "url", value: server.URL},
+			{key: "description", value: server.Description},
+		})
+	}
+
+	securityScheme := orderedMap{}
+	if options.SecurityScheme.Type != "" {
+		securityScheme = append(securityScheme, yamlEntry{key: "type", value: options.SecurityScheme.Type})
+	}
+	if options.SecurityScheme.Scheme != "" {
+		securityScheme = append(securityScheme, yamlEntry{key: "scheme", value: options.SecurityScheme.Scheme})
+	}
+	if options.SecurityScheme.BearerFormat != "" {
+		securityScheme = append(securityScheme, yamlEntry{key: "bearerFormat", value: options.SecurityScheme.BearerFormat})
+	}
+	components := orderedMap{
+		{key: "schemas", value: orderedMap{{key: "ProblemDetails", value: problemDetailsSchema()}}},
+	}
+	if options.SecurityScheme.Name != "" {
+		components = append(components, yamlEntry{key: "securitySchemes", value: orderedMap{{
+			key:   options.SecurityScheme.Name,
+			value: securityScheme,
+		}}})
+	}
+
 	doc := orderedMap{
 		{key: "openapi", value: "3.1.0"},
 		{key: "info", value: orderedMap{
-			{key: "title", value: "Teamusers API"},
-			{key: "version", value: "1.0.0"},
-		}},
-		{key: "servers", value: []any{orderedMap{
-			{key: "url", value: "http://localhost:8080"},
-			{key: "description", value: "Nekostick /iam Strip forwarding"},
-		}}},
-		{key: "tags", value: tagValues},
-		{key: "paths", value: orderedMap(pathEntries)},
-		{key: "components", value: orderedMap{
-			{key: "schemas", value: orderedMap{{key: "ProblemDetails", value: problemDetailsSchema()}}},
-			{key: "securitySchemes", value: orderedMap{{key: "bearerAuth", value: orderedMap{
-				{key: "type", value: "http"},
-				{key: "scheme", value: "bearer"},
-				{key: "bearerFormat", value: "EdDSA JWT"},
-			}}}},
+			{key: "title", value: options.Title},
+			{key: "version", value: options.Version},
 		}},
 	}
+	if len(servers) > 0 {
+		doc = append(doc, yamlEntry{key: "servers", value: servers})
+	}
+	doc = append(doc,
+		yamlEntry{key: "tags", value: tagValues},
+		yamlEntry{key: "paths", value: orderedMap(pathEntries)},
+		yamlEntry{key: "components", value: components},
+	)
 
 	node := yamlNode(doc)
 	encoder := yaml.NewEncoder(w)
@@ -97,7 +137,7 @@ type yamlEntry struct {
 
 type orderedMap []yamlEntry
 
-func operationYAML(operation Operation) orderedMap {
+func operationYAML(operation Operation, options EmitOptions) orderedMap {
 	entries := make([]yamlEntry, 0, 8)
 	if operation.Tag != "" {
 		entries = append(entries, yamlEntry{key: "tags", value: []any{operation.Tag}})
@@ -206,8 +246,8 @@ func operationYAML(operation Operation) orderedMap {
 	entries = append(entries, yamlEntry{key: "responses", value: orderedMap(responses)})
 
 	security := []any{}
-	if operation.Security != "" {
-		security = []any{orderedMap{{key: "bearerAuth", value: []any{}}}}
+	if operation.Security != "" && options.SecurityScheme.Name != "" {
+		security = []any{orderedMap{{key: options.SecurityScheme.Name, value: []any{}}}}
 	}
 	entries = append(entries, yamlEntry{key: "security", value: security})
 	if operation.DerivedPermissionAny != "" {
@@ -218,7 +258,7 @@ func operationYAML(operation Operation) orderedMap {
 		if operation.PermissionNote != "" {
 			permission = append(permission, yamlEntry{key: "note", value: operation.PermissionNote})
 		}
-		entries = append(entries, yamlEntry{key: "x-teamusers-permission", value: permission})
+		entries = append(entries, yamlEntry{key: options.PermissionExtension, value: permission})
 	}
 	return orderedMap(entries)
 }

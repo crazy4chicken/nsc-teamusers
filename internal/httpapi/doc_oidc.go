@@ -1,6 +1,6 @@
 package httpapi
 
-import "teamusers/internal/apidocs"
+import "github.com/crazy4chicken/nsc-teamusers/apidocs/go"
 
 type docOIDCCallbackResponse struct {
 	AccessToken           string   `json:"access_token,omitempty"`
@@ -55,6 +55,3 @@ var DocOIDCOperations = []apidocs.Operation{
 	},
 }
 
-func init() {
-	apidocs.RegisterOperations(DocOIDCOperations)
-}

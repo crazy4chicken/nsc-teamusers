@@ -3,7 +3,7 @@ package httpapi
 import (
 	"time"
 
-	"teamusers/internal/apidocs"
+	"github.com/crazy4chicken/nsc-teamusers/apidocs/go"
 	"teamusers/internal/passwd"
 	"teamusers/internal/store"
 )
@@ -1154,6 +1154,3 @@ var DocOperations = []apidocs.Operation{
 	},
 }
 
-func init() {
-	apidocs.RegisterOperations(DocOperations)
-}

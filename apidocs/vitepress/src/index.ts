@@ -42,9 +42,22 @@ function compareStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0
 }
 
+const DEFAULT_SPEC_PATH = 'docs/public/openapi.yaml'
+
+export function createApiReferencePaths(
+  options: { specPath?: string } = {}
+): () => ApiReferencePath[] {
+  const specPath = options.specPath ?? DEFAULT_SPEC_PATH
+  return () => renderApiReferencePathsFrom(specPath)
+}
+
 export function renderApiReferencePaths(): ApiReferencePath[] {
+  return renderApiReferencePathsFrom(DEFAULT_SPEC_PATH)
+}
+
+function renderApiReferencePathsFrom(specPath: string): ApiReferencePath[] {
   const document = parse(
-    readFileSync(resolve(process.cwd(), 'docs/public/openapi.yaml'), 'utf8')
+    readFileSync(resolve(process.cwd(), specPath), 'utf8')
   ) as RecordValue
   const routesByTag = new Map<string, ApiRoute[]>()
   const paths = asRecord(document.paths)

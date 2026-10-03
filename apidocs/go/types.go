@@ -27,6 +27,29 @@ type ErrorDoc struct {
 	Title  string
 }
 
+// Server describes one API server in the OpenAPI document.
+type Server struct {
+	URL         string
+	Description string
+}
+
+// SecurityScheme describes the authentication scheme emitted in the document.
+type SecurityScheme struct {
+	Name         string
+	Type         string
+	Scheme       string
+	BearerFormat string
+}
+
+// EmitOptions configures document-level OpenAPI metadata.
+type EmitOptions struct {
+	Title               string
+	Version             string
+	Servers             []Server
+	SecurityScheme      SecurityScheme
+	PermissionExtension string
+}
+
 // Reflected is the reflection type used by schema helpers.
 type Reflected = reflect.Type
 
