@@ -26,16 +26,22 @@ export default defineConfig({
     sidebar: {
       '/guide/': [
         {
-          text: 'Guide',
+          text: 'Usage',
           items: [
             { text: 'Getting Started', link: '/guide/getting-started' },
             { text: 'Subject targeting', link: '/guide/subjects' },
             { text: 'Authentication Security', link: '/guide/security' },
             { text: 'Operations Runbook', link: '/guide/operations' },
             { text: 'Administrative Permissions', link: '/guide/permissions' },
-            { text: 'SDK Usage', link: '/guide/sdks' },
-            { text: 'API Docs Automation', link: '/guide/api-docs' },
             { text: 'Nekostick Deployment', link: '/guide/nekostick' }
+          ]
+        },
+        {
+          text: 'Development',
+          items: [
+            { text: 'Permission keys', link: '/guide/permission-keys' },
+            { text: 'SDK Usage', link: '/guide/sdks' },
+            { text: 'API Docs Automation', link: '/guide/api-docs' }
           ]
         }
       ],
