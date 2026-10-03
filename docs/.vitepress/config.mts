@@ -34,6 +34,7 @@ export default defineConfig({
             { text: 'Operations Runbook', link: '/guide/operations' },
             { text: 'Administrative Permissions', link: '/guide/permissions' },
             { text: 'SDK Usage', link: '/guide/sdks' },
+            { text: 'API Docs Automation', link: '/guide/api-docs' },
             { text: 'Nekostick Deployment', link: '/guide/nekostick' }
           ]
         }
