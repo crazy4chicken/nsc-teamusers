@@ -15,8 +15,7 @@ the rest of the fleet.
 - Password, TOTP 2FA (with backup codes), and passkey/WebAuthn
   authentication; OIDC inbound federation with PKCE.
 - SCIM 2.0 inbound provisioning for external identity providers.
-- RBAC with conditional (ABAC) bindings, wildcard matching, and explicit
-  deny; the admin plane itself is gated by `iam:*` permissions.
+- RBAC with team-baseline bindings, conditional (ABAC) grants, wildcard matching, and explicit deny; the admin plane itself is gated by `iam:*` permissions.
 - MFA enforcement policies, breached-password screening, and step-up
   authentication for sensitive operations.
 - Refresh-token rotation with family reuse detection, session concurrency

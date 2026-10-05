@@ -122,6 +122,7 @@ func TestSensitiveAdminMutationsRequireFreshAuthentication(t *testing.T) {
 		{method: http.MethodPut, path: "/roles/role_test/permissions"},
 		{method: http.MethodPost, path: "/bindings"},
 		{method: http.MethodDelete, path: "/bindings/binding_test"},
+		{method: http.MethodPatch, path: "/bindings/binding_test", body: `{"condition":null}`},
 		{method: http.MethodPost, path: "/policies/mfa"},
 		{method: http.MethodPatch, path: "/policies/mfa/policy_test"},
 		{method: http.MethodDelete, path: "/policies/mfa/policy_test"},
@@ -192,7 +193,23 @@ func (freshAuthTestQ) Query(ctx context.Context, _ string, _ ...any) (pgx.Rows, 
 }
 
 func (freshAuthTestQ) QueryRow(context.Context, string, ...any) pgx.Row {
-	panic("fresh-auth route test did not expect QueryRow")
+	return freshAuthBindingRow{}
+}
+
+type freshAuthBindingRow struct{}
+
+func (freshAuthBindingRow) Scan(dest ...any) error {
+	if len(dest) != 7 {
+		return nil
+	}
+	*dest[0].(*string) = "binding_test"
+	dest[1].(*pgtype.Text).Valid = false
+	*dest[2].(*string) = "role_test"
+	*dest[3].(*string) = "user"
+	*dest[4].(*string) = "subject_test"
+	dest[5].(*pgtype.Text).Valid = false
+	*dest[6].(**time.Time) = nil
+	return nil
 }
 
 type freshAuthPermissionRows struct {
@@ -217,6 +234,10 @@ func (r *freshAuthPermissionRows) Scan(dest ...any) error {
 		if permission, ok := dest[0].(*string); ok {
 			*permission = r.permission
 		}
+	} else if len(dest) == 3 {
+		dest[0].(*pgtype.Text).Valid = false
+		*dest[1].(*string) = r.permission
+		dest[2].(*pgtype.Text).Valid = false
 	}
 	return nil
 }

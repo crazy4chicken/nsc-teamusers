@@ -4,7 +4,9 @@ import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import {
   Authenticate,
   Claims,
+  Client,
   CompileCondition,
+  evaluatePermissionEntry,
   ForbiddenError,
   KEY_ROTATION_EVENT_SUBJECT,
   MatchKeys,
@@ -277,6 +279,7 @@ test("permission cache honors TTL, permission versions, and single-flight", asyn
         ok: true,
         status: 200,
         json: async () => ({
+          version: 2,
           user_id: "usr_1",
           perm_ver: fetchCount,
           grants: [{ key: "orders:read:team" }],
@@ -291,10 +294,337 @@ test("permission cache honors TTL, permission versions, and single-flight", asyn
   assert.equal(fetchCount, 1);
   await permissions.get("usr_1", 2);
   assert.equal(fetchCount, 2);
-  assert.equal(requests[0].url, "https://iam.example/authz/permissions/usr_1");
+  assert.equal(requests[0].url, "https://iam.example/authz/permissions/usr_1?version=2");
   const init = requests[0].init as { method: string; headers: Record<string, string> };
   assert.equal(init.method, "GET");
   assert.equal(init.headers.Authorization, "Bearer service-token");
+});
+
+test("permission cache invalidation and clear-all fence in-flight snapshots", async () => {
+  type Response = { ok: boolean; status: number; json(): Promise<unknown> };
+  const claims = new Claims({
+    subject: "usr_1",
+    team: "",
+    kind: "user",
+    permVer: 1,
+    expiry: new Date(Date.now() + 60_000),
+    audience: "teamusers",
+  });
+  const invalidators = [
+    (permissions: PermissionsClient) => permissions.invalidate("usr_1"),
+    (permissions: PermissionsClient) => permissions.invalidateAll(),
+  ];
+  for (const invalidate of invalidators) {
+    let releaseResponse!: (response: Response) => void;
+    const heldResponse = new Promise<Response>((resolve) => {
+      releaseResponse = resolve;
+    });
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let fetchCount = 0;
+    let fallbackCount = 0;
+    const permissions = new PermissionsClient("https://iam.example", {
+      serviceToken: "svc",
+      fetcher: async (url) => {
+        if (url.includes("/authz/permissions/")) {
+          fetchCount += 1;
+          if (fetchCount === 1) {
+            markStarted();
+            return heldResponse;
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ version: 2, user_id: "usr_1", perm_ver: 1, grants: [] }),
+          };
+        }
+        fallbackCount += 1;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ allow: true, matched: ["orders:read:any"], reason: "permission granted" }),
+        };
+      },
+    });
+    const client = new Client({ permissions });
+    const original = client.allow(claims, "orders:read:any");
+    await started;
+    const waiter = client.allow(claims, "orders:read:any");
+    invalidate(permissions);
+    releaseResponse({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        version: 2,
+        user_id: "usr_1",
+        perm_ver: 1,
+        grants: [{ key: "orders:read:any" }],
+      }),
+    });
+
+    assert.deepEqual(await Promise.all([original, waiter]), [
+      { allow: false, reason: "invalid permission snapshot" },
+      { allow: false, reason: "invalid permission snapshot" },
+    ]);
+    assert.equal(fetchCount, 1);
+    assert.equal(fallbackCount, 0);
+    assert.deepEqual((await permissions.get("usr_1", 1)).grants, []);
+    assert.equal(fetchCount, 2);
+  }
+});
+
+test("permission clients reject legacy and malformed snapshots without fallback", async () => {
+  const claims = new Claims({
+    subject: "usr_1",
+    team: "",
+    kind: "user",
+    permVer: 1,
+    expiry: new Date(Date.now() + 60_000),
+    audience: "teamusers",
+  });
+  const payloads: unknown[] = [
+    { user_id: "usr_1", perm_ver: 1, grants: [] },
+    { version: 1, user_id: "usr_1", perm_ver: 1, grants: [] },
+    { version: 3, user_id: "usr_1", perm_ver: 1, grants: [] },
+    { version: 2, user_id: "usr_1", perm_ver: 1, grants: [{ key: "orders:read:any", condition: null }] },
+    { version: 2, user_id: "usr_1", perm_ver: 1, grants: [], valid_until: "not-rfc3339" },
+    { version: 2, user_id: "usr_1", perm_ver: 1, grants: [], valid_until: new Date(Date.now() - 60_000).toISOString() },
+    { version: 2, user_id: "usr_1", perm_ver: 1, grants: [] },
+  ];
+  let snapshotIndex = 0;
+  let fallbackCount = 0;
+  const requests: string[] = [];
+  const permissions = new PermissionsClient("https://iam.example", {
+    serviceToken: "svc",
+    fetcher: async (url) => {
+      requests.push(url);
+      if (url.includes("/authz/permissions/")) {
+        const currentIndex = snapshotIndex++;
+        const payload = payloads[currentIndex];
+        const status = currentIndex === payloads.length - 1 ? 400 : 200;
+        return { ok: status === 200, status, json: async () => payload };
+      }
+      fallbackCount += 1;
+      return { ok: true, status: 200, json: async () => ({ allow: true, matched: ["orders:read:any"], reason: "permission granted" }) };
+    },
+  });
+  const client = new Client({ permissions });
+
+  for (const _payload of payloads) {
+    assert.deepEqual(
+      await client.allow(claims, "orders:read:any", { team_id: "team-a" }),
+      { allow: false, reason: "invalid permission snapshot" },
+    );
+  }
+  assert.equal(snapshotIndex, payloads.length);
+  assert.equal(fallbackCount, 0);
+  assert.equal(requests.every((url) => url.endsWith("?version=2")), true);
+});
+
+test("v2 snapshots tolerate additive fields and defer condition compile errors", async () => {
+  const claims = new Claims({
+    subject: "usr_1",
+    team: "",
+    kind: "user",
+    permVer: 1,
+    expiry: new Date(Date.now() + 60_000),
+    audience: "teamusers",
+  });
+  const permissions = new PermissionsClient("https://iam.example", {
+    serviceToken: "svc",
+    fetcher: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        version: 2,
+        user_id: "usr_1",
+        perm_ver: 1,
+        future_snapshot_field: { revision: 3 },
+        grants: [
+          {
+            key: "!orders:read:any",
+            condition: "subject.id",
+            team_id: "team-b",
+            future_grant_field: "ignored",
+          },
+          { key: "iam:teams:any", condition: "subject.id" },
+          { key: "orders:read:any" },
+        ],
+      }),
+    }),
+  });
+  const entry = await permissions.get("usr_1", 1);
+
+  assert.deepEqual(evaluatePermissionEntry(entry, claims, "orders:read:any", { team_id: "team-a" }), {
+    allow: true,
+    reason: "permission granted",
+  });
+  assert.deepEqual(evaluatePermissionEntry(entry, claims, "orders:read:any", { team_id: "team-b" }), {
+    allow: false,
+    reason: "condition_error",
+  });
+  assert.deepEqual(evaluatePermissionEntry(entry, claims, "orders:write:any", { team_id: "team-b" }), {
+    allow: false,
+    reason: "no matching grant",
+  });
+});
+
+test("scoped TypeScript grants isolate teams and retain platform semantics", () => {
+  const claims = new Claims({
+    subject: "usr_1",
+    team: "",
+    kind: "user",
+    permVer: 1,
+    expiry: new Date(Date.now() + 60_000),
+    audience: "teamusers",
+  });
+  const scoped = {
+    user_id: "usr_1",
+    perm_ver: 1,
+    grants: [
+      { key: "orders:read:any", team_id: "team-a" },
+      { key: "!orders:read:any", team_id: "team-b" },
+    ],
+  };
+  assert.equal(evaluatePermissionEntry(scoped, claims, "orders:read:any", { team_id: "team-a" }).allow, true);
+  assert.deepEqual(evaluatePermissionEntry(scoped, claims, "orders:read:any", { team_id: "team-b" }), {
+    allow: false,
+    reason: "permission denied",
+  });
+  assert.equal(evaluatePermissionEntry(scoped, claims, "orders:read:any", { team_id: "team-c" }).allow, false);
+  assert.equal(evaluatePermissionEntry(scoped, claims, "orders:read:any").allow, false);
+
+  const platform = {
+    user_id: "usr_1",
+    perm_ver: 1,
+    grants: [{ key: "orders:read:any" }, { key: "orders:read:team" }],
+  };
+  assert.equal(evaluatePermissionEntry(platform, claims, "orders:read:any").allow, true);
+  assert.equal(evaluatePermissionEntry(platform, claims, "orders:read:team").allow, false);
+  assert.equal(evaluatePermissionEntry(platform, claims, "orders:read:team", { team_id: "team-a" }).allow, true);
+  assert.deepEqual(evaluatePermissionEntry({ ...scoped, valid_until: new Date(Date.now() - 1).toISOString() }, claims, "orders:read:any", { team_id: "team-a" }), {
+    allow: false,
+    reason: "permission snapshot expired",
+  });
+});
+
+test("conditional grants distinguish false conditions from errors in either order", () => {
+  const claims = new Claims({
+    subject: "usr_1",
+    team: "",
+    kind: "user",
+    permVer: 1,
+    expiry: new Date(Date.now() + 60_000),
+    audience: "teamusers",
+  });
+  const falseDeny = { key: "!orders:read:any", condition: 'resource.attrs["eligible"] == true' };
+  const allow = { key: "orders:read:any" };
+  for (const grants of [[falseDeny, allow], [allow, falseDeny]]) {
+    assert.equal(
+      evaluatePermissionEntry({ user_id: "usr_1", perm_ver: 1, grants }, claims, "orders:read:any", { attrs: { eligible: false } }).allow,
+      true,
+    );
+  }
+
+  const errorGrant = { key: "orders:read:any", condition: 'resource.attrs["count"] > 0' };
+  for (const grants of [[errorGrant, allow], [allow, errorGrant]]) {
+    assert.deepEqual(
+      evaluatePermissionEntry({ user_id: "usr_1", perm_ver: 1, grants }, claims, "orders:read:any", { attrs: { count: "not-a-number" } }),
+      { allow: false, reason: "condition_error" },
+    );
+  }
+});
+
+test("conditional deny substring matching and false conditions preserve allow", () => {
+  const claims = new Claims({
+    subject: "usr_1",
+    team: "",
+    kind: "user",
+    permVer: 1,
+    expiry: new Date(Date.now() + 60_000),
+    audience: "teamusers",
+  });
+  const condition = CompileCondition('subject.id in resource.attrs["blocked"]');
+  const deny = { key: "!orders:read:any", condition };
+  const allow = { key: "orders:read:any" };
+
+  for (const grants of [[deny, allow], [allow, deny]]) {
+    assert.deepEqual(
+      evaluatePermissionEntry(
+        { user_id: "usr_1", perm_ver: 1, grants },
+        claims,
+        "orders:read:any",
+        { attrs: { blocked: "blocked:usr_1:also" } },
+      ),
+      { allow: false, reason: "permission denied" },
+    );
+    assert.deepEqual(
+      evaluatePermissionEntry(
+        { user_id: "usr_1", perm_ver: 1, grants },
+        claims,
+        "orders:read:any",
+        { attrs: { blocked: "other-user" } },
+      ),
+      { allow: true, reason: "permission granted" },
+    );
+  }
+
+  assert.throws(() => condition.evalStrict({
+    subject: { id: "usr_1", kind: "user" },
+    resource: { attrs: { blocked: 42 } },
+    request: { time: new Date() },
+  }));
+  assert.deepEqual(
+    evaluatePermissionEntry(
+      { user_id: "usr_1", perm_ver: 1, grants: [deny, allow] },
+      claims,
+      "orders:read:any",
+      { attrs: { blocked: 42 } },
+    ),
+    { allow: false, reason: "condition_error" },
+  );
+});
+
+test("permission cache preserves team scope and expires at valid_until", async () => {
+  const originalNow = Date.now;
+  let now = originalNow();
+  Date.now = () => now;
+  try {
+    let fetchCount = 0;
+    const permissions = new PermissionsClient("https://iam.example", {
+      serviceToken: "svc",
+      ttlMs: 60_000,
+      fetcher: async () => {
+        fetchCount += 1;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            version: 2,
+            user_id: "usr_1",
+            perm_ver: 1,
+            grants: [{ key: "orders:read:any", team_id: "team-a" }],
+            valid_until: new Date(now + 100).toISOString(),
+          }),
+        };
+      },
+    });
+    const first = await permissions.get("usr_1", 1);
+    const cached = await permissions.get("usr_1", 1);
+    assert.equal(first.grants[0]?.team_id, "team-a");
+    assert.equal(cached.grants[0]?.team_id, "team-a");
+    assert.equal(cached.valid_until, first.valid_until);
+    assert.equal(fetchCount, 1);
+
+    now += 101;
+    const refreshed = await permissions.get("usr_1", 1);
+    assert.equal(refreshed.grants[0]?.team_id, "team-a");
+    assert.equal(fetchCount, 2);
+  } finally {
+    Date.now = originalNow;
+  }
 });
 
 test("middleware returns claims and raises typed 401/403 errors", async () => {
@@ -432,7 +762,7 @@ test("event subscription invalidates affected users", async () => {
     fetcher: async () => ({
       ok: true,
       status: 200,
-      json: async () => ({ user_id: "usr_1", perm_ver: ++fetchCount, grants: [] }),
+      json: async () => ({ version: 2, user_id: "usr_1", perm_ver: ++fetchCount, grants: [] }),
     }),
   });
   const source = {

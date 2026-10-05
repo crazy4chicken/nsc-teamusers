@@ -73,13 +73,14 @@ type Role struct {
 
 // RoleBinding mirrors the role_bindings table.
 type RoleBinding struct {
-	ID          string     `json:"id"`
-	TeamID      *string    `json:"team_id,omitempty"`
-	RoleID      string     `json:"role_id"`
-	SubjectKind string     `json:"subject_kind"`
-	SubjectID   string     `json:"subject_id"`
-	Condition   *string    `json:"condition,omitempty"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	ID             string     `json:"id"`
+	TeamID         *string    `json:"team_id,omitempty"`
+	RoleID         string     `json:"role_id"`
+	SubjectKind    string     `json:"subject_kind"`
+	SubjectID      string     `json:"subject_id"`
+	Condition      *string    `json:"condition,omitempty"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	EffectiveUntil *time.Time `json:"-"`
 }
 
 // Session mirrors the sessions table.

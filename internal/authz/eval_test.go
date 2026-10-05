@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -37,12 +38,12 @@ func TestEvaluateSet(t *testing.T) {
 			wantAllow: true, wantReason: "permission granted", wantMatch: []string{"orders:*:team"},
 		},
 		{
-			name: "wildcard condition denies nonmatching attributes",
+			name: "false condition excludes the candidate grant",
 			set:  &Set{UserID: "usr_1", Grants: []Grant{{Permission: wildcard, Condition: condition}}},
-			ctx:  context.Background(), values: domain.Context{
+			ctx: context.Background(), values: domain.Context{
 				Subject: baseContext.Subject, Resource: domain.Resource{TeamID: "team_1", Attrs: map[string]any{"tier": "silver"}}, Request: baseContext.Request,
 			},
-			wantAllow: false, wantReason: "condition denied", wantMatch: []string{},
+			wantAllow: false, wantReason: "no matching grant", wantMatch: []string{},
 		},
 		{
 			name: "expired binding is absent from resolved set",
@@ -53,10 +54,10 @@ func TestEvaluateSet(t *testing.T) {
 			wantAllow: false, wantReason: "no matching grant", wantMatch: []string{},
 		},
 		{
-			name: "condition evaluation error fails closed",
+			name: "condition evaluation error rejects the decision",
 			set:  &Set{UserID: "usr_1", Grants: []Grant{{Permission: requested, Condition: condition}}},
 			ctx:  canceledContext(), values: baseContext,
-			wantAllow: false, wantReason: "condition denied", wantMatch: []string{},
+			wantAllow: false, wantReason: "condition_error", wantMatch: []string{},
 		},
 		{
 			name: "disabled user has empty set",
@@ -81,6 +82,40 @@ func TestEvaluateSet(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEvaluateTeamScopeAndConditionErrors(t *testing.T) {
+	teamID := "team_1"
+	foreignTeamID := "team_2"
+	permission := domain.Permission{Resource: "orders", Action: "read", Scope: "any"}
+	requested := permission
+	conditionErr := errors.New("invalid condition")
+
+	teamGrant := Grant{Permission: permission, TeamID: &teamID}
+	withoutTeam := evaluate(context.Background(), &Set{Grants: []Grant{teamGrant}}, requested, domain.Context{})
+	if withoutTeam.Allow || withoutTeam.Reason != "no matching grant" {
+		t.Fatalf("team grant without resource team = %#v, want default deny", withoutTeam)
+	}
+
+	values := domain.Context{Resource: domain.Resource{TeamID: teamID}}
+	foreignInvalid := Grant{Permission: permission, TeamID: &foreignTeamID, conditionError: conditionErr}
+	platformGrant := Grant{Permission: permission}
+	got := evaluate(context.Background(), &Set{Grants: []Grant{foreignInvalid, platformGrant}}, requested, values)
+	if !got.Allow || got.Reason != "permission granted" {
+		t.Fatalf("foreign team condition error poisoned platform grant = %#v", got)
+	}
+
+	teamDeny := Grant{Permission: domain.Permission{Resource: "orders", Action: "read", Scope: "any", Deny: true}, TeamID: &teamID, conditionError: conditionErr}
+	got = evaluate(context.Background(), &Set{Grants: []Grant{platformGrant, teamDeny}}, requested, values)
+	if got.Allow || got.Reason != "condition_error" || len(got.Matched) != 0 {
+		t.Fatalf("applicable deny condition error did not reject the decision = %#v", got)
+	}
+
+	teamRequest := domain.Permission{Resource: "orders", Action: "read", Scope: "team"}
+	got = evaluate(context.Background(), &Set{Grants: []Grant{{Permission: teamRequest}}}, teamRequest, domain.Context{})
+	if got.Allow || got.Reason != "no matching grant" {
+		t.Fatalf(":team request without resource team = %#v, want default deny", got)
 	}
 }
 

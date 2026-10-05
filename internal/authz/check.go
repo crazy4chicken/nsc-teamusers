@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,14 +63,17 @@ type checkResponse struct {
 }
 
 type permissionsResponse struct {
-	UserID  string          `json:"user_id"`
-	PermVer int64           `json:"perm_ver"`
-	Grants  []grantResponse `json:"grants"`
+	Version    int             `json:"version"`
+	UserID     string          `json:"user_id"`
+	PermVer    int64           `json:"perm_ver"`
+	Grants     []grantResponse `json:"grants"`
+	ValidUntil *time.Time      `json:"valid_until,omitempty"`
 }
 
 type grantResponse struct {
 	Key       string  `json:"key"`
 	Condition *string `json:"condition,omitempty"`
+	TeamID    *string `json:"team_id,omitempty"`
 }
 
 func (h *handler) requireService(next http.Handler) http.Handler {
@@ -122,7 +126,7 @@ func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 		Subject: domain.Subject{ID: userID, Kind: "user"},
 		Resource: domain.Resource{
 			OwnerID: request.Context.Resource.OwnerID,
-			TeamID:  request.Context.Resource.TeamID,
+			TeamID:  strings.TrimSpace(request.Context.Resource.TeamID),
 			Attrs:   request.Context.Resource.Attrs,
 		},
 		Request: domain.Request{Time: now},
@@ -155,6 +159,11 @@ func authTimeFresh(authTime, maxAgeSeconds int64, now time.Time) bool {
 }
 
 func (h *handler) permissions(w http.ResponseWriter, r *http.Request) {
+	versions := r.URL.Query()["version"]
+	if len(versions) != 1 || versions[0] != "2" {
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Unsupported Permission Snapshot Version", "version=2 is required; legacy snapshots are not supported")
+		return
+	}
 	userID := strings.TrimSpace(chi.URLParam(r, "userID"))
 	set, resolveErr := h.resolver.Resolve(r.Context(), userID)
 	if errors.Is(resolveErr, pgx.ErrNoRows) {
@@ -173,10 +182,12 @@ func (h *handler) permissions(w http.ResponseWriter, r *http.Request) {
 			condition = new(string)
 			*condition = source
 		}
-		grants = append(grants, grantResponse{Key: grant.Permission.String(), Condition: condition})
+		grants = append(grants, grantResponse{
+			Key: grant.Permission.String(), Condition: condition, TeamID: grant.TeamID,
+		})
 	}
 	writeJSON(w, http.StatusOK, permissionsResponse{
-		UserID: set.UserID, PermVer: set.PermVer, Grants: grants,
+		Version: 2, UserID: set.UserID, PermVer: set.PermVer, Grants: grants, ValidUntil: set.ValidUntil,
 	})
 }
 
@@ -187,31 +198,40 @@ type evaluationResult struct {
 }
 
 // evaluate is the pure in-memory portion shared by the remote check and unit
-// tests. Condition errors are treated as false so one broken grant cannot
-// widen access.
+// tests. Team-scoped grants require an exact resource-team match; condition
+// errors reject the whole applicable decision.
 func evaluate(ctx context.Context, set *Set, requested domain.Permission, values domain.Context) evaluationResult {
 	result := evaluationResult{Matched: make([]string, 0), Reason: "no matching grant"}
+	if requested.Scope == "team" && strings.TrimSpace(values.Resource.TeamID) == "" {
+		return result
+	}
 	if set == nil {
 		return result
 	}
-	conditionRejected := false
 	matchedPermissions := make([]domain.Permission, 0, len(set.Grants))
 	seenKeys := make(map[string]struct{}, len(set.Grants))
+	resourceTeamID := strings.TrimSpace(values.Resource.TeamID)
 	for _, grant := range set.Grants {
+		if grant.TeamID != nil && (resourceTeamID == "" || *grant.TeamID != resourceTeamID) {
+			continue
+		}
 		matches := domain.Match(grant.Permission, requested)
 		if !matches && grant.Permission.Deny && !requested.Deny {
-			// domain.Match keeps deny and allow keys distinct. A deny row is
-			// nevertheless a candidate for an allow request during resolution.
 			resolution := domain.Resolve([]domain.Permission{grant.Permission}, []domain.Permission{requested})
 			matches = len(resolution) == 1 && resolution[0].Matched
 		}
 		if !matches {
 			continue
 		}
+		if grant.conditionError != nil {
+			return evaluationResult{Matched: []string{}, Reason: "condition_error"}
+		}
 		if grant.Condition != nil {
 			ok, err := grant.Condition.EvalWithContext(ctx, values)
-			if err != nil || !ok {
-				conditionRejected = true
+			if err != nil {
+				return evaluationResult{Matched: []string{}, Reason: "condition_error"}
+			}
+			if !ok {
 				continue
 			}
 		}
@@ -222,10 +242,8 @@ func evaluate(ctx context.Context, set *Set, requested domain.Permission, values
 			result.Matched = append(result.Matched, key)
 		}
 	}
+	sort.Strings(result.Matched)
 	if len(matchedPermissions) == 0 {
-		if conditionRejected {
-			result.Reason = "condition denied"
-		}
 		return result
 	}
 	resolution := domain.Resolve(matchedPermissions, []domain.Permission{requested})

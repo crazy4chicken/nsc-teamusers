@@ -139,13 +139,15 @@ def test_concurrent_kid_miss_refresh_is_single_flight():
 
 
 def test_permissions_ttl_perm_ver_and_single_flight():
-    responses = {"perm_ver": 1, "grants": [{"key": "orders:read:team"}]}
+    responses = {"version": 2, "perm_ver": 1, "grants": [{"key": "orders:read:team"}]}
     count = 0
+    urls = []
     lock = threading.Lock()
     entered = threading.Event()
 
-    def fetch(_url, _headers):
+    def fetch(url, _headers):
         nonlocal count
+        urls.append(url)
         with lock:
             count += 1
         entered.set()
@@ -168,6 +170,83 @@ def test_permissions_ttl_perm_ver_and_single_flight():
     time.sleep(0.06)
     client.Get("usr_1", 2)
     assert count == 3
+    assert all(url.endswith("?version=2") for url in urls)
+
+@pytest.mark.parametrize(
+    "invalidate",
+    [
+        pytest.param(lambda client: client.invalidate("usr_1"), id="user"),
+        pytest.param(lambda client: client.invalidate_all(), id="all"),
+    ],
+)
+def test_permission_invalidation_fences_inflight_snapshots(invalidate):
+    started = threading.Event()
+    release = threading.Event()
+    fetch_count = 0
+    fallback_count = 0
+
+    def request(method, _url, _headers, _body):
+        nonlocal fetch_count, fallback_count
+        if method == "GET":
+            fetch_count += 1
+            if fetch_count == 1:
+                started.set()
+                assert release.wait(timeout=10)
+                return {
+                    "version": 2,
+                    "user_id": "usr_1",
+                    "perm_ver": 1,
+                    "grants": [{"key": "orders:read:any"}],
+                }
+            return {"version": 2, "user_id": "usr_1", "perm_ver": 1, "grants": []}
+        fallback_count += 1
+        return {"allow": True, "matched": ["orders:read:any"], "reason": "permission granted"}
+
+    client = PermissionsClient(
+        "https://iam.example.com", service_token="svc", requester=request
+    )
+    results = []
+    errors = []
+
+    def allow():
+        try:
+            results.append(tuple(client.Allow(_claims(), "orders:read:any")))
+        except Exception as error:  # pragma: no cover - assertion below reports it
+            errors.append(error)
+
+    owner = threading.Thread(target=allow)
+    waiter = None
+    owner.start()
+    try:
+        assert started.wait(timeout=5)
+        call = client._inflight["usr_1"]
+        waiter_started = threading.Event()
+        original_wait = call.done.wait
+
+        def wait_for_owner(timeout=None):
+            waiter_started.set()
+            return original_wait(timeout)
+
+        call.done.wait = wait_for_owner
+        waiter = threading.Thread(target=allow)
+        waiter.start()
+        assert waiter_started.wait(timeout=5)
+        invalidate(client)
+    finally:
+        release.set()
+        owner.join(timeout=5)
+        if waiter is not None:
+            waiter.join(timeout=5)
+
+    assert not owner.is_alive()
+    assert waiter is not None and not waiter.is_alive()
+    assert errors == []
+    assert results == [(False, "invalid permission snapshot"), (False, "invalid permission snapshot")]
+    assert fetch_count == 1
+    assert fallback_count == 0
+    assert client.Get("usr_1", 1).grants == ()
+    assert fetch_count == 2
+
 
 
 def test_permission_match_and_condition_subset():
@@ -218,6 +297,7 @@ def test_permission_grammar_and_condition_fail_closed():
         "https://iam.example.com",
         service_token="svc",
         fetcher=lambda _url: {
+            "version": 2,
             "user_id": "usr_1",
             "perm_ver": 1,
             "grants": [
@@ -228,6 +308,257 @@ def test_permission_grammar_and_condition_fail_closed():
     )
     assert tuple(client.Allow(_claims(), "orders:read:team")) == (False, "permission denied")
 
+
+def test_v2_permission_snapshots_fail_closed_without_remote_fallback():
+    payloads = [
+        {"user_id": "usr_1", "perm_ver": 1, "grants": []},
+        {"version": 1, "user_id": "usr_1", "perm_ver": 1, "grants": []},
+        {"version": 3, "user_id": "usr_1", "perm_ver": 1, "grants": []},
+        {
+            "version": 2,
+            "user_id": "usr_1",
+            "perm_ver": 1,
+            "grants": [{"key": "orders:read:any", "condition": None}],
+        },
+        {
+            "version": 2,
+            "user_id": "usr_1",
+            "perm_ver": 1,
+            "grants": [{"key": "orders:read:any", "team_id": ""}],
+        },
+        {"version": 2, "user_id": "usr_1", "perm_ver": 1, "grants": [], "valid_until": "invalid"},
+        {
+            "version": 2,
+            "user_id": "usr_1",
+            "perm_ver": 1,
+            "grants": [],
+            "valid_until": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+        },
+    ]
+    snapshot_index = 0
+    fallback_count = 0
+    calls = []
+
+    def request(method, url, _headers, _body):
+        nonlocal snapshot_index, fallback_count
+        calls.append((method, url))
+        if method == "GET":
+            payload = payloads[snapshot_index]
+            snapshot_index += 1
+            return payload
+        fallback_count += 1
+        return {"allow": True, "matched": ["orders:read:any"], "reason": "permission granted"}
+
+    client = PermissionsClient("https://iam.example.com", service_token="svc", requester=request)
+    for _payload in payloads:
+        assert tuple(client.Allow(_claims(), "orders:read:any", {"team_id": "team-a"})) == (
+            False,
+            "invalid permission snapshot",
+        )
+    assert snapshot_index == len(payloads)
+    assert fallback_count == 0
+    assert all(method == "GET" and url.endswith("?version=2") for method, url in calls)
+
+def test_v2_snapshots_tolerate_additive_fields_and_defer_condition_compile_errors():
+    payload = {
+        "version": 2,
+        "user_id": "usr_1",
+        "perm_ver": 1,
+        "future_snapshot_field": {"revision": 3},
+        "grants": [
+            {
+                "key": "!orders:read:any",
+                "condition": "subject.id",
+                "team_id": "team-b",
+                "future_grant_field": "ignored",
+            },
+            {"key": "iam:teams:any", "condition": "subject.id"},
+            {"key": "orders:read:any"},
+        ],
+    }
+    client = PermissionsClient(
+        "https://iam.example.com",
+        service_token="svc",
+        fetcher=lambda _url: payload,
+    )
+    claims = _claims()
+
+    assert tuple(client.Allow(claims, "orders:read:any", {"team_id": "team-a"})) == (
+        True,
+        "permission granted",
+    )
+    assert tuple(client.Allow(claims, "orders:read:any", {"team_id": "team-b"})) == (
+        False,
+        "condition_error",
+    )
+    assert tuple(client.Allow(claims, "orders:write:any", {"team_id": "team-b"})) == (
+        False,
+        "no matching grant",
+    )
+
+
+
+def test_team_scoped_permissions_isolate_teams_and_keep_platform_grants():
+    claims = _claims()
+    scoped = PermissionsClient(
+        "https://iam.example.com",
+        service_token="svc",
+        fetcher=lambda _url: {
+            "version": 2,
+            "user_id": "usr_1",
+            "perm_ver": 1,
+            "grants": [
+                {"key": "orders:read:any", "team_id": "team-a"},
+                {"key": "!orders:read:any", "team_id": "team-b"},
+            ],
+        },
+    )
+    assert tuple(scoped.Allow(claims, "orders:read:any", {"team_id": "team-a"})) == (
+        True,
+        "permission granted",
+    )
+    assert tuple(scoped.Allow(claims, "orders:read:any", {"team_id": "team-b"})) == (
+        False,
+        "permission denied",
+    )
+    assert tuple(scoped.Allow(claims, "orders:read:any", {"team_id": "team-c"})) == (
+        False,
+        "no matching grant",
+    )
+    assert tuple(scoped.Allow(claims, "orders:read:any")) == (False, "no matching grant")
+    assert scoped.Get("usr_1", 1).grants[0].team_id == "team-a"
+
+    platform_any = PermissionsClient(
+        "https://iam.example.com",
+        service_token="svc",
+        fetcher=lambda _url: {
+            "version": 2,
+            "user_id": "usr_1",
+            "perm_ver": 1,
+            "grants": [{"key": "orders:read:any"}],
+        },
+    )
+    assert tuple(platform_any.Allow(claims, "orders:read:any")) == (True, "permission granted")
+
+    platform_team = PermissionsClient(
+        "https://iam.example.com",
+        service_token="svc",
+        fetcher=lambda _url: {
+            "version": 2,
+            "user_id": "usr_1",
+            "perm_ver": 1,
+            "grants": [{"key": "orders:read:team"}],
+        },
+    )
+    assert tuple(platform_team.Allow(claims, "orders:read:team")) == (False, "no matching grant")
+    assert tuple(
+        platform_team.Allow(claims, "orders:read:team", {"team_id": "team-a"})
+    ) == (True, "permission granted")
+
+
+def test_condition_false_skips_and_condition_errors_deny_in_either_order():
+    false_deny = {
+        "key": "!orders:read:any",
+        "condition": 'resource.attrs["eligible"] == true',
+    }
+    allow = {"key": "orders:read:any"}
+    for grants in ([false_deny, allow], [allow, false_deny]):
+        client = PermissionsClient(
+            "https://iam.example.com",
+            service_token="svc",
+            fetcher=lambda _url: {
+                "version": 2,
+                "user_id": "usr_1",
+                "perm_ver": 1,
+                "grants": grants,
+            },
+        )
+        assert tuple(
+            client.Allow(_claims(), "orders:read:any", {"attrs": {"eligible": False}})
+        ) == (True, "permission granted")
+
+    error_grant = {
+        "key": "orders:read:any",
+        "condition": 'resource.attrs["count"] > 0',
+    }
+    for grants in ([error_grant, allow], [allow, error_grant]):
+        client = PermissionsClient(
+            "https://iam.example.com",
+            service_token="svc",
+            fetcher=lambda _url: {
+                "version": 2,
+                "user_id": "usr_1",
+                "perm_ver": 1,
+                "grants": grants,
+            },
+        )
+        assert tuple(
+            client.Allow(_claims(), "orders:read:any", {"attrs": {"count": "not-a-number"}})
+        ) == (False, "condition_error")
+
+
+def test_string_in_uses_substring_semantics_and_scalar_operands_fail_closed():
+    claims = _claims()
+    source = 'subject.id in resource.attrs["blocked"]'
+    condition = CompileCondition(source)
+    with pytest.raises(TypeError):
+        condition.eval_strict(
+            Context(
+                subject=Subject(id="usr_1", kind="user"),
+                resource=Resource(attrs={"blocked": 42}),
+            )
+        )
+
+    deny = {"key": "!orders:read:any", "condition": source}
+    allow = {"key": "orders:read:any"}
+
+    def decide(grants, blocked):
+        client = PermissionsClient(
+            "https://iam.example.com",
+            service_token="svc",
+            fetcher=lambda _url: {
+                "version": 2,
+                "user_id": "usr_1",
+                "perm_ver": 1,
+                "grants": grants,
+            },
+        )
+        return tuple(
+            client.Allow(claims, "orders:read:any", {"attrs": {"blocked": blocked}})
+        )
+
+    for grants in ([deny, allow], [allow, deny]):
+        assert decide(grants, "blocked:usr_1:also") == (False, "permission denied")
+        assert decide(grants, "other-user") == (True, "permission granted")
+    assert decide([deny, allow], 42) == (False, "condition_error")
+
+def test_permission_cache_preserves_team_metadata_and_clamps_valid_until():
+    count = 0
+
+    def fetch(_url):
+        nonlocal count
+        count += 1
+        return {
+            "version": 2,
+            "user_id": "usr_1",
+            "perm_ver": 1,
+            "grants": [{"key": "orders:read:any", "team_id": "team-a"}],
+            "valid_until": (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat(),
+        }
+
+    client = PermissionsClient(
+        "https://iam.example.com", service_token="svc", ttl=30, fetcher=fetch
+    )
+    first = client.Get("usr_1", 1)
+    cached = client.Get("usr_1", 1)
+    assert first.valid_until == cached.valid_until
+    assert cached.grants[0].team_id == "team-a"
+    assert count == 1
+
+    time.sleep(1.05)
+    refreshed = client.Get("usr_1", 1)
+    assert refreshed.grants[0].team_id == "team-a"
+    assert count == 2
 
 def test_middleware_errors_and_event_invalidation():
     class FakeVerifier:
@@ -245,7 +576,7 @@ def test_middleware_errors_and_event_invalidation():
     def fetch(_url):
         nonlocal fetched
         fetched += 1
-        return {"user_id": "usr_1", "perm_ver": 1, "grants": []}
+        return {"version": 2, "user_id": "usr_1", "perm_ver": 1, "grants": []}
 
     client = PermissionsClient("https://iam.example.com", service_token="svc", fetcher=fetch)
     client.Get("usr_1", 1)

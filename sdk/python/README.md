@@ -75,12 +75,25 @@ entry = permissions.Get("user-id", claims.perm_ver)
 allowed, reason = permissions.Allow(claims, "orders:read:team", {"team_id": "team-1"})
 ```
 
-Permission entries are fetched from
-`GET /authz/permissions/{userID}`, cached for two minutes by default, and
-single-flighted per user. A token `perm_ver` mismatch bypasses the cached
-entry. Use `Invalidate(user_id)`, `InvalidateAll()`, or `Clear()` after an
-application-side change. `Check(subject, permission, resource)` performs the
-authoritative `POST /authz/check` request.
+Permission entries use the v2 contract at
+`GET /authz/permissions/{userID}?version=2`. The client requires version `2`,
+a matching non-empty `user_id`, a non-negative `perm_ver`, and well-formed
+known fields. Missing, legacy, or unsupported versions and malformed known
+fields raise `PermissionSnapshotError` rather than downgrading. Unknown
+additive snapshot and grant fields are ignored. Condition compile errors remain
+attached to their grants and yield `condition_error` only when the grant's team
+and permission match. Entries are single-flighted per user and cached until the
+earlier of the configured TTL (two minutes by default) and optional RFC3339
+`valid_until`.
+
+`Grant.team_id` is preserved. Scoped grants match only a resource with the same
+`team_id`; a `:team` request without a non-empty resource `team_id` fails
+closed. Platform grants omit `team_id` and remain independent of team scope
+metadata. `Get` raises `PermissionSnapshotError` for an invalid snapshot;
+`Allow` returns `invalid permission snapshot` without falling back. A
+`perm_ver` mismatch also fails closed. Existing remote fallback remains for
+non-protocol fetch failures; `Check(subject, permission, resource)` always
+performs the authoritative `POST /authz/check` request.
 
 Permission keys use `resource:action:scope` grammar. Actions and scopes may
 use their documented wildcards; a leading `!` is an explicit deny and wins
@@ -93,8 +106,9 @@ Conditions are compiled by `CompileCondition` without an expression-language
 dependency. The supported context is `subject.id`, `subject.kind`,
 `resource.owner_id`, `resource.team_id`, `resource.attrs[...]`, and
 `request.time`, with boolean operators, comparisons, `in`, and scalar
-literals. Sources are limited to 4 KiB and unsupported or failed evaluations
-deny access.
+literals. Sources are limited to 4 KiB; unsupported syntax is a compile error.
+A false condition excludes only its grant, while any applicable evaluation
+error rejects the authorization with reason `condition_error`.
 
 ```python
 from teamusers_sdk import Client, Require
@@ -138,6 +152,12 @@ subscription source object with `subscribe(subject, callback)` instead of a
 URL. The missing optional dependency is reported as `NATSUnavailableError`
 when `SubscribePermissions` is called; importing the core SDK never requires
 NATS.
+
+Local snapshot revocation is bounded by the configured TTL and any
+`valid_until` deadline. Known invalidation events and `invalidate_all()` discard
+pre-event in-flight snapshots for cache and current waiters; those calls fail
+closed without retry or fallback. Missed or delayed events are not an
+instantaneous revocation guarantee; use `Check` when an authoritative decision is required.
 
 ### User deletion lifecycle events
 

@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -26,6 +27,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 	if target.ID == "" {
 		t.Fatal("target user response has no id")
 	}
+	completeForcedPasswordChange(t, stack, "alice", "alice-password1", "AliceReplacementPassword2")
 
 	status, body = stack.jsonRequest(t, http.MethodPost, "/users/"+admin.ID+"/credentials", map[string]string{
 		"kind": "service",
@@ -121,12 +123,20 @@ func TestAuthzEndToEnd(t *testing.T) {
 		t.Fatalf("group membership status = %d, want %d: %s", status, http.StatusOK, body)
 	}
 
-	status, body = stack.jsonRequest(t, http.MethodGet, "/authz/permissions/"+target.ID, nil, serviceToken)
+	status, body = stack.jsonRequest(t, http.MethodGet, "/authz/permissions/"+target.ID+"?version=2", nil, serviceToken)
 	if status != http.StatusOK {
 		t.Fatalf("permissions endpoint status = %d, want %d: %s", status, http.StatusOK, body)
 	}
 	var permissions permissionsResponse
 	decodeResponse(t, body, &permissions)
+	if permissions.Version != 2 || permissions.UserID != target.ID || permissions.PermVer <= 0 {
+		t.Fatalf("snapshot metadata = version %d user %q perm_ver %d", permissions.Version, permissions.UserID, permissions.PermVer)
+	}
+	for _, grant := range permissions.Grants {
+		if grant.TeamID == nil || *grant.TeamID != team.ID {
+			t.Fatalf("scoped group grant has invalid team metadata: %+v", grant)
+		}
+	}
 	assertPermissionKeys(t, permissions, []string{"order:read:team", "order:write:team", "doc:read:own"})
 
 	status, body = stack.jsonRequest(t, http.MethodPost, "/authz/check", map[string]any{
@@ -146,6 +156,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 	}
 	status, body = stack.jsonRequest(t, http.MethodPost, "/authz/check", map[string]any{
 		"subject": target.ID, "permission": "order:read:team", "auth_time": int64(0), "max_auth_age_seconds": int64(60),
+		"context": map[string]any{"resource": map[string]string{"team_id": team.ID}},
 	}, serviceToken)
 	if status != http.StatusOK {
 		t.Fatalf("stale allowed permission check status = %d, want %d: %s", status, http.StatusOK, body)
@@ -257,7 +268,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 		t.Fatal("non-matching ABAC check allowed a different owner")
 	}
 
-	disabledPair := loginUserPair(t, stack, "alice", "alice-password1")
+	disabledPair := loginUserPair(t, stack, "alice", "AliceReplacementPassword2")
 	status, body = stack.jsonRequest(t, http.MethodPost, "/users/"+target.ID+"/disable", nil, adminToken)
 	if status != http.StatusOK {
 		t.Fatalf("disable user status = %d, want %d: %s", status, http.StatusOK, body)
@@ -272,7 +283,7 @@ func TestAuthzEndToEnd(t *testing.T) {
 	}
 	status, _ = stack.jsonRequest(t, http.MethodPost, "/auth/login", map[string]string{
 		"username": "alice",
-		"password": "alice-password1",
+		"password": "AliceReplacementPassword2",
 	}, "")
 	if status != http.StatusUnauthorized {
 		t.Fatalf("disabled user login status = %d, want %d", status, http.StatusUnauthorized)
@@ -296,9 +307,15 @@ func TestAuthzEndToEnd(t *testing.T) {
 	if check.Reason != "user_disabled" {
 		t.Fatalf("disabled authorization reason = %q, want user_disabled", check.Reason)
 	}
-	status, _ = stack.jsonRequest(t, http.MethodGet, "/authz/permissions/unknown-user", nil, serviceToken)
+	status, _ = stack.jsonRequest(t, http.MethodGet, "/authz/permissions/unknown-user?version=2", nil, serviceToken)
 	if status != http.StatusNotFound {
 		t.Fatalf("unknown authorization user status = %d, want %d", status, http.StatusNotFound)
+	}
+	for _, path := range []string{"/authz/permissions/" + target.ID, "/authz/permissions/" + target.ID + "?version=1"} {
+		status, body = stack.jsonRequest(t, http.MethodGet, path, nil, serviceToken)
+		if status != http.StatusBadRequest || !strings.Contains(string(body), "version=2 is required; legacy snapshots are not supported") {
+			t.Fatalf("legacy snapshot %s = %d %s, want structured version error", path, status, body)
+		}
 	}
 	status, _ = stack.jsonRequest(t, http.MethodPost, "/authz/check", map[string]any{
 		"subject":    target.ID,

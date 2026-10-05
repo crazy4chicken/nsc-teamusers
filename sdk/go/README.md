@@ -71,9 +71,14 @@ Legacy tokens without `auth_time` or `amr` remain valid and expose the zero valu
 
 ## Permission cache and authorization
 
-`PermissionsClient` fetches `GET /authz/permissions/{userID}` with a service
-bearer token and caches each user's `PermissionEntry` for two minutes by
-default. Construct it with `NewPermissionsClient`:
+`PermissionsClient` fetches the v2 snapshot from
+`GET /authz/permissions/{userID}?version=2` with a service bearer token. It
+requires version `2`, a matching `user_id`, non-negative `perm_ver`, and
+well-formed known fields. Missing/legacy versions, known-field type errors, and
+expired deadlines fail as snapshot errors; unknown additive properties are
+ignored. A condition that fails to compile is retained on its grant and rejects
+only decisions to which that grant applies. Construct it with
+`NewPermissionsClient`:
 
 ```go
 permissions := iam.NewPermissionsClient(
@@ -91,8 +96,9 @@ _ = entry.Grants
 `WithTokenSource` accepts `func() (string, error)` for rotating service
 credentials and takes precedence over `WithServiceToken`. `WithPermissionsTTL`
 (or its `WithTTL` alias) changes the in-process TTL. A cached entry is reused
-only while its TTL is valid and its `PermVer` equals the token's `PermVer`, so a
-`perm_ver` change automatically causes a fresh request.
+only while its TTL and optional RFC3339 `ValidUntil` deadline are valid and its
+`PermVer` equals the token's `PermVer`, so a `perm_ver` change causes a fresh
+request.
 
 Use `Invalidate` for selected users and `Clear` for the whole cache:
 
@@ -102,6 +108,9 @@ permissions.Clear()
 ```
 
 `InvalidatePermissions` is an explicit alias for `Invalidate`.
+
+Invalidation also rejects matching in-flight snapshot loads; `Clear` applies the
+same fence to all users.
 
 ### Client
 
@@ -119,9 +128,14 @@ if !allowed {
 }
 ```
 
-`Allow` evaluates the local cached grants first. If the permission cache cannot
-be fetched, it falls back to the authoritative `POST /authz/check` endpoint.
-`Check` always performs that authoritative remote check and returns
+`Allow` evaluates local grants first. A grant with `TeamID` applies only when
+`Resource.TeamID` matches; requests for `:team` without a resource team fail
+closed. False conditions exclude their grant, while condition compile or
+evaluation errors reject the whole decision with reason `condition_error`;
+matching denies still override allows. Non-protocol cache/fetch errors retain
+the authoritative `POST /authz/check` fallback. Missing, legacy, malformed, or
+invalidated snapshots and `PermVer` mismatches fail closed without fallback.
+`Check` always performs the authoritative remote check and returns
 `(allowed, reason, error)`.
 
 `Middleware` verifies a bearer token and stores the resulting `Claims` in the
@@ -236,6 +250,11 @@ if subscription != nil {
 	defer subscription.Close()
 }
 ```
+
+The local cache deadline is the earlier of the configured TTL and `ValidUntil`.
+Subscribed `iam.perm.changed` events invalidate affected user entries, but a
+missed or delayed event does not provide instantaneous revocation; use `Check`
+when an authoritative decision is required.
 
 `SubscribeUserDeleted` receives the `iam.user.deleted` envelope. Its payload
 contains `event_id`, `type`, `user_id`, and `at`; it omits `changed_fields`:

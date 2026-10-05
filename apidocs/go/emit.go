@@ -172,9 +172,12 @@ func operationYAML(operation Operation, options EmitOptions) orderedMap {
 	}
 
 	responses := make([]yamlEntry, 0, len(operation.Errors)+1)
-	successStatus := 200
-	if operation.Response == nil && operation.ResponseExample == nil {
-		successStatus = 204
+	successStatus := operation.SuccessStatus
+	if successStatus == 0 {
+		successStatus = 200
+		if operation.Response == nil && operation.ResponseExample == nil {
+			successStatus = 204
+		}
 	}
 	success := orderedMap{{key: "description", value: successDescription(successStatus)}}
 	if operation.Response != nil || operation.ResponseExample != nil {

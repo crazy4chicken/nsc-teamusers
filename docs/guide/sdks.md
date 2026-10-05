@@ -1,9 +1,10 @@
 # SDK usage guide
 
-teamusers ships three SDKs that verify access tokens **locally** (EdDSA
-against a cached JWKS document) and authorize requests against a cached
-permission set, falling back to the authoritative `/authz/check` endpoint when
-needed. No token introspection call is required on the hot path.
+teamusers ships three SDKs that verify access tokens locally (EdDSA against a
+cached JWKS document) and authorize with validated v2 permission snapshots.
+Their existing live `/authz/check` fallback applies to snapshot transport/cache
+failures; malformed or legacy snapshot protocols fail closed without downgrade.
+No token introspection call is required on the hot path.
 
 | SDK | Package | In-repo reference |
 | --- | --- | --- |
@@ -15,9 +16,9 @@ All three expose the same four building blocks:
 
 1. **Verifier** — signature, issuer, audience, expiry, and `perm_ver`
    validation with a lazily-fetched JWKS cache.
-2. **Permissions client** — per-subject permission snapshots keyed by the
-   token's `perm_ver` claim, so a stale cache entry can never outlive a
-   revocation.
+2. **Permissions client** — per-subject v2 snapshots keyed by the token's
+   `perm_ver`; `perm.changed` events invalidate them, and cache TTL plus
+   `valid_until` bound local staleness when events are unavailable.
 3. **Middleware guards** — `Authenticate`, `Require`, `RequireFresh`
    (step-up), and `RejectImpersonated`.
 4. **Event subscriptions** — NATS-driven JWKS refresh and permission cache
@@ -140,11 +141,45 @@ except TokenVerificationError:
 
 :::
 
+
+## Versioned permission snapshots
+
+Every SDK requests `GET /authz/permissions/{userID}?version=2` using a
+service-kind bearer. The endpoint rejects missing, legacy, or unknown versions
+with HTTP 400 instead of returning unsafe flattened grants. Coordinate the
+server cutover with the v2-aware SDK code update before relying on team-scoped
+snapshots; the in-repo package versions remain `0.3.0` for this wire cutover.
+
+The response shape is `{version:2,user_id,perm_ver,grants:[{key,condition?,team_id?}],valid_until?}`.
+SDKs require exactly version 2, the matching non-empty `user_id`, a
+non-negative integer `perm_ver`, well-typed grant keys and conditions, and an
+optional RFC 3339 `valid_until`. Platform grants omit `team_id` or set it to
+null; scoped grants carry a non-empty team ID. Unknown additive fields are
+ignored, while all defined fields and their known shapes remain strict. Missing
+or unsupported versions, malformed known fields, and expired `valid_until`
+values are protocol failures: SDKs reject them and never downgrade or use a
+live-check fallback. Unknown fields do not add security semantics; any future
+security-semantic change requires an explicit snapshot version.
+
+The optional `valid_until` is the earliest future membership or binding expiry
+that affects the snapshot's grants. Each SDK caps snapshot-cache lifetime at
+the earlier of its configured TTL and `valid_until`. This deadline covers
+known future expiry, not a later membership or team-status mutation; those
+changes rely on permission-version invalidation events or normal cache expiry.
+
+Before matching a scoped grant, an SDK requires its `team_id` to equal the
+non-empty `resource.team_id`. A requested `:team` key without that resource
+field denies, even if a platform grant exists; a `:any` key in a team-bound
+grant does not become platform access. Team status and membership changes bump
+affected users' `perm_ver` and publish the existing `perm.changed` event.
+
 ## Authorizing a request
 
-`Require` combines cache lookup, local ABAC condition evaluation, and a remote
-fallback. The `Resource` you pass is what ABAC conditions match against
-(`resource.owner_id`, `resource.team_id`, `resource.attrs`).
+`Require` evaluates local ABAC conditions only after team applicability is
+checked. The `Resource` you pass supplies the target context
+(`resource.owner_id`, `resource.team_id`, `resource.attrs`); a team-scoped grant
+is usable only for its own team, and a requested `:team` permission without a
+`resource.team_id` denies.
 
 :::tabs key:sdk-lang variant:code
 
@@ -189,9 +224,10 @@ claims = Require(
 
 :::
 
-Denials carry the reason string from the server (`expired binding`, failed
-condition, missing grant), which is safe to log but should not be echoed to
-end users verbatim.
+Denials carry a stable reason such as `no matching grant`, `condition_error`,
+or `step_up_required`; a false condition simply excludes that grant, while an
+applicable condition error fails authorization closed. Reasons are safe to log
+but should not be echoed to end users verbatim.
 
 ## Step-up and impersonation guards
 
@@ -251,10 +287,10 @@ user ID when `claims.Impersonated` (Go) / `claims.impersonated` is true.
 
 ## Keeping caches fresh with events
 
-Without events, revocations propagate within
-`min(access_token_TTL, cache_TTL)`. With the optional NATS subscriptions the
-window narrows to seconds: `key.rotated` forces a JWKS refresh and the
-`perm.changed`/`user.*`/`team.*` subjects invalidate permission snapshots.
+Without events, a local permission entry can remain stale until the earlier of
+its configured cache TTL or v2 `valid_until`; the latter bounds known future
+membership/binding expiry only. When delivered, `perm.changed` invalidates the
+user's snapshot, while `team.updated` remains the team-status lifecycle event.
 
 :::tabs key:sdk-lang variant:code
 
@@ -306,19 +342,21 @@ perm_sub.close()
 
 :::
 
-Subscriptions are optional everywhere: if NATS is unreachable the SDKs keep
-working on TTL-based expiry. Treat them as a tightening knob, not a
-correctness requirement.
+Subscriptions remain optional: without NATS the SDKs continue using TTL-based
+cache expiry, clamped by `valid_until`. Event delivery tightens revocation when
+messages arrive but is not itself a correctness guarantee.
 
 ## Choosing local vs. remote authorization
 
-The default `Client` evaluates locally against the cached permission snapshot
-(fetched per subject and keyed by the token's `perm_ver`), and falls back to
-the authoritative `/authz/check` endpoint only when the snapshot cannot be
-fetched — a `perm_ver` mismatch fails closed rather than serving a stale
-grant. Pass the `remoteOnly` option (`remote_only` in Python) when your
-service must never rely on a cached decision — for example a settlement
-service where a minutes-old permission grant is unacceptable:
+The default Go `Client.Allow`, TypeScript `Client.allow`, and Python
+`PermissionsClient.allow` evaluate against validated v2 snapshots; the Go and
+TypeScript `Client` and Python client retain their existing live `/authz/check`
+fallback for snapshot transport/cache failures. The TypeScript
+`PermissionsClient.allow` method itself is local-only. Malformed snapshots,
+unsupported or legacy versions, expired `valid_until`, and a `perm_ver` mismatch
+fail closed without fallback (`permission version mismatch` for the latter).
+Unknown additive fields are ignored when the known v2 schema is valid. Use
+explicit remote-only mode when every decision must query `/authz/check`:
 
 :::tabs key:sdk-lang variant:code
 

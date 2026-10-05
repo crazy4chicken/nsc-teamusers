@@ -89,7 +89,7 @@ func (h *adminHandler) createTeam(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		created = team
-		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, new(team.ID), "team.created", team.ID, nil, team))
+		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, &team.ID, "team.created", team.ID, nil, team))
 		if err != nil {
 			return err
 		}
@@ -144,13 +144,25 @@ func (h *adminHandler) patchTeam(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, new(original.ID), "team.updated", id, original, updated))
+		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, &original.ID, "team.updated", id, original, updated))
 		if err != nil {
 			return err
 		}
 		changedFields := changedTeamFields(original, updated)
 		if len(changedFields) == 0 {
 			return nil
+		}
+		if original.Status != updated.Status {
+			userIDs, err := store.ListUserIDsByTeam(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if err := bumpUserPermVers(ctx, tx, userIDs); err != nil {
+				return err
+			}
+			if err := appendPermissionChange(ctx, tx, userIDs, &updated.ID); err != nil {
+				return err
+			}
 		}
 		return appendOutboxPayload(ctx, tx, "team.updated", map[string]any{
 			"team_id":        id,
@@ -198,7 +210,7 @@ func (h *adminHandler) deleteTeam(w http.ResponseWriter, r *http.Request) {
 		if err := bumpUserPermVers(ctx, tx, userIDs); err != nil {
 			return err
 		}
-		teamID := new(before.ID)
+		teamID := &before.ID
 		if err := appendPermissionChange(ctx, tx, userIDs, teamID); err != nil {
 			return err
 		}
@@ -257,7 +269,7 @@ func (h *adminHandler) createGroup(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		created = group
-		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, new(group.TeamID), "group.created", group.ID, nil, group))
+		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, &group.TeamID, "group.created", group.ID, nil, group))
 		return err
 	})
 	if err != nil {
@@ -285,10 +297,14 @@ func (h *adminHandler) patchGroup(w http.ResponseWriter, r *http.Request) {
 		}
 		original := before
 		if request.TeamID != nil {
-			before.TeamID = strings.TrimSpace(*request.TeamID)
-			if before.TeamID == "" {
+			teamID := strings.TrimSpace(*request.TeamID)
+			if teamID == "" {
 				return validationError("team_id is required")
 			}
+			if adminGrantScopeFrom(r.Context()) != adminGrantScopeAny && teamID != before.TeamID {
+				return forbiddenError("team-scoped admins cannot change group team_id")
+			}
+			before.TeamID = teamID
 		}
 		if request.Name != nil {
 			before.Name = strings.TrimSpace(*request.Name)
@@ -312,11 +328,11 @@ func (h *adminHandler) patchGroup(w http.ResponseWriter, r *http.Request) {
 		if err := bumpUserPermVers(ctx, tx, userIDs); err != nil {
 			return err
 		}
-		teamID := new(updated.TeamID)
+		teamID := &updated.TeamID
 		if err := appendPermissionChange(ctx, tx, userIDs, teamID); err != nil {
 			return err
 		}
-		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, new(original.TeamID), "group.updated", id, original, updated))
+		_, err = h.audit.Append(ctx, tx, h.auditEntry(r, &original.TeamID, "group.updated", id, original, updated))
 		return err
 	})
 	if err != nil {
@@ -346,7 +362,7 @@ func (h *adminHandler) deleteGroup(w http.ResponseWriter, r *http.Request) {
 		if err := bumpUserPermVers(ctx, tx, userIDs); err != nil {
 			return err
 		}
-		teamID := new(before.TeamID)
+		teamID := &before.TeamID
 		if err := appendPermissionChange(ctx, tx, userIDs, teamID); err != nil {
 			return err
 		}
@@ -391,7 +407,7 @@ func (h *adminHandler) putMember(w http.ResponseWriter, r *http.Request) {
 		if err := bumpUserPermVers(ctx, tx, []string{request.UserID}); err != nil {
 			return err
 		}
-		teamID := new(group.TeamID)
+		teamID := &group.TeamID
 		if err := appendPermissionChange(ctx, tx, []string{request.UserID}, teamID); err != nil {
 			return err
 		}
@@ -438,7 +454,7 @@ func (h *adminHandler) deleteMember(w http.ResponseWriter, r *http.Request) {
 		if err := bumpUserPermVers(ctx, tx, []string{userID}); err != nil {
 			return err
 		}
-		teamID := new(group.TeamID)
+		teamID := &group.TeamID
 		if err := appendPermissionChange(ctx, tx, []string{userID}, teamID); err != nil {
 			return err
 		}

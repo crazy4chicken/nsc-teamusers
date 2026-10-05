@@ -307,12 +307,21 @@ curl --fail-with-body -sS -G "$IAM_BASE_URL/me/activity" \
 creation and expiration timestamps. It reflects session issuance and refresh,
 not every access-token request.
 
-- **`perm_ver`:** mutations that affect a user's effective permissions bump the
-  user's monotonic `perm_ver`; the value is copied into new access JWTs and the
-  `/authz/permissions/{userID}` response. Existing access tokens with an old
-  value fail authentication. `/authz/check` resolves the current database state
-  and is immediate; SDK cache consumers still need to honor `perm_ver` and
-  invalidation events.
+- **`perm_ver`:** mutations that affect effective permissions increment every
+  affected user's version; new access JWTs carry it, and permission snapshots
+  are fetched from `/authz/permissions/{userID}?version=2`. Binding
+  create/patch/delete, role permission/update/delete, membership changes, and
+  team active/disabled changes update affected users' versions in the same
+  transaction as audit and outbox records. Team-baseline members are included
+  in those affected-user sets. Existing access tokens with an old version fail
+  authentication, and `/authz/check` resolves current database state.
+- A v2 snapshot's optional RFC 3339 `valid_until` is the earliest future
+  membership or binding expiry affecting its grants. SDKs cap local cache life
+  at the earlier of configured TTL and this deadline; when no such expiry
+  affects the grants, `valid_until` is omitted. The deadline covers scheduled
+  expiry, not a later membership or team-status mutation: those changes use
+  `perm_ver` and the existing `perm.changed` invalidation event. Disabled teams
+  suppress scoped grants, while independent platform grants remain available.
 - **Introspection:** access-token introspection follows the access contract
   (active user and matching `perm_ver`), while refresh-token introspection also
   checks session revocation and expiry.
@@ -486,6 +495,10 @@ and `at`; `user_ids` and `team_id` retain their existing envelope semantics.
 `changed_fields` contains field names, not field values. Lifecycle payloads
 contain no passwords, credential hashes, or other secrets. Consumers that need
 current field values can fetch the entity separately.
+
+Permission invalidations continue to use the existing `perm.changed` topic;
+team status changes also retain the existing `team.updated` lifecycle topic and
+payload shape. No team-baseline-specific event channel is introduced.
 
 The `user.deleted` lifecycle payload omits `changed_fields`.
 

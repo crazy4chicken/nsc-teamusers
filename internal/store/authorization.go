@@ -80,6 +80,12 @@ func GetRole(ctx context.Context, q Q, id string) (Role, error) {
 		SELECT id, team_id, name FROM roles WHERE id = $1`, id))
 }
 
+// GetRoleForUpdate retrieves one role while holding its row lock.
+func GetRoleForUpdate(ctx context.Context, q Q, id string) (Role, error) {
+	return scanRole(q.QueryRow(ctx, `
+		SELECT id, team_id, name FROM roles WHERE id = $1 FOR UPDATE`, id))
+}
+
 func ListRoles(ctx context.Context, q Q, teamID *string, cursor string, limit int) ([]Role, string, error) {
 	limit = pageLimit(limit)
 	var rows pgx.Rows
@@ -195,6 +201,21 @@ func GetRoleBinding(ctx context.Context, q Q, id string) (RoleBinding, error) {
 	return scanRoleBinding(q.QueryRow(ctx, `
 		SELECT id, team_id, role_id, subject_kind, subject_id, condition, expires_at
 		FROM role_bindings WHERE id = $1`, id))
+}
+
+// GetRoleBindingForUpdate retrieves one role binding while holding its row lock.
+func GetRoleBindingForUpdate(ctx context.Context, q Q, id string) (RoleBinding, error) {
+	return scanRoleBinding(q.QueryRow(ctx, `
+		SELECT id, team_id, role_id, subject_kind, subject_id, condition, expires_at
+		FROM role_bindings WHERE id = $1 FOR UPDATE`, id))
+}
+
+func UpdateRoleBinding(ctx context.Context, q Q, binding RoleBinding) (RoleBinding, error) {
+	return scanRoleBinding(q.QueryRow(ctx, `
+		UPDATE role_bindings SET role_id = $2, condition = $3
+		WHERE id = $1
+		RETURNING id, team_id, role_id, subject_kind, subject_id, condition, expires_at`,
+		binding.ID, binding.RoleID, binding.Condition))
 }
 
 func DeleteRoleBinding(ctx context.Context, q Q, id string) error {

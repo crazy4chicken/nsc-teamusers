@@ -1,4 +1,4 @@
-import { CompileCondition, type CompiledCondition, type Context, type Resource } from "./abac.js";
+import { ConditionCompileError, CompileCondition, type CompiledCondition, type Context, type Resource } from "./abac.js";
 import { Parse, type Permission } from "./permission.js";
 import type { Claims } from "./verifier.js";
 import { SDKError } from "./verifier.js";
@@ -40,23 +40,48 @@ export interface PermissionsOptions {
 export class Grant {
   public readonly key: string;
   public readonly condition?: CompiledCondition;
+  public readonly conditionSource?: string;
+  public readonly conditionCompileError?: ConditionCompileError;
   public readonly permission: Permission;
+  public readonly team_id?: string;
 
-  public constructor(key: string, condition?: CompiledCondition | string | null);
-  public constructor(values: { readonly key: string; readonly condition?: CompiledCondition | string | null });
+  public constructor(key: string, condition?: CompiledCondition | string | null, teamID?: string | null);
+  public constructor(values: {
+    readonly key: string;
+    readonly condition?: CompiledCondition | string | null;
+    readonly team_id?: string | null;
+  });
   public constructor(
-    keyOrValues: string | { readonly key: string; readonly condition?: CompiledCondition | string | null },
+    keyOrValues: string | {
+      readonly key: string;
+      readonly condition?: CompiledCondition | string | null;
+      readonly team_id?: string | null;
+    },
     suppliedCondition?: CompiledCondition | string | null,
+    suppliedTeamID?: string | null,
   ) {
     const key = typeof keyOrValues === "string" ? keyOrValues : keyOrValues.key;
     const condition = typeof keyOrValues === "string" ? suppliedCondition : keyOrValues.condition;
+    const teamID = typeof keyOrValues === "string" ? suppliedTeamID : keyOrValues.team_id;
     this.key = key;
     this.permission = Parse(key);
+    if (teamID !== undefined && teamID !== null) {
+      if (typeof teamID !== "string" || teamID === "") {
+        throw new TypeError("grant team_id must be a nonempty string or null");
+      }
+      this.team_id = teamID;
+    }
     if (typeof condition === "string" && condition.trim() !== "") {
-      this.condition = CompileCondition(condition);
+      this.conditionSource = condition;
+      try {
+        this.condition = CompileCondition(condition);
+      } catch (error) {
+        if (!(error instanceof ConditionCompileError)) throw error;
+        this.conditionCompileError = error;
+      }
     } else if (typeof condition === "object" && condition !== null && "eval" in condition) {
-      const compiled = condition as CompiledCondition;
-      this.condition = compiled;
+      this.condition = condition as CompiledCondition;
+      this.conditionSource = (condition as CompiledCondition).source;
     }
   }
 
@@ -68,23 +93,29 @@ export class Grant {
     return this.condition;
   }
 
-  public toJSON(): { key: string; condition?: string } {
-    const wire: { key: string; condition?: string } = { key: this.key };
-    if (this.condition !== undefined && this.condition.source.trim() !== "") {
-      wire.condition = this.condition.source;
+  public toJSON(): { key: string; condition?: string; team_id?: string } {
+    const wire: { key: string; condition?: string; team_id?: string } = { key: this.key };
+    if (this.conditionSource !== undefined && this.conditionSource.trim() !== "") {
+      wire.condition = this.conditionSource;
+    }
+    if (this.team_id !== undefined) {
+      wire.team_id = this.team_id;
     }
     return wire;
   }
 }
+
 export type GrantInput = Grant | {
   readonly key: string;
   readonly condition?: CompiledCondition | string | null;
+  readonly team_id?: string | null;
 };
 
 export interface PermissionEntry {
   readonly user_id: string;
   readonly perm_ver: number;
   readonly grants: readonly GrantInput[];
+  readonly valid_until?: string;
   readonly userId?: string;
   readonly permVer?: number;
   readonly Grants?: readonly GrantInput[];
@@ -110,6 +141,7 @@ export class PermissionFetchError extends SDKError {
     super("PERMISSION_FETCH_FAILED", message, cause);
   }
 }
+export class PermissionSnapshotError extends PermissionFetchError {}
 
 export { PermissionFetchError as PermissionsError };
 
@@ -120,6 +152,8 @@ interface CachedPermissionEntry {
 
 interface InFlightPermission {
   readonly permVer: number;
+  readonly clearEpoch: number;
+  readonly userEpoch: number;
   readonly promise: Promise<PermissionEntry>;
 }
 
@@ -132,6 +166,8 @@ export class PermissionsClient {
   private readonly fetcher: PermissionFetcher;
   private readonly entries = new Map<string, CachedPermissionEntry>();
   private readonly inFlight = new Map<string, InFlightPermission>();
+  private clearEpoch = 0;
+  private readonly userEpochs = new Map<string, number>();
 
   public constructor(baseURL: string, options?: PermissionsOptions | string | (() => string | Promise<string>)) {
     const resolvedOptions: PermissionsOptions =
@@ -160,23 +196,65 @@ export class PermissionsClient {
         return clonePermissionEntry(cached.entry);
       }
 
-      const running = this.inFlight.get(normalizedUserID);
-      if (running !== undefined) {
-        const result = await waitForSignal(running.promise, signal);
+      const existing = this.inFlight.get(normalizedUserID);
+      if (existing !== undefined) {
+        let result: PermissionEntry;
+        try {
+          result = await waitForSignal(existing.promise, signal);
+        } catch (error) {
+          if (this.isInvalidated(normalizedUserID, existing)) {
+            throw new PermissionSnapshotError("permission cache invalidated during fetch");
+          }
+          throw error;
+        }
+        if (this.isInvalidated(normalizedUserID, existing)) {
+          throw new PermissionSnapshotError("permission cache invalidated during fetch");
+        }
         if (result.perm_ver === tokenPermVer) {
+          if (result.valid_until !== undefined) {
+            const deadline = parseRFC3339(result.valid_until);
+            if (deadline === undefined || deadline <= Date.now()) {
+              throw new PermissionSnapshotError("decode permissions response: valid_until is expired or invalid");
+            }
+          }
           return clonePermissionEntry(result);
         }
         continue;
       }
 
+      const clearEpoch = this.clearEpoch;
+      const userEpoch = this.userEpochs.get(normalizedUserID) ?? 0;
       const promise = this.fetchPermissions(normalizedUserID, signal);
-      this.inFlight.set(normalizedUserID, { permVer: tokenPermVer, promise });
+      const newCall: InFlightPermission = {
+        permVer: tokenPermVer,
+        clearEpoch,
+        userEpoch,
+        promise,
+      };
+      this.inFlight.set(normalizedUserID, newCall);
       try {
-        const result = await waitForSignal(promise, signal);
-        this.entries.set(normalizedUserID, {
-          entry: clonePermissionEntry(result),
-          expiresAt: Date.now() + this.ttlMs,
-        });
+        let result: PermissionEntry;
+        try {
+          result = await waitForSignal(promise, signal);
+        } catch (error) {
+          if (this.isInvalidated(normalizedUserID, newCall)) {
+            throw new PermissionSnapshotError("permission cache invalidated during fetch");
+          }
+          throw error;
+        }
+        if (this.isInvalidated(normalizedUserID, newCall)) {
+          throw new PermissionSnapshotError("permission cache invalidated during fetch");
+        }
+        const cachedAt = Date.now();
+        let expiresAt = cachedAt + this.ttlMs;
+        if (result.valid_until !== undefined) {
+          const deadline = parseRFC3339(result.valid_until);
+          if (deadline === undefined || deadline <= cachedAt) {
+            throw new PermissionSnapshotError("decode permissions response: valid_until is expired or invalid");
+          }
+          expiresAt = Math.min(expiresAt, deadline);
+        }
+        this.entries.set(normalizedUserID, { entry: clonePermissionEntry(result), expiresAt });
         return clonePermissionEntry(result);
       } finally {
         const current = this.inFlight.get(normalizedUserID);
@@ -204,7 +282,11 @@ export class PermissionsClient {
   public invalidate(...userIDs: string[]): void {
     for (const userID of userIDs) {
       const normalized = userID.trim();
-      if (normalized !== "") this.entries.delete(normalized);
+      if (normalized !== "") {
+        this.userEpochs.set(normalized, (this.userEpochs.get(normalized) ?? 0) + 1);
+        this.entries.delete(normalized);
+        this.inFlight.delete(normalized);
+      }
     }
   }
 
@@ -221,6 +303,9 @@ export class PermissionsClient {
   }
 
   public invalidateAll(): void {
+    this.clearEpoch += 1;
+    this.userEpochs.clear();
+    this.inFlight.clear();
     this.entries.clear();
   }
 
@@ -341,10 +426,17 @@ export class PermissionsClient {
     return this.subscribePermissions(sourceOrURL, handler);
   }
 
+  private isInvalidated(userID: string, running: InFlightPermission): boolean {
+    return (
+      this.clearEpoch !== running.clearEpoch ||
+      (this.userEpochs.get(userID) ?? 0) !== running.userEpoch
+    );
+  }
+
   private async fetchPermissions(userID: string, signal?: AbortSignal): Promise<PermissionEntry> {
     if (this.base === "") throw new PermissionFetchError("authorization base URL is empty");
     const token = await this.serviceBearer();
-    const endpoint = `${this.base}/authz/permissions/${encodeURIComponent(userID)}`;
+    const endpoint = `${this.base}/authz/permissions/${encodeURIComponent(userID)}?version=2`;
     let response: PermissionResponse;
     try {
       response = await this.fetcher(endpoint, {
@@ -356,13 +448,16 @@ export class PermissionsClient {
       throw new PermissionFetchError("fetch permissions", error);
     }
     if (!response.ok) {
+      if (response.status === 400) {
+        throw new PermissionSnapshotError(`fetch permissions: HTTP ${response.status}`);
+      }
       throw new PermissionFetchError(`fetch permissions: HTTP ${response.status}`);
     }
     let payload: unknown;
     try {
       payload = await response.json();
     } catch (error) {
-      throw new PermissionFetchError("decode permissions response", error);
+      throw new PermissionSnapshotError("decode permissions response", error);
     }
     return parsePermissionEntry(payload, userID);
   }
@@ -386,41 +481,92 @@ export class PermissionsClient {
 }
 
 export function parsePermissionEntry(payload: unknown, expectedUserID: string): PermissionEntry {
-  if (typeof payload !== "object" || payload === null) {
-    throw new PermissionFetchError("decode permissions response: object expected");
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new PermissionSnapshotError("decode permissions response: object expected");
   }
-  if (!("grants" in payload) || !Array.isArray(payload.grants)) {
-    throw new PermissionFetchError("decode permissions response: grants must be an array");
+  const fields = payload as Record<string, unknown>;
+  if (fields.version !== 2) {
+    throw new PermissionSnapshotError("decode permissions response: version must be 2");
   }
-  const userID = readString(payload, "user_id") ?? expectedUserID;
+  if (typeof fields.user_id !== "string" || fields.user_id.trim() === "") {
+    throw new PermissionSnapshotError("decode permissions response: user_id must be a nonempty string");
+  }
+  const userID = fields.user_id;
   if (userID !== expectedUserID) {
-    throw new PermissionFetchError(`permissions response user_id ${JSON.stringify(userID)} does not match ${JSON.stringify(expectedUserID)}`);
+    throw new PermissionSnapshotError(`permissions response user_id ${JSON.stringify(userID)} does not match ${JSON.stringify(expectedUserID)}`);
   }
-  const permVer = readNumber(payload, "perm_ver");
-  if (permVer === undefined || !Number.isSafeInteger(permVer) || permVer < 0) {
-    throw new PermissionFetchError("decode permissions response: perm_ver must be a non-negative integer");
+  if (typeof fields.perm_ver !== "number" || !Number.isSafeInteger(fields.perm_ver) || fields.perm_ver < 0) {
+    throw new PermissionSnapshotError("decode permissions response: perm_ver must be a non-negative integer");
+  }
+  if (!Array.isArray(fields.grants)) {
+    throw new PermissionSnapshotError("decode permissions response: grants must be an array");
+  }
+  let validUntil: string | undefined;
+  if (Object.prototype.hasOwnProperty.call(fields, "valid_until")) {
+    if (typeof fields.valid_until !== "string") {
+      throw new PermissionSnapshotError("decode permissions response: valid_until must be an RFC3339 string");
+    }
+    const deadline = parseRFC3339(fields.valid_until);
+    if (deadline === undefined) {
+      throw new PermissionSnapshotError("decode permissions response: valid_until must be an RFC3339 string");
+    }
+    if (deadline <= Date.now()) {
+      throw new PermissionSnapshotError("decode permissions response: valid_until is expired");
+    }
+    validUntil = fields.valid_until;
   }
   const grants: Grant[] = [];
-  for (const rawGrant of payload.grants) {
+  for (const [index, rawGrant] of fields.grants.entries()) {
     try {
-      const parsed = parseGrant(rawGrant);
-      if (parsed !== undefined) grants.push(parsed);
-    } catch {
-      // The Go cache skips malformed grants so one bad role cannot widen access.
+      grants.push(parseGrant(rawGrant));
+    } catch (error) {
+      if (error instanceof PermissionSnapshotError) throw error;
+      throw new PermissionSnapshotError(`decode permissions response: invalid grant ${index}`, error);
     }
   }
-  return { user_id: userID, perm_ver: permVer, grants, userId: userID, permVer, Grants: grants, UserID: userID, PermVer: permVer };
+  return {
+    user_id: userID,
+    perm_ver: fields.perm_ver,
+    grants,
+    ...(validUntil === undefined ? {} : { valid_until: validUntil }),
+    userId: userID,
+    permVer: fields.perm_ver,
+    Grants: grants,
+    UserID: userID,
+    PermVer: fields.perm_ver,
+  };
 }
 
-function parseGrant(value: unknown): Grant | undefined {
-  if (value instanceof Grant) return value;
-  if (typeof value !== "object" || value === null || !("key" in value) || typeof value.key !== "string") return undefined;
-  let condition: string | null = null;
-  if ("condition" in value) {
-    if (value.condition !== null && typeof value.condition !== "string") return undefined;
-    condition = value.condition;
+function parseGrant(value: unknown): Grant {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new PermissionSnapshotError("decode permissions response: grant object expected");
   }
-  return new Grant(value.key, condition);
+  const fields = value as Record<string, unknown>;
+  if (typeof fields.key !== "string" || fields.key.trim() === "") {
+    throw new PermissionSnapshotError("decode permissions response: grant key must be a nonempty string");
+  }
+  let condition: string | undefined;
+  if (Object.prototype.hasOwnProperty.call(fields, "condition")) {
+    if (typeof fields.condition !== "string" || fields.condition.trim() === "") {
+      throw new PermissionSnapshotError("decode permissions response: grant condition must be a nonempty string");
+    }
+    condition = fields.condition;
+  }
+  let teamID: string | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(fields, "team_id")) {
+    if (fields.team_id === null) {
+      teamID = null;
+    } else if (typeof fields.team_id === "string" && fields.team_id !== "") {
+      teamID = fields.team_id;
+    } else {
+      throw new PermissionSnapshotError("decode permissions response: grant team_id must be a nonempty string or null");
+    }
+  }
+  try {
+    return new Grant(fields.key, condition, teamID);
+  } catch (error) {
+    throw new PermissionSnapshotError("decode permissions response: invalid grant", error);
+  }
 }
 
 function parseCheckResult(value: unknown): CheckResult {
@@ -442,25 +588,43 @@ export function evaluatePermissionEntry(
   permission: string,
   resource: Resource = {},
 ): { allow: boolean; reason: string } {
+  if (entry.valid_until !== undefined) {
+    const deadline = parseRFC3339(entry.valid_until);
+    if (deadline === undefined || deadline <= Date.now()) {
+      return { allow: false, reason: "permission snapshot expired" };
+    }
+  }
   const requested = Parse(permission);
+  const resourceTeamID = resource.team_id ?? resource.teamId;
+  if (requested.scope === "team" && (!resourceTeamID || resourceTeamID.trim() === "")) {
+    return { allow: false, reason: "no matching grant" };
+  }
   let conditionRejected = false;
   let allowed = false;
   let denied = false;
   for (const rawGrant of entry.grants) {
     const grant = normalizeGrant(rawGrant);
+    if (grant.team_id !== undefined && grant.team_id !== resourceTeamID) continue;
     const grantMatches = grant.permission.resource === "*" || grant.permission.resource === requested.resource;
     const actionMatches = grant.permission.action === "*" || grant.permission.action === requested.action;
     const scopeMatches = grant.permission.scope === "*" || grant.permission.scope === requested.scope;
     if (!grantMatches || !actionMatches || !scopeMatches) continue;
+    if (grant.conditionCompileError !== undefined) {
+      return { allow: false, reason: "condition_error" };
+    }
     if (grant.condition !== undefined) {
       const context: Context = {
         subject: { id: claims.subject, kind: claims.kind },
         resource,
         request: { time: new Date() },
       };
-      if (!grant.condition.eval(context)) {
-        conditionRejected = true;
-        continue;
+      try {
+        if (!grant.condition.evalStrict(context)) {
+          conditionRejected = true;
+          continue;
+        }
+      } catch {
+        return { allow: false, reason: "condition_error" };
       }
     }
     if (grant.permission.deny) denied = true;
@@ -483,15 +647,25 @@ function resourceToWire(resource: Resource): Record<string, unknown> {
 
 function normalizeGrant(value: GrantInput): Grant {
   if (value instanceof Grant) return value;
-  return new Grant(value.key, value.condition);
+  return new Grant(value.key, value.condition, value.team_id);
 }
 
 function clonePermissionEntry(entry: PermissionEntry): PermissionEntry {
   const grants = entry.grants.map((value) => {
     const grant = normalizeGrant(value);
-    return new Grant(grant.key, grant.condition);
+    return new Grant(grant.key, grant.condition ?? grant.conditionSource, grant.team_id);
   });
-  return { user_id: entry.user_id, perm_ver: entry.perm_ver, grants, userId: entry.user_id, permVer: entry.perm_ver, Grants: grants, UserID: entry.user_id, PermVer: entry.perm_ver };
+  return {
+    user_id: entry.user_id,
+    perm_ver: entry.perm_ver,
+    grants,
+    ...(entry.valid_until === undefined ? {} : { valid_until: entry.valid_until }),
+    userId: entry.user_id,
+    permVer: entry.perm_ver,
+    Grants: grants,
+    UserID: entry.user_id,
+    PermVer: entry.perm_ver,
+  };
 }
 
 function readString(value: object, key: string): string | undefined {
@@ -500,16 +674,29 @@ function readString(value: object, key: string): string | undefined {
   return typeof candidate === "string" ? candidate : undefined;
 }
 
-function readNumber(value: object, key: string): number | undefined {
-  if (!(key in value)) return undefined;
-  const candidate = value[key as keyof typeof value];
-  return typeof candidate === "number" ? candidate : undefined;
-}
-
 function readBoolean(value: object, key: string): boolean | undefined {
   if (!(key in value)) return undefined;
   const candidate = value[key as keyof typeof value];
   return typeof candidate === "boolean" ? candidate : undefined;
+}
+
+function parseRFC3339(value: string): number | undefined {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/.exec(value);
+  if (match === null) return undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = month === 2 ? (leapYear ? 29 : 28) : month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth || hour > 23 || minute > 59 || second > 59) {
+    return undefined;
+  }
+  if (match[7] !== "Z" && (Number(match[8]) > 23 || Number(match[9]) > 59)) return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
 }
 
 async function waitForSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {

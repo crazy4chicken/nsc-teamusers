@@ -17,7 +17,7 @@ features:
   - title: OIDC-style EdDSA JWT authentication
     details: Issue short-lived access tokens with refresh rotation, JWKS discovery, and permission-version checks.
   - title: RBAC plus ABAC authorization
-    details: Resolve role and group bindings with conditional resource, action, and scope permissions.
+    details: Resolve direct, group, and team-baseline role bindings with conditional resource, action, and scope permissions.
   - title: Team-scoped delegated administration
     details: Delegate team operations while keeping platform-only resources and escalation boundaries explicit.
   - title: Complete account lifecycle

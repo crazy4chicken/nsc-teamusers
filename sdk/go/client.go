@@ -203,8 +203,12 @@ func (c *Client) Allow(ctx context.Context, claims Claims, permission string, re
 	if !claims.Expiry.IsZero() && !claims.Expiry.After(time.Now()) {
 		return false, "access token is expired"
 	}
-	if _, err := Parse(permission); err != nil {
+	requested, err := Parse(permission)
+	if err != nil {
 		return false, "invalid permission"
+	}
+	if requested.Scope == "team" && strings.TrimSpace(resource.TeamID) == "" {
+		return false, "resource team is missing"
 	}
 	if c == nil {
 		return false, "authorization client unavailable"
@@ -217,6 +221,9 @@ func (c *Client) Allow(ctx context.Context, claims Claims, permission string, re
 	}
 	entry, err := c.Permissions.Get(ctx, claims.Subject, claims.PermVer)
 	if err != nil {
+		if errors.Is(err, errInvalidPermissionSnapshot) {
+			return false, "invalid permission snapshot"
+		}
 		return c.remoteAllow(ctx, claims.Subject, permission, resource)
 	}
 	if entry == nil {
@@ -225,11 +232,18 @@ func (c *Client) Allow(ctx context.Context, claims Claims, permission string, re
 	if entry.PermVer != claims.PermVer {
 		return false, "permission version mismatch"
 	}
-	requested, _ := Parse(permission)
+	if entry.ValidUntil != nil && !time.Now().Before(*entry.ValidUntil) {
+		return false, "permission snapshot expired"
+	}
 	conditionRejected := false
 	allowed := false
 	denied := false
+	var conditionContext Context
+	conditionContextReady := false
 	for _, grant := range entry.Grants {
+		if grant.TeamID != nil && (*grant.TeamID == "" || resource.TeamID == "" || *grant.TeamID != resource.TeamID) {
+			continue
+		}
 		grantPermission := grant.permission
 		if grantPermission.Resource == "" {
 			var parseErr error
@@ -243,13 +257,26 @@ func (c *Client) Allow(ctx context.Context, claims Claims, permission string, re
 			!matchSegment(grantPermission.Scope, requested.Scope) {
 			continue
 		}
-		if grant.Condition != nil && !grant.Condition.Eval(Context{
-			Subject:  Subject{ID: claims.Subject, Kind: claims.Kind},
-			Resource: resource,
-			Request:  Request{Time: time.Now()},
-		}) {
-			conditionRejected = true
-			continue
+		if grant.conditionErr != nil {
+			return false, "condition_error"
+		}
+		if grant.Condition != nil {
+			if !conditionContextReady {
+				conditionContext = Context{
+					Subject:  Subject{ID: claims.Subject, Kind: claims.Kind},
+					Resource: resource,
+					Request:  Request{Time: time.Now()},
+				}
+				conditionContextReady = true
+			}
+			conditionAllows, evalErr := grant.Condition.eval(conditionContext)
+			if evalErr != nil {
+				return false, "condition_error"
+			}
+			if !conditionAllows {
+				conditionRejected = true
+				continue
+			}
 		}
 		if grantPermission.Deny {
 			denied = true

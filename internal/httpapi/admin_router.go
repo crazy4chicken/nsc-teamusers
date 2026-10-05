@@ -65,16 +65,9 @@ func (h *adminHandler) requirePermission(next http.Handler) http.Handler {
 			return
 		}
 		now := time.Now()
-		permissionKeys, resolveErr := store.ListUnconditionalRolePermissions(r.Context(), h.q, subject.UserID, now)
+		permissionRows, resolveErr := store.ListEffectiveRolePermissionGrants(r.Context(), h.q, subject.UserID, now)
 		if resolveErr != nil {
 			WriteProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "authorization service unavailable")
-			return
-		}
-		grants := parsePermissionGrants(permissionKeys)
-		// Keep the unconditional path first: most admin requests avoid loading
-		// and evaluating conditional bindings.
-		if permissionGranted(grants, requested) {
-			next.ServeHTTP(w, withAdminGrantScope(r, adminGrantScopeAny))
 			return
 		}
 
@@ -93,43 +86,37 @@ func (h *adminHandler) requirePermission(next http.Handler) http.Handler {
 			}
 		}
 
-		conditionalRows, conditionalErr := store.ListConditionalRolePermissions(r.Context(), h.q, subject.UserID, now)
-		if conditionalErr != nil {
-			WriteProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "authorization service unavailable")
-			return
+		platformGrants, platformConditionError := resolveAdminPermissionGrants(
+			r.Context(), subject.UserID, teamID, now, requested, permissionRows, false,
+		)
+		teamApplicable := IsTeamScopedAdminArea(area) && targeted && teamID != ""
+		requestedTeam := domain.Permission{Resource: "iam", Action: area, Scope: "team"}
+		var teamGrants []domain.Permission
+		teamConditionError := false
+		if teamApplicable {
+			teamGrants, teamConditionError = resolveAdminPermissionGrants(
+				r.Context(), subject.UserID, teamID, now, requestedTeam, permissionRows, true,
+			)
 		}
-		conditional := resolveConditionalAdminGrants(r.Context(), subject.UserID, teamID, now, conditionalRows)
-		if permissionGranted(append(grants, conditional.Any...), requested) {
-			next.ServeHTTP(w, withAdminGrantScope(r, adminGrantScopeAny))
-			return
-		}
-		if !IsTeamScopedAdminArea(area) {
-			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
-			return
-		}
-		if !targeted || teamID == "" {
+		if platformConditionError || teamConditionError {
 			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
 			return
 		}
 
-		teamPermissions, teamErr := store.ListUnconditionalTeamRolePermissions(r.Context(), h.q, subject.UserID, now)
-		if teamErr != nil {
-			WriteProblem(w, r, http.StatusInternalServerError, "Internal Server Error", "authorization service unavailable")
+		platformResolution := permissionResolution(platformGrants, requested)
+		var teamResolution domain.Resolution
+		if teamApplicable {
+			teamResolution = permissionResolution(teamGrants, requestedTeam)
+		}
+		if platformResolution.Denied || teamResolution.Denied {
+			WriteProblem(w, r, http.StatusForbidden, "Forbidden", "insufficient_permissions")
 			return
 		}
-		requestedTeam := domain.Permission{Resource: "iam", Action: area, Scope: "team"}
-		for _, candidate := range teamPermissions {
-			if candidate.TeamID != teamID {
-				continue
-			}
-			candidateGrants := parsePermissionGrants(candidate.Keys)
-			candidateGrants = append(candidateGrants, conditional.Team[teamID]...)
-			if permissionGranted(candidateGrants, requestedTeam) {
-				next.ServeHTTP(w, withAdminGrantScope(r, adminGrantScopeTeam))
-				return
-			}
+		if platformResolution.Allowed {
+			next.ServeHTTP(w, withAdminGrantScope(r, adminGrantScopeAny))
+			return
 		}
-		if permissionGranted(conditional.Team[teamID], requestedTeam) {
+		if teamResolution.Allowed {
 			next.ServeHTTP(w, withAdminGrantScope(r, adminGrantScopeTeam))
 			return
 		}
@@ -137,57 +124,58 @@ func (h *adminHandler) requirePermission(next http.Handler) http.Handler {
 	})
 }
 
-func parsePermissionGrants(keys []string) []domain.Permission {
-	grants := make([]domain.Permission, 0, len(keys))
-	for _, key := range keys {
-		permission, err := domain.Parse(key)
-		if err == nil {
-			grants = append(grants, permission)
-		}
-	}
-	return grants
-}
-
-func permissionGranted(grants []domain.Permission, requested domain.Permission) bool {
+func permissionResolution(grants []domain.Permission, requested domain.Permission) domain.Resolution {
 	resolution := domain.Resolve(grants, []domain.Permission{requested})
-	return len(resolution) == 1 && resolution[0].Matched && resolution[0].Allowed
-}
-
-type conditionalAdminGrants struct {
-	Any  []domain.Permission
-	Team map[string][]domain.Permission
-}
-
-func resolveConditionalAdminGrants(ctx context.Context, subjectID, teamID string, now time.Time, rows []store.ConditionalRolePermission) conditionalAdminGrants {
-	resolved := conditionalAdminGrants{
-		Any:  make([]domain.Permission, 0, len(rows)),
-		Team: make(map[string][]domain.Permission),
+	if len(resolution) != 1 {
+		return domain.Resolution{}
 	}
+	return resolution[0]
+}
+
+func resolveAdminPermissionGrants(
+	ctx context.Context,
+	subjectID, teamID string,
+	now time.Time,
+	requested domain.Permission,
+	rows []store.RolePermissionGrant,
+	includeTeam bool,
+) ([]domain.Permission, bool) {
+	grants := make([]domain.Permission, 0, len(rows))
 	values := domain.Context{
 		Subject:  domain.Subject{ID: subjectID, Kind: "user"},
 		Resource: domain.Resource{TeamID: teamID, OwnerID: ""},
 		Request:  domain.Request{Time: now},
 	}
 	for _, row := range rows {
-		condition, err := domain.Compile(row.Condition)
-		if err != nil {
-			continue
-		}
-		allowed, err := condition.EvalWithContext(ctx, values)
-		if err != nil || !allowed {
+		if row.TeamID != nil && (!includeTeam || teamID == "" || *row.TeamID != teamID) {
 			continue
 		}
 		permission, err := domain.Parse(row.Key)
 		if err != nil {
 			continue
 		}
-		resolved.Any = append(resolved.Any, permission)
-		if row.TeamID != nil {
-			resolved.Team[*row.TeamID] = append(resolved.Team[*row.TeamID], permission)
+		resolution := domain.Resolve([]domain.Permission{permission}, []domain.Permission{requested})
+		if len(resolution) != 1 || !resolution[0].Matched {
+			continue
 		}
+		if row.Condition != nil && strings.TrimSpace(*row.Condition) != "" {
+			condition, err := domain.Compile(*row.Condition)
+			if err != nil {
+				return nil, true
+			}
+			allowed, err := condition.EvalWithContext(ctx, values)
+			if err != nil {
+				return nil, true
+			}
+			if !allowed {
+				continue
+			}
+		}
+		grants = append(grants, permission)
 	}
-	return resolved
+	return grants, false
 }
+
 
 func adminPathSegments(path string) []string {
 	trimmed := strings.Trim(path, "/")
@@ -319,31 +307,68 @@ func (h *adminHandler) resolveAdminTeam(ctx context.Context, r *http.Request, ar
 			return *binding.TeamID, true, nil
 		}
 		if r.Method != http.MethodPost {
+			if r.Method == http.MethodGet && strings.TrimSpace(r.URL.Query().Get("subject_kind")) == "team" {
+				subjectID := strings.TrimSpace(r.URL.Query().Get("subject_id"))
+				if subjectID == "" {
+					return "", false, nil
+				}
+				team, err := store.GetTeam(ctx, h.q, subjectID)
+				if err != nil {
+					return "", true, err
+				}
+				return team.ID, true, nil
+			}
 			return "", false, nil
 		}
-		raw, present, err := adminBodyField(r, "role_id")
-		if err != nil {
+		kindRaw, kindPresent, err := adminBodyField(r, "subject_kind")
+		if err != nil || !kindPresent {
 			return "", false, err
 		}
-		if !present {
+		var subjectKind string
+		if json.Unmarshal(kindRaw, &subjectKind) != nil {
 			return "", false, nil
 		}
-		var roleID string
-		if json.Unmarshal(raw, &roleID) != nil {
+		idRaw, idPresent, err := adminBodyField(r, "subject_id")
+		if err != nil || !idPresent {
+			return "", false, err
+		}
+		var subjectID string
+		if json.Unmarshal(idRaw, &subjectID) != nil || strings.TrimSpace(subjectID) == "" {
 			return "", false, nil
 		}
-		roleID = strings.TrimSpace(roleID)
-		if roleID == "" {
+		switch subjectKind {
+		case "team":
+			team, err := store.GetTeam(ctx, h.q, strings.TrimSpace(subjectID))
+			if err != nil {
+				return "", true, err
+			}
+			return team.ID, true, nil
+		case "group":
+			group, err := store.GetGroup(ctx, h.q, strings.TrimSpace(subjectID))
+			if err != nil {
+				return "", true, err
+			}
+			return group.TeamID, true, nil
+		case "user":
+			if teamID, targeted, err := h.resolveAdminBodyTeam(ctx, r, "team_id"); err != nil || targeted {
+				return teamID, targeted, err
+			}
+			roleRaw, rolePresent, err := adminBodyField(r, "role_id")
+			if err != nil || !rolePresent {
+				return "", false, err
+			}
+			var roleID string
+			if json.Unmarshal(roleRaw, &roleID) != nil || strings.TrimSpace(roleID) == "" {
+				return "", false, nil
+			}
+			role, err := store.GetRole(ctx, h.q, strings.TrimSpace(roleID))
+			if err != nil || role.TeamID == nil {
+				return "", err != nil, err
+			}
+			return *role.TeamID, true, nil
+		default:
 			return "", false, nil
 		}
-		role, err := store.GetRole(ctx, h.q, roleID)
-		if err != nil {
-			return "", true, err
-		}
-		if role.TeamID == nil {
-			return "", true, nil
-		}
-		return *role.TeamID, true, nil
 	default:
 		return "", false, nil
 	}
@@ -455,7 +480,11 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 	} {
 		router.Get(route.path, route.get)
 		if route.post != nil {
-			router.Post(route.path, route.post)
+			if route.path == "/bindings" {
+				router.With(freshAuthMiddleware).Post(route.path, route.post)
+			} else {
+				router.Post(route.path, route.post)
+			}
 		}
 	}
 	router.Post("/invitations", h.createInvitation)
@@ -528,6 +557,7 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 		r.Get("/", h.listBindings)
 		r.With(freshAuthMiddleware).Post("/", h.createBinding)
 		r.With(freshAuthMiddleware).Delete("/{id}", h.deleteBinding)
+		r.With(freshAuthMiddleware).Patch("/{id}", h.patchBinding)
 	})
 	router.Route("/audit", func(r chi.Router) {
 		r.Get("/", h.listAudit)

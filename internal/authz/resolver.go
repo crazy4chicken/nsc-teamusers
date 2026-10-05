@@ -18,18 +18,21 @@ var ErrUserDisabled = errors.New("user is disabled")
 
 // Set is the effective permission set for one user.
 type Set struct {
-	UserID  string
-	PermVer int64
-	Grants  []Grant
+	UserID     string
+	PermVer    int64
+	Grants     []Grant
+	ValidUntil *time.Time
 }
 
 // Grant is one permission expanded from a role binding. A nil Condition is
-// unconditional.
+// unconditional. TeamID is nil for platform grants and non-nil for team scope.
 type Grant struct {
 	Permission domain.Permission
+	TeamID     *string
 	Condition  *domain.Condition
 
 	conditionSource string
+	conditionError  error
 }
 
 // ConditionSource returns the original source for a compiled condition. It is
@@ -56,9 +59,9 @@ func Resolve(ctx context.Context, q store.Q, userID string) (*Set, error) {
 	return NewResolver(q).Resolve(ctx, userID)
 }
 
-// Resolve expands direct and inherited bindings. The database work is capped
-// at four queries: the user row, direct user bindings, group bindings joined to
-// active memberships, and one ANY($1) role_permissions expansion.
+// Resolve expands direct, group, and team-baseline bindings. Database work is
+// capped at five queries: the user row, each binding source, and one role
+// permission expansion.
 func (r *Resolver) Resolve(ctx context.Context, userID string) (*Set, error) {
 	set := &Set{UserID: userID, Grants: make([]Grant, 0)}
 	if r == nil || r.Q == nil {
@@ -85,9 +88,14 @@ func (r *Resolver) Resolve(ctx context.Context, userID string) (*Set, error) {
 	if err != nil {
 		return set, err
 	}
-	bindings := make([]store.RoleBinding, 0, len(direct)+len(group))
+	team, err := store.ListTeamRoleBindings(ctx, r.Q, userID, now)
+	if err != nil {
+		return set, err
+	}
+	bindings := make([]store.RoleBinding, 0, len(direct)+len(group)+len(team))
 	bindings = append(bindings, direct...)
 	bindings = append(bindings, group...)
+	bindings = append(bindings, team...)
 
 	roleIDs := make([]string, 0, len(bindings))
 	seenRoles := make(map[string]struct{}, len(bindings))
@@ -108,14 +116,8 @@ func (r *Resolver) Resolve(ctx context.Context, userID string) (*Set, error) {
 		logger = slog.Default()
 	}
 	for _, binding := range bindings {
-		condition, source, err := compileBindingCondition(binding.Condition)
-		if err != nil {
-			// Conditions are fail-closed per grant, not per request. A broken
-			// condition must never turn an otherwise valid role into an allow.
-			logger.Warn("skipping role binding with invalid condition",
-				"binding_id", binding.ID, "role_id", binding.RoleID, "error", err)
-			continue
-		}
+		condition, source, conditionErr := compileBindingCondition(binding.Condition)
+		grantStart := len(set.Grants)
 		for _, key := range rolePermissions[binding.RoleID] {
 			permission, err := domain.Parse(key)
 			if err != nil {
@@ -125,9 +127,16 @@ func (r *Resolver) Resolve(ctx context.Context, userID string) (*Set, error) {
 			}
 			set.Grants = append(set.Grants, Grant{
 				Permission:      permission,
+				TeamID:          binding.TeamID,
 				Condition:       condition,
 				conditionSource: source,
+				conditionError:  conditionErr,
 			})
+		}
+		if len(set.Grants) > grantStart && binding.EffectiveUntil != nil &&
+			(set.ValidUntil == nil || binding.EffectiveUntil.Before(*set.ValidUntil)) {
+			validUntil := *binding.EffectiveUntil
+			set.ValidUntil = &validUntil
 		}
 	}
 	return set, nil
@@ -139,7 +148,7 @@ func compileBindingCondition(source *string) (*domain.Condition, string, error) 
 	}
 	condition, err := domain.Compile(*source)
 	if err != nil {
-		return nil, "", fmt.Errorf("compile condition: %w", err)
+		return nil, *source, fmt.Errorf("compile condition: %w", err)
 	}
 	return condition, *source, nil
 }

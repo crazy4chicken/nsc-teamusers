@@ -264,7 +264,7 @@ class Parser {
   }
 }
 
-/** A compiled boolean condition. Evaluation errors fail closed. */
+/** A compiled boolean condition whose strict evaluator reports runtime failures. */
 export class CompiledCondition {
   public readonly source: string;
   public readonly Source: string;
@@ -278,14 +278,23 @@ export class CompiledCondition {
 
   /** Evaluate the condition, returning false for every runtime error. */
   public eval(values: Context): boolean {
-    if (this.program === undefined) {
-      return true;
-    }
     try {
-      return evaluateNode(this.program, values) === true;
+      return this.evalStrict(values);
     } catch {
       return false;
     }
+  }
+
+  /** Evaluate the condition without hiding runtime errors. */
+  public evalStrict(values: Context): boolean {
+    if (this.program === undefined) {
+      return true;
+    }
+    const result = evaluateNode(this.program, values);
+    if (typeof result !== "boolean") {
+      throw new Error("condition result is not boolean");
+    }
+    return result;
   }
 
   public Eval(values: Context): boolean {
@@ -496,14 +505,20 @@ function evaluateNode(node: Node, context: Context): unknown {
   }
   if (node.operator === "&&") {
     const left = evaluateNode(node.left, context);
-    if (left !== true) return false;
-    return evaluateNode(node.right, context) === true;
+    if (typeof left !== "boolean") throw new Error("&& requires boolean operands");
+    if (!left) return false;
+    const right = evaluateNode(node.right, context);
+    if (typeof right !== "boolean") throw new Error("&& requires boolean operands");
+    return right;
   }
 
   if (node.operator === "||") {
     const left = evaluateNode(node.left, context);
-    if (left === true) return true;
-    return evaluateNode(node.right, context) === true;
+    if (typeof left !== "boolean") throw new Error("|| requires boolean operands");
+    if (left) return true;
+    const right = evaluateNode(node.right, context);
+    if (typeof right !== "boolean") throw new Error("|| requires boolean operands");
+    return right;
   }
   const left = evaluateNode(node.left, context);
   const right = evaluateNode(node.right, context);
@@ -600,10 +615,11 @@ function sameValue(left: unknown, right: unknown): boolean {
 }
 
 function isIn(left: unknown, right: unknown): boolean {
+  if (right === undefined || right === null) return false;
   if (Array.isArray(right)) return right.some((candidate) => sameValue(left, candidate));
   if (typeof right === "string") return typeof left === "string" && right.includes(left);
-  if (right !== null && typeof right === "object") {
+  if (typeof right === "object") {
     return (typeof left === "string" || typeof left === "number") && Object.prototype.hasOwnProperty.call(right, left);
   }
-  return false;
+  throw new Error("right operand of in is not a collection");
 }

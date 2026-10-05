@@ -1,31 +1,11 @@
 package domain
 
-// ScopeRank returns the specificity rank used when grants conflict. A larger
-// value is narrower and therefore wins. The wildcard scope is the broadest
-// valid scope; invalid scopes rank below it.
-func ScopeRank(scope string) int {
-	switch scope {
-	case "own":
-		return 3
-	case "team":
-		return 2
-	case "any":
-		return 1
-	case "*":
-		return 0
-	default:
-		return -1
-	}
-}
-
 // Resolution is the result for one requested permission.
 //
-// Grant is the highest-precedence matching grant. Matched is false when no
-// grant applies. An explicit deny is represented by Denied=true and
-// Allowed=false.
+// Explicit deny grants override all matching allows; otherwise any matching
+// allow grants access. Matched is false when no grant applies.
 type Resolution struct {
 	Request Permission
-	Grant   Permission
 	Matched bool
 	Allowed bool
 	Denied  bool
@@ -34,9 +14,10 @@ type Resolution struct {
 // GrantSet is a collection of grants that can resolve requested permissions.
 type GrantSet []Permission
 
-// Resolve resolves requests against grants. Explicit deny grants always
-// participate in resolution and take precedence over matching allows. Results
-// retain request order and contain one entry per request.
+
+// Resolve resolves requests against grants. Deny-overrides is independent of
+// grant order and scope specificity; permission segment matching is unchanged.
+// Results retain request order and contain one entry per request.
 func Resolve(grants []Permission, requests []Permission) []Resolution {
 	resolutions := make([]Resolution, len(requests))
 	for i, request := range requests {
@@ -45,26 +26,25 @@ func Resolve(grants []Permission, requests []Permission) []Resolution {
 			resolutions[i] = resolution
 			continue
 		}
-		var best Permission
 		for _, grant := range grants {
 			if grant.Validate() != nil {
 				continue
 			}
-			if request.Deny && grant.Deny != request.Deny {
+			if request.Deny && !grant.Deny {
 				continue
 			}
 			if !matchPermissionSegments(grant, request) {
 				continue
 			}
-			if !resolution.Matched || higherPrecedence(grant, best) {
-				best = grant
-				resolution.Matched = true
+			resolution.Matched = true
+			if grant.Deny {
+				resolution.Denied = true
+			} else {
+				resolution.Allowed = true
 			}
 		}
-		if resolution.Matched {
-			resolution.Grant = best
-			resolution.Denied = best.Deny
-			resolution.Allowed = !best.Deny
+		if resolution.Denied {
+			resolution.Allowed = false
 		}
 		resolutions[i] = resolution
 	}
@@ -80,11 +60,4 @@ func matchPermissionSegments(grant, request Permission) bool {
 	return matchSegment(grant.Resource, request.Resource) &&
 		matchSegment(grant.Action, request.Action) &&
 		matchSegment(grant.Scope, request.Scope)
-}
-
-func higherPrecedence(candidate, current Permission) bool {
-	if candidate.Deny != current.Deny {
-		return candidate.Deny
-	}
-	return ScopeRank(candidate.Scope) > ScopeRank(current.Scope)
 }

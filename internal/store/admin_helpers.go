@@ -45,7 +45,8 @@ func ListUserIDsByGroup(ctx context.Context, q Q, groupID string) ([]string, err
 }
 
 // ListUserIDsByRole returns users affected by a role permission or binding
-// change, including direct user bindings and group members.
+// change, including direct user bindings, group members, and team baseline
+// members.
 func ListUserIDsByRole(ctx context.Context, q Q, roleID string) ([]string, error) {
 	rows, err := q.Query(ctx, `
 		SELECT DISTINCT user_id FROM (
@@ -57,6 +58,11 @@ func ListUserIDsByRole(ctx context.Context, q Q, roleID string) ([]string, error
 			FROM role_bindings b
 			JOIN memberships m ON m.group_id = b.subject_id
 			WHERE b.role_id = $1 AND b.subject_kind = 'group'
+			UNION ALL
+			SELECT m.user_id
+			FROM role_bindings b
+			JOIN memberships m ON m.team_id = b.team_id
+			WHERE b.role_id = $1 AND b.subject_kind = 'team'
 		) affected
 		ORDER BY user_id`, roleID)
 	if err != nil {
@@ -66,8 +72,21 @@ func ListUserIDsByRole(ctx context.Context, q Q, roleID string) ([]string, error
 	return scanUserIDs(rows)
 }
 
-// ListUserIDsByTeam returns users whose effective permissions can be removed
-// when a team and its groups, memberships, or team bindings are deleted.
+// RoleHasForeignTeamBaseline reports whether moving a role to teamID would
+// make any existing team baseline point at a role owned by another team.
+func RoleHasForeignTeamBaseline(ctx context.Context, q Q, roleID string, teamID *string) (bool, error) {
+	var found bool
+	err := q.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM role_bindings
+			WHERE role_id = $1 AND subject_kind = 'team'
+			  AND $2::text IS NOT NULL AND team_id <> $2
+		)`, roleID, teamID).Scan(&found)
+	return found, err
+}
+
+// ListUserIDsByTeam returns users whose effective permissions can change when
+// a team status, its memberships, bindings, or baseline changes.
 func ListUserIDsByTeam(ctx context.Context, q Q, teamID string) ([]string, error) {
 	rows, err := q.Query(ctx, `
 		SELECT DISTINCT user_id FROM (
@@ -84,6 +103,11 @@ func ListUserIDsByTeam(ctx context.Context, q Q, teamID string) ([]string, error
 			JOIN groups g ON g.id = b.subject_id AND b.subject_kind = 'group'
 			JOIN memberships m ON m.group_id = g.id
 			WHERE g.team_id = $1
+			UNION ALL
+			SELECT m.user_id
+			FROM role_bindings b
+			JOIN memberships m ON m.team_id = b.subject_id
+			WHERE b.team_id = $1 AND b.subject_kind = 'team'
 		) affected
 		ORDER BY user_id`, teamID)
 	if err != nil {
@@ -98,6 +122,9 @@ func ListUserIDsByTeam(ctx context.Context, q Q, teamID string) ([]string, error
 func ListUserIDsByBinding(ctx context.Context, q Q, binding RoleBinding) ([]string, error) {
 	if binding.SubjectKind == "user" {
 		return []string{binding.SubjectID}, nil
+	}
+	if binding.SubjectKind == "team" {
+		return ListUserIDsByTeam(ctx, q, binding.SubjectID)
 	}
 	return ListUserIDsByGroup(ctx, q, binding.SubjectID)
 }

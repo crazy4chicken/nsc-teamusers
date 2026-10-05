@@ -84,3 +84,65 @@ func createConditionTestTeam(t *testing.T, stack *integrationStack, adminToken, 
 	decodeResponse(t, body, &team)
 	return team
 }
+
+func TestAdminTeamDenialAndConditionErrorOverridePlatformAllow(t *testing.T) {
+	stack, admin, adminToken := newAdminSession(t)
+	ctx := context.Background()
+	alpha := createConditionTestTeam(t, stack, adminToken, "admin-deny-alpha")
+	beta := createConditionTestTeam(t, stack, adminToken, "admin-deny-beta")
+	member := seedPasswordUser(t, ctx, stack.database.pool, "admin-deny-member", "AdminDenyMemberPassword1")
+	outsider := seedPasswordUser(t, ctx, stack.database.pool, "admin-deny-outsider", "AdminDenyOutsiderPassword1")
+	errorMember := seedPasswordUser(t, ctx, stack.database.pool, "admin-condition-error-member", "AdminConditionErrorPassword1")
+
+	registerBaselineTestPermission(t, stack, admin, adminToken, "iam:teams:team")
+	registerBaselineTestPermission(t, stack, admin, adminToken, "!iam:teams:team")
+	platformRole := createBaselineTestRole(t, stack, adminToken, "admin-platform-team-view", "", []string{"iam:teams:any"})
+	denyRole := createBaselineTestRole(t, stack, adminToken, "admin-team-deny", alpha.ID, []string{"!iam:teams:team"})
+	errorRole := createBaselineTestRole(t, stack, adminToken, "admin-team-error", beta.ID, []string{"iam:teams:team"})
+
+	alphaGroup := createBaselineTestGroup(t, stack, adminToken, alpha.ID, "admin-deny-alpha-members")
+	betaGroup := createBaselineTestGroup(t, stack, adminToken, beta.ID, "admin-deny-beta-members")
+	addBaselineTestMember(t, stack, adminToken, alphaGroup.ID, member.ID, nil)
+	addBaselineTestMember(t, stack, adminToken, betaGroup.ID, errorMember.ID, nil)
+
+	for _, user := range []store.User{member, outsider, errorMember} {
+		status, body := stack.jsonRequest(t, http.MethodPost, "/bindings", map[string]string{
+			"role_id": platformRole.ID, "subject_kind": "user", "subject_id": user.ID,
+		}, adminToken)
+		if status != http.StatusCreated {
+			t.Fatalf("bind platform team permission to %s = %d %s, want 201", user.ID, status, body)
+		}
+	}
+	status, body := stack.jsonRequest(t, http.MethodPost, "/bindings", map[string]string{
+		"role_id": denyRole.ID, "subject_kind": "team", "subject_id": alpha.ID,
+	}, adminToken)
+	if status != http.StatusCreated {
+		t.Fatalf("create team deny baseline = %d %s, want 201", status, body)
+	}
+
+	badCondition := "resource.not_a_field == true"
+	if _, err := store.CreateRoleBinding(ctx, stack.database.pool, store.RoleBinding{
+		TeamID: &beta.ID, RoleID: errorRole.ID, SubjectKind: "team", SubjectID: beta.ID, Condition: &badCondition,
+	}); err != nil {
+		t.Fatalf("insert conditional-error team baseline: %v", err)
+	}
+	if _, err := store.BumpUserPermVer(ctx, stack.database.pool, errorMember.ID); err != nil {
+		t.Fatalf("bump conditional-error member permission version: %v", err)
+	}
+
+	memberToken := loginUser(t, stack, member.Username, "AdminDenyMemberPassword1")
+	outsiderToken := loginUser(t, stack, outsider.Username, "AdminDenyOutsiderPassword1")
+	errorToken := loginUser(t, stack, errorMember.Username, "AdminConditionErrorPassword1")
+	status, body = stack.jsonRequest(t, http.MethodGet, "/teams/"+alpha.ID, nil, memberToken)
+	if status != http.StatusForbidden {
+		t.Fatalf("member platform allow with team baseline deny = %d %s, want 403", status, body)
+	}
+	status, body = stack.jsonRequest(t, http.MethodGet, "/teams/"+alpha.ID, nil, outsiderToken)
+	if status != http.StatusOK {
+		t.Fatalf("outsider platform allow with unrelated team baseline = %d %s, want 200", status, body)
+	}
+	status, body = stack.jsonRequest(t, http.MethodGet, "/teams/"+beta.ID, nil, errorToken)
+	if status != http.StatusForbidden {
+		t.Fatalf("platform allow with applicable team condition error = %d %s, want 403", status, body)
+	}
+}

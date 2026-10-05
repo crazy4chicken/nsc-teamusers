@@ -587,9 +587,11 @@ def _eval(node: Any, values: Context | Mapping[str, Any] | Any) -> Any:
         if node.operator == "in":
             if right is None or right is _MISSING:
                 return False
+            if isinstance(right, str):
+                return isinstance(left, str) and left in right
             if isinstance(right, Mapping):
                 return left in right
-            if isinstance(right, (str, bytes, bytearray, list, tuple, set, frozenset)):
+            if isinstance(right, (bytes, bytearray, list, tuple, set, frozenset)):
                 return any(_equal(left, item) for item in right)
             raise TypeError("right operand of in is not a collection")
         return _compare(left, right, node.operator)
@@ -608,13 +610,18 @@ class CompiledCondition:
         return self.source
 
     def eval(self, values: Context | Mapping[str, Any] | Any) -> bool:
-        if self._tree is None:
-            return True
         try:
-            result = _eval(self._tree, values)
-            return result if isinstance(result, bool) else False
+            return self.eval_strict(values)
         except BaseException:
             return False
+
+    def eval_strict(self, values: Context | Mapping[str, Any] | Any) -> bool:
+        if self._tree is None:
+            return True
+        result = _eval(self._tree, values)
+        if not isinstance(result, bool):
+            raise TypeError("condition result is not bool")
+        return result
 
     def evaluate(self, values: Context | Mapping[str, Any] | Any) -> bool:
         return self.eval(values)

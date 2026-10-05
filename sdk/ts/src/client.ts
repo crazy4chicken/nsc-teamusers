@@ -1,6 +1,7 @@
 import { type Claims, Verifier } from "./verifier.js";
 import {
   PermissionsClient,
+  PermissionSnapshotError,
   evaluatePermissionEntry,
   type CheckResult,
   type PermissionEntry,
@@ -80,7 +81,10 @@ export class Client {
     let entry: PermissionEntry;
     try {
       entry = await this.permissions.get(claims.subject, claims.permVer, parsed.signal);
-    } catch {
+    } catch (error) {
+      if (error instanceof PermissionSnapshotError) {
+        return { allow: false, reason: "invalid permission snapshot" };
+      }
       return this.remoteAllow(parsed.signal, claims.subject, parsed.permission, parsed.resource);
     }
     if (entry.perm_ver !== claims.permVer) {

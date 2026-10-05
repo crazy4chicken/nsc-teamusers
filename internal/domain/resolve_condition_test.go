@@ -8,14 +8,6 @@ import (
 	"time"
 )
 
-func TestScopeRank(t *testing.T) {
-	if !(ScopeRank("own") > ScopeRank("team") && ScopeRank("team") > ScopeRank("any") && ScopeRank("any") > ScopeRank("*")) {
-		t.Fatalf("scope ranks do not reflect own > team > any > *")
-	}
-	if got := ScopeRank("invalid"); got >= ScopeRank("*") {
-		t.Fatalf("ScopeRank(invalid) = %d, want below wildcard rank", got)
-	}
-}
 
 func TestResolvePrecedence(t *testing.T) {
 	grants := []Permission{
@@ -36,17 +28,22 @@ func TestResolvePrecedence(t *testing.T) {
 	}
 
 	resolved := Resolve(grants, requests)
-	if resolved[0].Allowed || !resolved[0].Denied || resolved[0].Grant.Scope != "*" {
-		t.Fatalf("explicit deny should beat narrower allow = %#v", resolved[0])
+	for _, index := range []int{0, 1, 2} {
+		if resolved[index].Allowed || !resolved[index].Denied {
+			t.Fatalf("explicit deny should override matching allows for request %q = %#v", requests[index].String(), resolved[index])
+		}
 	}
-	if resolved[1].Allowed || !resolved[1].Denied || resolved[1].Grant.Scope != "team" {
-		t.Fatalf("explicit team deny = %#v, want denied", resolved[1])
-	}
-	if resolved[2].Allowed || !resolved[2].Denied || resolved[2].Grant.Scope != "*" {
-		t.Fatalf("wildcard deny should match any scope = %#v", resolved[2])
-	}
-	if !resolved[3].Allowed || resolved[3].Grant.Action != "delete" {
+	if !resolved[3].Allowed || resolved[3].Denied {
 		t.Fatalf("unrelated deny should not affect delete = %#v", resolved[3])
+	}
+
+	allow := Permission{Resource: "orders", Action: "read", Scope: "team"}
+	deny := Permission{Resource: "orders", Action: "read", Scope: "team", Deny: true}
+	for _, ordered := range [][]Permission{{allow, deny}, {deny, allow}} {
+		resolution := Resolve(ordered, []Permission{{Resource: "orders", Action: "read", Scope: "team"}})[0]
+		if !resolution.Denied || resolution.Allowed {
+			t.Fatalf("deny precedence depends on grant order %v: %#v", ordered, resolution)
+		}
 	}
 }
 

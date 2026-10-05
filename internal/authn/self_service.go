@@ -124,35 +124,54 @@ func (s *Service) listOwnPermissions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// effectivePermissionKeys returns unconditional allow keys that remain allowed after deny precedence.
+// effectivePermissionKeys returns unconditional allow keys that remain allowed
+// within at least one platform or team grant scope.
 func effectivePermissionKeys(set *authz.Set) []string {
 	if set == nil {
 		return []string{}
 	}
-	grants := make([]domain.Permission, 0, len(set.Grants))
-	requests := make([]domain.Permission, 0, len(set.Grants))
+	type scope struct {
+		teamID string
+		isTeam bool
+	}
+	type scopedPermissions struct {
+		grants   []domain.Permission
+		requests []domain.Permission
+	}
+	byScope := make(map[scope]*scopedPermissions)
 	for _, grant := range set.Grants {
-		if grant.Condition != nil {
+		if grant.Condition != nil || grant.ConditionSource() != "" {
 			continue
 		}
-		grants = append(grants, grant.Permission)
+		key := scope{}
+		if grant.TeamID != nil {
+			key.teamID = *grant.TeamID
+			key.isTeam = true
+		}
+		permissions := byScope[key]
+		if permissions == nil {
+			permissions = &scopedPermissions{}
+			byScope[key] = permissions
+		}
+		permissions.grants = append(permissions.grants, grant.Permission)
 		if !grant.Permission.Deny {
-			requests = append(requests, grant.Permission)
+			permissions.requests = append(permissions.requests, grant.Permission)
 		}
 	}
-	resolutions := domain.Resolve(grants, requests)
-	permissions := make([]string, 0, len(requests))
-	seen := make(map[string]struct{}, len(requests))
-	for i, resolution := range resolutions {
-		if !resolution.Matched || !resolution.Allowed {
-			continue
+	seen := make(map[string]struct{})
+	permissions := make([]string, 0)
+	for _, scoped := range byScope {
+		for i, resolution := range domain.Resolve(scoped.grants, scoped.requests) {
+			if !resolution.Matched || !resolution.Allowed {
+				continue
+			}
+			key := scoped.requests[i].String()
+			if _, found := seen[key]; found {
+				continue
+			}
+			seen[key] = struct{}{}
+			permissions = append(permissions, key)
 		}
-		key := requests[i].String()
-		if _, found := seen[key]; found {
-			continue
-		}
-		seen[key] = struct{}{}
-		permissions = append(permissions, key)
 	}
 	sort.Strings(permissions)
 	return permissions

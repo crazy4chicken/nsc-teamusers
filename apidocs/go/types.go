@@ -17,6 +17,9 @@ type Operation struct {
 	Response              any
 	RequestExample        any
 	ResponseExample       any
+	// SuccessStatus overrides the inferred success status. Zero preserves the
+	// existing response-based 200/204 default.
+	SuccessStatus         int
 	Errors                []ErrorDoc
 }
 

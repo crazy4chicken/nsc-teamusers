@@ -63,11 +63,40 @@ policies merge them field by field through priority, as described in the
 [security guide](/guide/security#password-policies).
 
 Membership and binding changes therefore affect the next resolution; expired
-memberships and bindings no longer make their subjects match. The resolver
-uses the direct user and group binding paths and does not treat a conditional
-binding as an unconditional role grant.
+memberships and bindings no longer make their subjects match. Password-policy
+subject resolution continues to use direct user and group binding paths and does
+not treat conditional bindings as unconditional role grants. Authorization
+baseline traversal is separate and does not add team baselines to password-,
+session-, or MFA-policy role-target resolution.
 
-## Current API consumers
+
+
+## Authorization binding traversal
+
+`POST /bindings` also accepts `subject_kind=team` for one authorization baseline
+per team. `subject_id` is the team ID; `team_id` may be omitted and inferred, or
+must equal `subject_id` when supplied. The role may be platform-scoped or owned
+by that same team; foreign-team roles are rejected. A baseline may carry a
+condition and allow or deny permissions but cannot expire. It is one team
+binding, not a set of per-user copies or a default group.
+
+Authorization resolves a user's grants through three binding paths:
+
+- A direct user binding targets that user.
+- A group binding targets a group in which the user has an unexpired membership.
+- A team baseline is inherited when the user has at least one unexpired
+  membership in any group in that active team. Memberships across the team's
+  groups form a union: one valid membership is sufficient, and removing or
+  expiring the last valid membership removes baseline eligibility.
+
+Every team-scoped binding grant is limited to a request whose `resource.team_id`
+matches the binding's team, and scoped grants are suppressed while that team is
+disabled. A permission key ending in `:any` does not remove this binding-team
+filter. Platform bindings with `team_id: null` remain independent of team
+membership and are not affected by a baseline deny unless the platform user is
+also an eligible member of that team and the deny matches the resource.
+
+## Current policy subject consumers
 
 Password policies are the current consumer of generic subjects. The
 administrative password-policy API uses subjects in:
@@ -83,9 +112,10 @@ validated. The authenticated query endpoints `GET /me/password-policy` and
 `GET /users/{id}/password-policy` expose the resulting merged policy for
 frontend pre-validation; they do not return the individual subject rules.
 
-Subject targeting is designed for reuse. Future cross-API features can use the
-same `(subject_kind, subject_id)` model and membership/binding traversal rather
-than adding another feature-specific target representation.
+Authorization bindings now use the same `(subject_kind, subject_id)` model for
+team baselines, while password-, session-, and MFA-policy role targeting keeps
+its existing resolution paths. Other features can reuse this model without
+changing those policy semantics.
 
 ## Subject deletion and policies
 

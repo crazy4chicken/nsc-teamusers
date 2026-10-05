@@ -39,19 +39,21 @@ The verb applied to the resource: `read`, `write`, `delete`, `approve`. For
 - A whole-segment `*` is the only wildcard form: `orders:*:team` grants every
   action on team orders.
 
-### `scope` — how far the grant reaches
+### `scope` — request scope
 
-The breadth of the grant relative to the calling subject. Exactly one of:
+The scope segment is part of the requested permission key; it is not a numeric
+rank or a binding source. Exactly one of:
 
-| Scope | Reaches |
+| Scope | Key convention |
 | --- | --- |
-| `own` | Records owned by the subject itself (`docs:read:own`) |
-| `team` | Records belonging to the subject's team (`orders:refund:team`) |
-| `any` | Platform-wide, regardless of owner or team (`users:invite:any`) |
-| `*` | Wildcard covering every scope with one key |
+| `own` | A request explicitly checked at `:own` scope; the service determines which records are owned by the subject. |
+| `team` | A request explicitly checked at `:team` scope; the service supplies the target team context. |
+| `any` | A request explicitly checked at `:any` scope. It is platform-wide only when the grant comes from a platform-scoped binding. |
+| `*` | A wildcard matching any one scope segment. |
 
-Which scope a check actually enforces is decided by the service handling the
-request — see [matching rules](#matching-rules) before choosing.
+A binding's team scope is independent of the permission-key scope: a grant from a
+team-scoped binding stays limited to its matching active team resource even when
+its key ends in `:any`. See [matching rules](#matching-rules) before choosing a key.
 
 ## The deny prefix
 
@@ -62,8 +64,8 @@ wins**, even when a matching allow exists and no matter how broad the allow
 is. Use denies to carve exceptions out of wide grants:
 
 ```text
-orders:*:any        # everything on orders
-!orders:delete:any  # ... except deletion
+orders:*:any        # every action on an :any request; binding scope still applies
+!orders:delete:any  # ... except deletion at that request scope
 ```
 
 ## Matching rules
@@ -73,18 +75,25 @@ Matching is **segment-wise** (`internal/domain/matcher.go`):
 - Each grant segment matches the request segment if it is equal or `*`. A
   wildcard covers exactly one segment value and never crosses a `:` boundary.
 - Only the `action` and `scope` segments accept `*` in a registered key.
-- **There is no scope subsumption.** An `orders:read:any` grant does not
-  satisfy an `orders:read:team` request; the grant scope must equal the
-  request scope or be `*`. A service that enforces both own-record and
-  team-wide access checks each operation at the scope that reflects its
-  breadth, and administrators grant the matching scopes (or a `:*` scope).
-- When several grants match one request, the narrower scope wins
-  (`own` > `team` > `any` > `*`), and a matching deny beats every allow.
+- There is no scope containment or ranking: `:any`, `:team`, and `:own` do not
+  imply one another. A `*` scope segment matches each requested scope as a
+  wildcard, but is not a priority winner.
+- After binding/team applicability and condition evaluation, any matching deny
+  wins every matching allow; otherwise any matching allow grants access, and no
+  match defaults to deny. Grant source and role have no priority.
+- `/authz/check` reports every applicable key that matched and passed its
+  condition in `matched`, sorted lexicographically; the list does not select a
+  priority winner. A false condition excludes only that grant, so no other match
+  leaves the default reason `no matching grant`. An error evaluating an
+  applicable condition rejects the whole check with `allow=false`, an empty
+  `matched` list, and reason `condition_error`.
 
-The effective set behind every check is: direct bindings ∪ group bindings →
-roles → permission keys, minus expired bindings, disabled users, and grants
-whose ABAC condition fails. `/authz/check` and the SDK local resolvers share
-these rules.
+The effective set behind authorization checks includes direct user, group, and
+team-baseline bindings expanded to permission keys. Team baselines apply to any
+user with at least one unexpired membership in a group in that active team;
+disabled teams suppress scoped grants. Expired bindings/memberships and disabled
+users are excluded. `/authz/check` and the SDK local resolvers use the same
+permission-key matching and deny-overrides rules.
 
 ## `iam:` keys
 
@@ -95,8 +104,8 @@ validation (`internal/domain/permission.go`):
 - `iam:<area>:team` is valid **only** for the team-scoped areas `teams`,
   `groups`, `roles`, and `bindings`; team keys for other areas are rejected
   at write time.
-- `iam:*:any` is the platform wildcard covering every current and future
-  `:any` admin key (but no `:team` keys).
+- `iam:*:any` matches every current and future `:any` admin key but no
+  `:team` key; it is platform-wide only when inherited from a platform binding.
 
 How these keys gate admin routes, team-target resolution, and team-scoped
 mutation restrictions is documented in
@@ -116,7 +125,6 @@ fail at write time rather than at check time. Role assignments
 | --- | --- |
 | `docs:read:own` | Read one's own documents |
 | `docs:*:team` | Every action on team documents |
-| `orders:read:*` | Read orders at any breadth |
-| `!orders:export:any` | Deny order exports platform-wide (wins over allows) |
-| `iam:roles:team` | Administer roles within one's own team |
-| `iam:users:any` | Administer users platform-wide |
+| `!orders:export:any` | Deny exports for a matching `:any` request; a team binding remains team-scoped |
+| `iam:roles:team` | Administer roles for the matching team resource |
+| `iam:users:any` | Administer users platform-wide only from a platform-scoped binding |

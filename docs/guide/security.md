@@ -97,6 +97,14 @@ covering current and future IAM areas at the `:any` scope. On every service
 startup, permission reconciliation intentionally restores the complete bootstrap
 permission set—including `iam:*:any`—on an existing platform `iam-admin` role.
 Deliberate removals from that role are therefore not sticky.
+
+The bootstrap `iam:*:any` grant is carried by a platform-scoped role and binding.
+A `:any` key inherited only through a team-scoped binding or team baseline stays
+limited to that active team's resources; it never becomes platform access. A
+baseline deny applies only to eligible members on that team's resources, so a
+platform administrator without an active membership does not inherit it. See
+[Administrative permission scopes](/guide/permissions) for the grant rules.
+
 Keep the bootstrap database connection and the initial user's credential under
 the same out-of-band controls as other production secrets.
 
@@ -115,10 +123,9 @@ timestamp returns `403 step_up_required`. This guard applies to:
   `POST /users/{id}/approve`, `POST /users/{id}/credentials`,
   `DELETE /users/{id}/totp`, `DELETE /users/{id}/sessions`, and
   `DELETE /users/{id}/sessions/{sid}`.
-- `PUT /roles/{id}/permissions`, `POST /bindings`,
-  `DELETE /bindings/{id}`, `POST /policies/mfa`,
-  `PATCH /policies/mfa/{id}`, `DELETE /policies/mfa/{id}`, and
-  `POST /keys/rotate`.
+- `PUT /roles/{id}/permissions`, `POST /bindings`, `PATCH /bindings/{id}`,
+  `DELETE /bindings/{id}`, `POST /policies/mfa`, `PATCH /policies/mfa/{id}`,
+  `DELETE /policies/mfa/{id}`, and `POST /keys/rotate`.
 - `PATCH /users/{id}` when the patch includes a non-null `email` value or
   sets `status` to `disabled`; username, display-name, and active-status-only
   patches do not require fresh authentication.

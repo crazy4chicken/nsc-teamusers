@@ -1,10 +1,12 @@
 package iam
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,13 +15,17 @@ import (
 )
 
 const defaultPermissionTTL = 2 * time.Minute
+var errInvalidPermissionSnapshot = errors.New("invalid v2 permission snapshot")
+var errPermissionSnapshotInvalidated = fmt.Errorf("%w: cache invalidated while request was in flight", errInvalidPermissionSnapshot)
 
-// Grant is one effective permission and its optional ABAC condition.
+// Grant is one effective permission, its optional ABAC condition, and its optional team scope.
 type Grant struct {
 	Key       string             `json:"key"`
 	Condition *CompiledCondition `json:"condition,omitempty"`
+	TeamID    *string            `json:"team_id,omitempty"`
 
-	permission Permission
+	permission   Permission
+	conditionErr error
 }
 
 // MarshalJSON preserves the cache-fill contract: condition is sent as its
@@ -32,44 +38,75 @@ func (g Grant) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		Key       string  `json:"key"`
 		Condition *string `json:"condition,omitempty"`
-	}{Key: g.Key, Condition: condition})
+		TeamID    *string `json:"team_id,omitempty"`
+	}{Key: g.Key, Condition: condition, TeamID: g.TeamID})
 }
-
-// UnmarshalJSON compiles the server's condition source while retaining the
-// original key string for callers.
+// UnmarshalJSON validates and compiles one v2 grant while retaining its scope.
 func (g *Grant) UnmarshalJSON(data []byte) error {
 	if g == nil {
 		return errors.New("nil grant")
 	}
+	*g = Grant{}
 	var wire struct {
-		Key       string  `json:"key"`
-		Condition *string `json:"condition"`
+		Key       *string         `json:"key"`
+		Condition json.RawMessage `json:"condition"`
+		TeamID    json.RawMessage `json:"team_id"`
 	}
-	if err := json.Unmarshal(data, &wire); err != nil {
+	if err := decodeSingleJSON(bytes.NewReader(data), &wire); err != nil {
 		return err
 	}
-	permission, err := Parse(wire.Key)
+	if wire.Key == nil {
+		return errors.New("grant key is required")
+	}
+	permission, err := Parse(*wire.Key)
 	if err != nil {
 		return err
 	}
-	g.Key = wire.Key
-	g.permission = permission
-	g.Condition = nil
-	if wire.Condition != nil && strings.TrimSpace(*wire.Condition) != "" {
-		condition, err := CompileCondition(*wire.Condition)
-		if err != nil {
-			return err
+
+	var source string
+	if len(wire.Condition) != 0 {
+		conditionJSON := bytes.TrimSpace(wire.Condition)
+		if bytes.Equal(conditionJSON, []byte("null")) {
+			return errors.New("grant condition must be a string")
 		}
-		g.Condition = condition
+		if err := json.Unmarshal(conditionJSON, &source); err != nil {
+			return fmt.Errorf("grant condition must be a string: %w", err)
+		}
+	}
+	var teamID *string
+	if len(wire.TeamID) != 0 {
+		teamJSON := bytes.TrimSpace(wire.TeamID)
+		if !bytes.Equal(teamJSON, []byte("null")) {
+			var value string
+			if err := json.Unmarshal(teamJSON, &value); err != nil {
+				return fmt.Errorf("grant team_id must be a nonempty string or null: %w", err)
+			}
+			if value == "" {
+				return errors.New("grant team_id must be a nonempty string or null")
+			}
+			teamID = &value
+		}
+	}
+
+	g.Key = *wire.Key
+	g.permission = permission
+	g.TeamID = teamID
+	if strings.TrimSpace(source) != "" {
+		condition, err := CompileCondition(source)
+		if err != nil {
+			g.conditionErr = fmt.Errorf("compile grant condition: %w", err)
+		} else {
+			g.Condition = condition
+		}
 	}
 	return nil
 }
-
 // PermissionEntry is the cache-fill response retained by PermissionsClient.
 type PermissionEntry struct {
-	UserID  string  `json:"user_id"`
-	PermVer int64   `json:"perm_ver"`
-	Grants  []Grant `json:"grants"`
+	UserID     string     `json:"user_id"`
+	PermVer    int64      `json:"perm_ver"`
+	Grants     []Grant    `json:"grants"`
+	ValidUntil *time.Time `json:"valid_until,omitempty"`
 }
 
 // Permissions is an alias for PermissionEntry.
@@ -91,9 +128,11 @@ type cachedPermissionEntry struct {
 }
 
 type permissionCall struct {
-	done  chan struct{}
-	entry *PermissionEntry
-	err   error
+	done       chan struct{}
+	entry      *PermissionEntry
+	err        error
+	clearEpoch uint64
+	userEpoch  uint64
 }
 
 // PermissionsClient owns the local effective-permission cache and the remote
@@ -105,9 +144,11 @@ type PermissionsClient struct {
 	httpClient   *http.Client
 	ttl          time.Duration
 
-	mu       sync.Mutex
-	entries  map[string]cachedPermissionEntry
-	inflight map[string]*permissionCall
+	mu         sync.Mutex
+	entries    map[string]cachedPermissionEntry
+	inflight   map[string]*permissionCall
+	clearEpoch uint64
+	userEpochs map[string]uint64
 }
 
 // NewPermissionsClient constructs a permission cache with a two-minute TTL.
@@ -120,6 +161,7 @@ func NewPermissionsClient(base string, opts ...any) *PermissionsClient {
 		ttl:        defaultPermissionTTL,
 		entries:    make(map[string]cachedPermissionEntry),
 		inflight:   make(map[string]*permissionCall),
+		userEpochs: make(map[string]uint64),
 	}
 	for _, rawOption := range opts {
 		switch option := rawOption.(type) {
@@ -163,58 +205,80 @@ func (p *PermissionsClient) Get(ctx context.Context, userID string, tokenPermVer
 	if p.inflight == nil {
 		p.inflight = make(map[string]*permissionCall)
 	}
+	if p.userEpochs == nil {
+		p.userEpochs = make(map[string]uint64)
+	}
+	now := time.Now()
+	if cached, found := p.entries[userID]; found && now.Before(cached.expiresAt) && cached.entry != nil && cached.entry.PermVer == tokenPermVer {
+		entry := clonePermissionEntry(cached.entry)
+		p.mu.Unlock()
+		return entry, nil
+	}
+	if call, running := p.inflight[userID]; running {
+		p.mu.Unlock()
+		select {
+		case <-call.done:
+			p.mu.Lock()
+			entry, err := call.entry, call.err
+			if p.clearEpoch != call.clearEpoch || p.userEpochs[userID] != call.userEpoch {
+				entry, err = nil, errPermissionSnapshotInvalidated
+			}
+			p.mu.Unlock()
+			return clonePermissionEntry(entry), err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	call := &permissionCall{
+		done:       make(chan struct{}),
+		clearEpoch: p.clearEpoch,
+		userEpoch:  p.userEpochs[userID],
+	}
+	p.inflight[userID] = call
 	p.mu.Unlock()
 
-	for {
-		now := time.Now()
-		p.mu.Lock()
-		cached, found := p.entries[userID]
-		if found && now.Before(cached.expiresAt) && cached.entry != nil && cached.entry.PermVer == tokenPermVer {
-			entry := clonePermissionEntry(cached.entry)
-			p.mu.Unlock()
-			return entry, nil
-		}
-		if call, running := p.inflight[userID]; running {
-			p.mu.Unlock()
-			select {
-			case <-call.done:
-				return clonePermissionEntry(call.entry), call.err
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		call := &permissionCall{done: make(chan struct{})}
-		p.inflight[userID] = call
-		p.mu.Unlock()
-
-		entry, err := p.fetch(ctx, userID)
-		p.mu.Lock()
+	entry, err := p.fetch(ctx, userID)
+	p.mu.Lock()
+	if p.inflight[userID] == call {
 		delete(p.inflight, userID)
-		if err == nil && entry != nil {
-			p.entries[userID] = cachedPermissionEntry{
-				entry:     clonePermissionEntry(entry),
-				expiresAt: time.Now().Add(p.ttl),
-			}
-		}
-		call.entry = clonePermissionEntry(entry)
-		call.err = err
-		close(call.done)
-		p.mu.Unlock()
-		return entry, err
 	}
+	if p.clearEpoch != call.clearEpoch || p.userEpochs[userID] != call.userEpoch {
+		entry, err = nil, errPermissionSnapshotInvalidated
+	}
+	if err == nil && entry != nil {
+		now := time.Now()
+		expiresAt := now.Add(p.ttl)
+		if entry.ValidUntil != nil && entry.ValidUntil.Before(expiresAt) {
+			expiresAt = *entry.ValidUntil
+		}
+		p.entries[userID] = cachedPermissionEntry{
+			entry:     clonePermissionEntry(entry),
+			expiresAt: expiresAt,
+		}
+	}
+	call.entry = clonePermissionEntry(entry)
+	call.err = err
+	close(call.done)
+	p.mu.Unlock()
+	return entry, err
 }
 
-// Invalidate drops cached entries for the supplied user IDs. Empty IDs are
-// ignored so malformed events cannot evict an unrelated entry.
+// Invalidate drops cached entries and in-flight snapshots for the supplied user IDs.
+// Empty IDs are ignored so malformed events cannot evict an unrelated entry.
 func (p *PermissionsClient) Invalidate(userIDs ...string) {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.userEpochs == nil {
+		p.userEpochs = make(map[string]uint64)
+	}
 	for _, userID := range userIDs {
 		if userID = strings.TrimSpace(userID); userID != "" {
+			p.userEpochs[userID]++
 			delete(p.entries, userID)
+			delete(p.inflight, userID)
 		}
 	}
 }
@@ -224,13 +288,16 @@ func (p *PermissionsClient) InvalidatePermissions(userIDs ...string) {
 	p.Invalidate(userIDs...)
 }
 
-// Clear removes all cached permission entries.
+// Clear removes all cached permission entries and invalidates in-flight snapshots.
 func (p *PermissionsClient) Clear() {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
+	p.clearEpoch++
 	p.entries = make(map[string]cachedPermissionEntry)
+	p.inflight = make(map[string]*permissionCall)
+	p.userEpochs = make(map[string]uint64)
 	p.mu.Unlock()
 }
 
@@ -242,56 +309,100 @@ func (p *PermissionsClient) fetch(ctx context.Context, userID string) (*Permissi
 	if err != nil {
 		return nil, err
 	}
-	httpClient := p.httpClient
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-	endpoint := strings.TrimRight(p.base, "/") + "/authz/permissions/" + url.PathEscape(userID)
+	endpoint := strings.TrimRight(p.base, "/") + "/authz/permissions/" + url.PathEscape(userID) + "?version=2"
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create permissions request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
+	httpClient := p.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
 	response, err := httpClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("fetch permissions: %w", err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusBadRequest {
+		return nil, fmt.Errorf("%w: unsupported snapshot response (HTTP %s)", errInvalidPermissionSnapshot, response.Status)
+	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf("fetch permissions: unexpected HTTP status %s", response.Status)
 	}
+	return decodePermissionSnapshot(response.Body, userID)
+}
 
+func decodePermissionSnapshot(reader io.Reader, userID string) (*PermissionEntry, error) {
 	var payload struct {
-		UserID  string `json:"user_id"`
-		PermVer int64  `json:"perm_ver"`
-		Grants  []struct {
-			Key       string  `json:"key"`
-			Condition *string `json:"condition"`
-		} `json:"grants"`
+		Version    *int            `json:"version"`
+		UserID     *string         `json:"user_id"`
+		PermVer    *int64          `json:"perm_ver"`
+		Grants     json.RawMessage `json:"grants"`
+		ValidUntil json.RawMessage `json:"valid_until"`
 	}
-	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("decode permissions: %w", err)
+	if err := decodeSingleJSON(reader, &payload); err != nil {
+		return nil, fmt.Errorf("%w: decode permissions: %v", errInvalidPermissionSnapshot, err)
 	}
-	if payload.UserID != "" && payload.UserID != userID {
-		return nil, fmt.Errorf("permissions response user_id %q does not match %q", payload.UserID, userID)
+	if payload.Version == nil || *payload.Version != 2 {
+		return nil, fmt.Errorf("%w: version must be 2", errInvalidPermissionSnapshot)
 	}
-	entry := &PermissionEntry{UserID: userID, PermVer: payload.PermVer, Grants: make([]Grant, 0, len(payload.Grants))}
-	for _, wireGrant := range payload.Grants {
-		permission, parseErr := Parse(wireGrant.Key)
-		if parseErr != nil {
-			continue
+	if payload.UserID == nil || *payload.UserID != userID {
+		return nil, fmt.Errorf("%w: response user_id must match %q", errInvalidPermissionSnapshot, userID)
+	}
+	if payload.PermVer == nil || *payload.PermVer < 0 {
+		return nil, fmt.Errorf("%w: perm_ver must be a non-negative integer", errInvalidPermissionSnapshot)
+	}
+	grantsJSON := bytes.TrimSpace(payload.Grants)
+	if len(grantsJSON) == 0 || grantsJSON[0] != '[' {
+		return nil, fmt.Errorf("%w: grants must be an array", errInvalidPermissionSnapshot)
+	}
+	var wireGrants []json.RawMessage
+	if err := json.Unmarshal(grantsJSON, &wireGrants); err != nil {
+		return nil, fmt.Errorf("%w: decode grants: %v", errInvalidPermissionSnapshot, err)
+	}
+	entry := &PermissionEntry{UserID: *payload.UserID, PermVer: *payload.PermVer, Grants: make([]Grant, 0, len(wireGrants))}
+	if len(payload.ValidUntil) != 0 {
+		deadlineJSON := bytes.TrimSpace(payload.ValidUntil)
+		if bytes.Equal(deadlineJSON, []byte("null")) {
+			return nil, fmt.Errorf("%w: valid_until must be an RFC3339 string", errInvalidPermissionSnapshot)
 		}
-		grant := Grant{Key: wireGrant.Key, permission: permission}
-		if wireGrant.Condition != nil && strings.TrimSpace(*wireGrant.Condition) != "" {
-			condition, compileErr := CompileCondition(*wireGrant.Condition)
-			if compileErr != nil {
-				continue
-			}
-			grant.Condition = condition
+		var value string
+		if err := json.Unmarshal(deadlineJSON, &value); err != nil {
+			return nil, fmt.Errorf("%w: valid_until must be an RFC3339 string: %v", errInvalidPermissionSnapshot, err)
+		}
+		deadline, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return nil, fmt.Errorf("%w: valid_until must be an RFC3339 string: %v", errInvalidPermissionSnapshot, err)
+		}
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("%w: valid_until is expired", errInvalidPermissionSnapshot)
+		}
+		entry.ValidUntil = &deadline
+	}
+	for index, rawGrant := range wireGrants {
+		var grant Grant
+		if err := decodeSingleJSON(bytes.NewReader(rawGrant), &grant); err != nil {
+			return nil, fmt.Errorf("%w: decode grant %d: %v", errInvalidPermissionSnapshot, index, err)
 		}
 		entry.Grants = append(entry.Grants, grant)
 	}
 	return entry, nil
+}
+
+func decodeSingleJSON(reader io.Reader, target any) error {
+	decoder := json.NewDecoder(reader)
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
 }
 
 func (p *PermissionsClient) serviceBearer() (string, error) {
@@ -377,7 +488,22 @@ func clonePermissionEntry(entry *PermissionEntry) *PermissionEntry {
 	if entry == nil {
 		return nil
 	}
-	clone := &PermissionEntry{UserID: entry.UserID, PermVer: entry.PermVer, Grants: make([]Grant, len(entry.Grants))}
-	copy(clone.Grants, entry.Grants)
+	clone := &PermissionEntry{
+		UserID:     entry.UserID,
+		PermVer:    entry.PermVer,
+		Grants:     make([]Grant, len(entry.Grants)),
+		ValidUntil: entry.ValidUntil,
+	}
+	if entry.ValidUntil != nil {
+		deadline := *entry.ValidUntil
+		clone.ValidUntil = &deadline
+	}
+	for index, grant := range entry.Grants {
+		clone.Grants[index] = grant
+		if grant.TeamID != nil {
+			teamID := *grant.TeamID
+			clone.Grants[index].TeamID = &teamID
+		}
+	}
 	return clone
 }

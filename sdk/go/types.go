@@ -83,21 +83,30 @@ func CompileCondition(source string) (*CompiledCondition, error) {
 
 // Eval evaluates a condition. A nil or empty condition allows the grant, and
 // every compile/runtime/type error denies it.
-func (c *CompiledCondition) Eval(values Context) (allowed bool) {
+func (c *CompiledCondition) eval(values Context) (allowed bool, err error) {
 	if c == nil || c.program == nil {
-		return true
+		return true, nil
 	}
 	defer func() {
-		if recover() != nil {
+		if recovered := recover(); recovered != nil {
 			allowed = false
+			err = fmt.Errorf("condition evaluation failed: %v", recovered)
 		}
 	}()
 	result, err := expr.Run(c.program, values)
 	if err != nil {
-		return false
+		return false, err
 	}
 	value, ok := result.(bool)
-	return ok && value
+	if !ok {
+		return false, fmt.Errorf("condition result is not boolean")
+	}
+	return value, nil
+}
+
+func (c *CompiledCondition) Eval(values Context) bool {
+	allowed, err := c.eval(values)
+	return err == nil && allowed
 }
 
 // Evaluate is a readable alias for Eval.

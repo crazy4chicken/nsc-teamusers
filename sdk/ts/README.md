@@ -58,10 +58,20 @@ for invalid application claims. All inherit from `SDKError`.
 
 ## Permission cache and authorization
 
-`PermissionsClient` fetches `GET /authz/permissions/{userID}` with its service
-bearer token, caches entries for two minutes by default, and single-flights
-requests for the same user. A presented token with a different `permVer`
-causes a fresh fetch.
+`PermissionsClient` fetches the v2 snapshot from
+`GET /authz/permissions/{userID}?version=2` with its service bearer token. It
+requires `version: 2`, a matching `user_id`, a non-negative `perm_ver`, and
+well-formed known fields. Missing, legacy, or unsupported versions and malformed
+known fields raise `PermissionSnapshotError` and never downgrade. Unknown
+additive snapshot and grant fields are ignored. Condition compile errors remain
+attached to their grants and yield `condition_error` only when the grant's team
+and permission match. Entries are single-flighted by user and cached until the
+earlier of `ttlMs` (two minutes by default) and optional RFC3339 `valid_until`.
+
+Grant `team_id` metadata is preserved. Scoped grants match only resources with
+the same `resource.team_id`; a `:team` request without a non-empty
+`resource.team_id` fails closed. Platform grants omit `team_id` and remain
+independent of team scope metadata.
 
 ```ts
 import { PermissionsClient } from "teamusers-sdk";
@@ -81,10 +91,13 @@ permissions.invalidateAll();
 ```
 
 `PermissionsClient.check` performs the authoritative `POST /authz/check`
-request. `Client` combines verification, the local cache, and remote fallback;
-its `allow` and `check` methods mirror the Go SDK names. Uppercase aliases
-(`Get`, `Invalidate`, `Clear`, `Allow`, and `Check`) are also available for
-callers porting Go code.
+request. `Client.allow` uses a matching local `permVer`; a mismatch returns
+`permission version mismatch`, while a malformed/legacy snapshot returns
+`invalid permission snapshot`. Neither case falls back to a flattened or
+remote result. Existing fallback remains for non-protocol fetch/cache errors.
+`Client.check` is always authoritative; uppercase aliases (`Get`,
+`Invalidate`, `Clear`, `Allow`, and `Check`) remain available for callers
+porting Go code.
 
 ## Permission keys and ABAC
 
@@ -97,8 +110,9 @@ a matching deny precedence over matching allows.
 member access on `subject`, `resource`, and `request`, comparisons, boolean
 operators, `in`, and string/number/boolean/array literals. `resource.attrs`
 indexing and comparisons involving `request.time` are supported. Conditions
-are limited to 4 KiB and a bounded AST; unsupported syntax is a compile error,
-and evaluation errors deny access.
+are limited to 4 KiB and a bounded AST; unsupported syntax is a compile error.
+A false condition excludes only that grant; a runtime condition error rejects
+the whole applicable authorization with reason `condition_error`.
 
 ```ts
 import { CompileCondition } from "teamusers-sdk";
@@ -152,6 +166,12 @@ when the optional `nats` peer is installed, or pass a test/application source
 implementing `subscribe(subject, handler)`. An empty URL is a no-op. Requesting
 a non-empty URL without the optional peer raises `NATSDependencyError` at
 subscription time. `PermissionSubscription.close()` is idempotent.
+
+Local snapshots remain bounded by the configured TTL and any `valid_until`
+deadline. Known invalidation events and `invalidateAll()` discard pre-event
+in-flight snapshots for cache and current waiters; those calls fail closed
+without retry or fallback. Missed or delayed events do not revoke a local
+snapshot instantaneously; use `Client.check` when an authoritative decision is required.
 
 ### User deletion lifecycle events
 

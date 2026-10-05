@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -11,25 +12,24 @@ import (
 	"teamusers/internal/domain"
 )
 
-// ListDirectRoleBindings returns active direct user bindings that are either
-// platform scoped or scoped to a team in which the user has an active
-// membership.
+// ListDirectRoleBindings returns active direct user bindings. Team-scoped
+// bindings require an active membership in an active team; platform bindings
+// remain independent of membership and team status.
 func ListDirectRoleBindings(ctx context.Context, q Q, userID string, now time.Time) ([]RoleBinding, error) {
 	rows, err := q.Query(ctx, `
-		SELECT b.id, b.team_id, b.role_id, b.subject_kind, b.subject_id, b.condition, b.expires_at
+		SELECT b.id, b.team_id, b.role_id, b.subject_kind, b.subject_id, b.condition, b.expires_at,
+			LEAST(b.expires_at, membership_exp.expires_at)
 		FROM role_bindings b
+		LEFT JOIN LATERAL (
+			SELECT BOOL_OR(m.expires_at IS NULL OR m.expires_at > $2) AS has_membership,
+				MIN(m.expires_at) FILTER (WHERE m.expires_at IS NULL OR m.expires_at > $2) AS expires_at
+			FROM memberships m
+			JOIN teams t ON t.id = m.team_id AND t.status = 'active'
+			WHERE m.user_id = $1 AND m.team_id = b.team_id
+		) membership_exp ON b.team_id IS NOT NULL
 		WHERE b.subject_kind = 'user' AND b.subject_id = $1
 		  AND (b.expires_at IS NULL OR b.expires_at > $2)
-		  AND (
-			b.team_id IS NULL
-			OR EXISTS (
-				SELECT 1
-				FROM memberships m
-				WHERE m.user_id = $1
-				  AND m.team_id = b.team_id
-				  AND (m.expires_at IS NULL OR m.expires_at > $2)
-			)
-		  )
+		  AND (b.team_id IS NULL OR COALESCE(membership_exp.has_membership, FALSE))
 		ORDER BY b.id`, userID, now)
 	if err != nil {
 		return nil, err
@@ -39,17 +39,44 @@ func ListDirectRoleBindings(ctx context.Context, q Q, userID string, now time.Ti
 }
 
 // ListGroupRoleBindings returns active group bindings inherited by the user's
-// active memberships. The membership join keeps this path to one query even
-// when a user belongs to many groups.
+// active memberships. Team status and binding scope are checked in the same
+// query so unrelated tenants never enter the effective set.
 func ListGroupRoleBindings(ctx context.Context, q Q, userID string, now time.Time) ([]RoleBinding, error) {
 	rows, err := q.Query(ctx, `
-		SELECT b.id, b.team_id, b.role_id, b.subject_kind, b.subject_id, b.condition, b.expires_at
+		SELECT b.id, COALESCE(b.team_id, m.team_id), b.role_id, b.subject_kind, b.subject_id, b.condition, b.expires_at,
+			LEAST(b.expires_at, m.expires_at)
 		FROM role_bindings b
-		JOIN memberships m ON m.group_id = b.subject_id
-		WHERE b.subject_kind = 'group' AND m.user_id = $1
+		JOIN memberships m ON m.group_id = b.subject_id AND m.user_id = $1
+		JOIN teams t ON t.id = m.team_id AND t.status = 'active'
+		WHERE b.subject_kind = 'group'
 		  AND (m.expires_at IS NULL OR m.expires_at > $2)
 		  AND (b.expires_at IS NULL OR b.expires_at > $2)
 		  AND (b.team_id IS NULL OR b.team_id = m.team_id)
+		ORDER BY b.id`, userID, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAuthzRoleBindings(rows)
+}
+
+// ListTeamRoleBindings returns active team baselines for teams where the user
+// has at least one unexpired group membership.
+func ListTeamRoleBindings(ctx context.Context, q Q, userID string, now time.Time) ([]RoleBinding, error) {
+	rows, err := q.Query(ctx, `
+		SELECT b.id, b.team_id, b.role_id, b.subject_kind, b.subject_id, b.condition, b.expires_at,
+			LEAST(b.expires_at, membership_exp.expires_at)
+		FROM role_bindings b
+		JOIN roles r ON r.id = b.role_id AND (r.team_id IS NULL OR r.team_id = b.team_id)
+		JOIN teams t ON t.id = b.team_id AND t.status = 'active'
+		JOIN LATERAL (
+			SELECT COUNT(*) FILTER (WHERE m.expires_at IS NULL OR m.expires_at > $2) AS active_memberships,
+				MIN(m.expires_at) FILTER (WHERE m.expires_at IS NULL OR m.expires_at > $2) AS expires_at
+			FROM memberships m
+			WHERE m.user_id = $1 AND m.team_id = b.team_id
+		) membership_exp ON membership_exp.active_memberships > 0
+		WHERE b.subject_kind = 'team' AND b.subject_id = b.team_id
+		  AND (b.expires_at IS NULL OR b.expires_at > $2)
 		ORDER BY b.id`, userID, now)
 	if err != nil {
 		return nil, err
@@ -89,9 +116,9 @@ func ListRolePermissionsForRoles(ctx context.Context, q Q, roleIDs []string) (ma
 	return permissions, nil
 }
 
-// UserHasIAMPermission reports whether a user's active direct or group role
-// bindings grant an effective IAM permission. It intentionally does not check
-// users.status so callers can apply their own status policy.
+// UserHasIAMPermission reports whether a user's active direct, group, or team
+// role bindings grant an effective IAM permission. It intentionally does not
+// check users.status so callers can apply their own status policy.
 func UserHasIAMPermission(ctx context.Context, q Q, userID string) (bool, error) {
 	now := time.Now()
 	direct, err := ListDirectRoleBindings(ctx, q, userID, now)
@@ -102,7 +129,12 @@ func UserHasIAMPermission(ctx context.Context, q Q, userID string) (bool, error)
 	if err != nil {
 		return false, err
 	}
+	team, err := ListTeamRoleBindings(ctx, q, userID, now)
+	if err != nil {
+		return false, err
+	}
 	bindings := append(direct, group...)
+	bindings = append(bindings, team...)
 	roleIDs := make([]string, 0, len(bindings))
 	seenRoles := make(map[string]struct{}, len(bindings))
 	for _, binding := range bindings {
@@ -117,127 +149,140 @@ func UserHasIAMPermission(ctx context.Context, q Q, userID string) (bool, error)
 		return false, err
 	}
 
-	permissions := make([]domain.Permission, 0)
+	type scope struct {
+		teamID string
+		isTeam bool
+	}
+	byScope := make(map[scope][]domain.Permission)
 	for _, binding := range bindings {
-		conditional := binding.Condition != nil && strings.TrimSpace(*binding.Condition) != ""
-		if conditional {
-			if _, err := domain.Compile(*binding.Condition); err != nil {
+		if binding.Condition != nil && strings.TrimSpace(*binding.Condition) != "" {
+			hasIAMPermission := false
+			for _, key := range rolePermissions[binding.RoleID] {
+				permission, err := domain.Parse(key)
+				if err == nil && (permission.Resource == "iam" || permission.Resource == "*") {
+					hasIAMPermission = true
+					break
+				}
+			}
+			if !hasIAMPermission {
+				continue
+			}
+			condition, err := domain.Compile(*binding.Condition)
+			if err != nil {
+				return false, fmt.Errorf("compile IAM binding condition: %w", err)
+			}
+			values := domain.Context{
+				Subject:  domain.Subject{ID: userID, Kind: "user"},
+				Request:  domain.Request{Time: now},
+			}
+			if binding.TeamID != nil {
+				values.Resource.TeamID = *binding.TeamID
+			}
+			allowed, err := condition.EvalWithContext(ctx, values)
+			if err != nil {
+				return false, fmt.Errorf("evaluate IAM binding condition: %w", err)
+			}
+			if !allowed {
 				continue
 			}
 		}
-		for _, key := range rolePermissions[binding.RoleID] {
-			permission, err := domain.Parse(key)
-			if err != nil || (conditional && permission.Deny) {
+		key := scope{}
+		if binding.TeamID != nil {
+			key.teamID = *binding.TeamID
+			key.isTeam = true
+		}
+		for _, permissionKey := range rolePermissions[binding.RoleID] {
+			permission, err := domain.Parse(permissionKey)
+			if err != nil {
 				continue
 			}
-			permissions = append(permissions, permission)
+			byScope[key] = append(byScope[key], permission)
 		}
 	}
-	for _, permission := range permissions {
-		if permission.Deny || (permission.Resource != "iam" && permission.Resource != "*") {
-			continue
+	for _, permissions := range byScope {
+		requests := make([]domain.Permission, 0, len(permissions))
+		for _, permission := range permissions {
+			if permission.Deny || (permission.Resource != "iam" && permission.Resource != "*") {
+				continue
+			}
+			permission.Resource = "iam"
+			requests = append(requests, permission)
 		}
-		permission.Resource = "iam"
-		resolved := domain.Resolve(permissions, []domain.Permission{permission})
-		if len(resolved) == 1 && resolved[0].Allowed {
-			return true, nil
+		for _, resolution := range domain.Resolve(permissions, requests) {
+			if resolution.Allowed {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
 }
 
-// ListUnconditionalRolePermissions mirrors the grant selection in authz's
-// resolver for the admin plane. It lives in store so httpapi can enforce
-// permissions without importing authz, whose handlers import httpapi.
-func ListUnconditionalRolePermissions(ctx context.Context, q Q, userID string, now time.Time) ([]string, error) {
-	rows, err := q.Query(ctx, `
-        SELECT DISTINCT rp.permission_key
-        FROM role_permissions rp
-        JOIN role_bindings b ON b.role_id = rp.role_id
-        WHERE (b.expires_at IS NULL OR b.expires_at > $2)
-          AND (b.condition IS NULL OR btrim(b.condition) = '')
-          AND (
-            (b.subject_kind = 'user' AND b.subject_id = $1 AND (
-                b.team_id IS NULL OR EXISTS (
-                    SELECT 1 FROM memberships m
-                    WHERE m.user_id = $1 AND m.team_id = b.team_id
-                      AND (m.expires_at IS NULL OR m.expires_at > $2)
-                )
-            ))
-            OR (b.subject_kind = 'group' AND EXISTS (
-                SELECT 1 FROM memberships m
-                WHERE m.user_id = $1 AND m.group_id = b.subject_id
-                  AND (m.expires_at IS NULL OR m.expires_at > $2)
-                  AND (b.team_id IS NULL OR b.team_id = m.team_id)
-            ))
-          )
-        ORDER BY rp.permission_key`, userID, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	permissions := make([]string, 0)
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			return nil, err
-		}
-		permissions = append(permissions, key)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return permissions, nil
-
-}
-
-// ConditionalRolePermission is a permission key carried by a non-empty role
-// binding condition. A nil TeamID denotes a platform binding.
-type ConditionalRolePermission struct {
+// RolePermissionGrant is one effective permission row for admin-plane checks.
+// A nil TeamID denotes a platform binding; scoped rows carry their team.
+type RolePermissionGrant struct {
 	TeamID    *string
 	Key       string
-	Condition string
+	Condition *string
 }
 
-// ListConditionalRolePermissions returns active conditional grants inherited
-// by the user's direct and group bindings. The caller evaluates each condition
-// against the request-specific authorization context.
-func ListConditionalRolePermissions(ctx context.Context, q Q, userID string, now time.Time) ([]ConditionalRolePermission, error) {
+// ListEffectiveRolePermissionGrants returns active platform and tenant grants
+// for the admin plane without flattening their team scope.
+func ListEffectiveRolePermissionGrants(ctx context.Context, q Q, userID string, now time.Time) ([]RolePermissionGrant, error) {
 	rows, err := q.Query(ctx, `
-		SELECT DISTINCT b.team_id, rp.permission_key, b.condition
-		FROM role_permissions rp
-		JOIN role_bindings b ON b.role_id = rp.role_id
-		WHERE b.condition IS NOT NULL
-		  AND btrim(b.condition) <> ''
-		  AND (b.expires_at IS NULL OR b.expires_at > $2)
-		  AND (
-			(b.subject_kind = 'user' AND b.subject_id = $1 AND (
+		WITH applicable_bindings AS (
+			SELECT b.role_id, b.team_id, b.condition
+			FROM role_bindings b
+			WHERE b.subject_kind = 'user' AND b.subject_id = $1
+			  AND (b.expires_at IS NULL OR b.expires_at > $2)
+			  AND (
 				b.team_id IS NULL OR EXISTS (
-					SELECT 1 FROM memberships m
+					SELECT 1
+					FROM memberships m
+					JOIN teams t ON t.id = m.team_id AND t.status = 'active'
 					WHERE m.user_id = $1 AND m.team_id = b.team_id
 					  AND (m.expires_at IS NULL OR m.expires_at > $2)
 				)
-			))
-			OR (b.subject_kind = 'group' AND EXISTS (
-				SELECT 1 FROM memberships m
-				WHERE m.user_id = $1 AND m.group_id = b.subject_id
+			  )
+			UNION ALL
+			SELECT b.role_id, COALESCE(b.team_id, m.team_id), b.condition
+			FROM role_bindings b
+			JOIN memberships m ON m.group_id = b.subject_id AND m.user_id = $1
+			JOIN teams t ON t.id = m.team_id AND t.status = 'active'
+			WHERE b.subject_kind = 'group'
+			  AND (m.expires_at IS NULL OR m.expires_at > $2)
+			  AND (b.expires_at IS NULL OR b.expires_at > $2)
+			  AND (b.team_id IS NULL OR b.team_id = m.team_id)
+			UNION ALL
+			SELECT b.role_id, b.team_id, b.condition
+			FROM role_bindings b
+			JOIN roles r ON r.id = b.role_id AND (r.team_id IS NULL OR r.team_id = b.team_id)
+			JOIN teams t ON t.id = b.team_id AND t.status = 'active'
+			WHERE b.subject_kind = 'team' AND b.subject_id = b.team_id
+			  AND (b.expires_at IS NULL OR b.expires_at > $2)
+			  AND EXISTS (
+				SELECT 1
+				FROM memberships m
+				WHERE m.user_id = $1 AND m.team_id = b.team_id
 				  AND (m.expires_at IS NULL OR m.expires_at > $2)
-				  AND (b.team_id IS NULL OR b.team_id = m.team_id)
-			))
-		  )
+			  )
+		)
+		SELECT DISTINCT b.team_id, rp.permission_key, b.condition
+		FROM applicable_bindings b
+		JOIN role_permissions rp ON rp.role_id = b.role_id
 		ORDER BY b.team_id NULLS FIRST, rp.permission_key, b.condition`, userID, now)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	grants := make([]ConditionalRolePermission, 0)
+	grants := make([]RolePermissionGrant, 0)
 	for rows.Next() {
-		var grant ConditionalRolePermission
-		var teamID pgtype.Text
-		if err := rows.Scan(&teamID, &grant.Key, &grant.Condition); err != nil {
+		var grant RolePermissionGrant
+		var teamID, condition pgtype.Text
+		if err := rows.Scan(&teamID, &grant.Key, &condition); err != nil {
 			return nil, err
 		}
 		grant.TeamID = textPointer(teamID)
+		grant.Condition = textPointer(condition)
 		grants = append(grants, grant)
 	}
 	if err := rows.Err(); err != nil {
@@ -245,68 +290,19 @@ func ListConditionalRolePermissions(ctx context.Context, q Q, userID string, now
 	}
 	return grants, nil
 }
-
-// TeamRolePermissions groups unconditional role permissions by the team scope
-// carried by a binding.
-type TeamRolePermissions struct {
-	TeamID string
-	Keys   []string
-}
-
-// ListUnconditionalTeamRolePermissions returns active, conditionless grants
-// for the caller's non-platform bindings, grouped by binding team. Direct
-// bindings and group-inherited bindings follow the same membership rules as
-// ListUnconditionalRolePermissions.
-func ListUnconditionalTeamRolePermissions(ctx context.Context, q Q, userID string, now time.Time) ([]TeamRolePermissions, error) {
-	rows, err := q.Query(ctx, `
-		SELECT DISTINCT b.team_id, rp.permission_key
-		FROM role_bindings b
-		JOIN roles r ON r.id = b.role_id
-		JOIN role_permissions rp ON rp.role_id = r.id
-		WHERE b.team_id IS NOT NULL
-		  AND (b.expires_at IS NULL OR b.expires_at > $2)
-		  AND (b.condition IS NULL OR btrim(b.condition) = '')
-		  AND (
-			(b.subject_kind = 'user' AND b.subject_id = $1 AND EXISTS (
-				SELECT 1 FROM memberships m
-				WHERE m.user_id = $1 AND m.team_id = b.team_id
-				  AND (m.expires_at IS NULL OR m.expires_at > $2)
-			))
-			OR (b.subject_kind = 'group' AND EXISTS (
-				SELECT 1 FROM memberships m
-				WHERE m.user_id = $1 AND m.group_id = b.subject_id
-				  AND (m.expires_at IS NULL OR m.expires_at > $2)
-				  AND m.team_id = b.team_id
-			))
-		  )
-		ORDER BY b.team_id, rp.permission_key`, userID, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	permissions := make([]TeamRolePermissions, 0)
-	for rows.Next() {
-		var teamID, key string
-		if err := rows.Scan(&teamID, &key); err != nil {
-			return nil, err
-		}
-		if len(permissions) == 0 || permissions[len(permissions)-1].TeamID != teamID {
-			permissions = append(permissions, TeamRolePermissions{TeamID: teamID})
-		}
-		permissions[len(permissions)-1].Keys = append(permissions[len(permissions)-1].Keys, key)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return permissions, nil
-}
 func scanAuthzRoleBindings(rows pgx.Rows) ([]RoleBinding, error) {
 	bindings := make([]RoleBinding, 0)
 	for rows.Next() {
-		binding, err := scanRoleBinding(rows)
-		if err != nil {
+		var binding RoleBinding
+		var teamID, condition pgtype.Text
+		if err := rows.Scan(
+			&binding.ID, &teamID, &binding.RoleID, &binding.SubjectKind,
+			&binding.SubjectID, &condition, &binding.ExpiresAt, &binding.EffectiveUntil,
+		); err != nil {
 			return nil, err
 		}
+		binding.TeamID = textPointer(teamID)
+		binding.Condition = textPointer(condition)
 		bindings = append(bindings, binding)
 	}
 	if err := rows.Err(); err != nil {

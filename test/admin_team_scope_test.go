@@ -154,6 +154,34 @@ func TestAdminTeamScopedPermissions(t *testing.T) {
 	}
 	delegateToken = loginUser(t, stack, delegate.Username, "DelegatedAdminPassword1")
 
+	var permVerBefore int64
+	if err := stack.database.pool.QueryRow(ctx, `SELECT perm_ver FROM users WHERE id = $1`, delegate.ID).Scan(&permVerBefore); err != nil {
+		t.Fatalf("read delegate permission version before group move: %v", err)
+	}
+	status, body = stack.jsonRequest(t, http.MethodPatch, "/groups/"+alphaGroup.ID, map[string]string{
+		"team_id": beta.ID,
+	}, delegateToken)
+	if status != http.StatusForbidden {
+		t.Fatalf("team-scoped group team move status = %d, want %d: %s", status, http.StatusForbidden, body)
+	}
+	var groupTeamID, membershipTeamID string
+	if err := stack.database.pool.QueryRow(ctx, `
+		SELECT g.team_id, m.team_id FROM groups g
+		JOIN memberships m ON m.group_id = g.id
+		WHERE g.id = $1 AND m.user_id = $2`, alphaGroup.ID, delegate.ID).Scan(&groupTeamID, &membershipTeamID); err != nil {
+		t.Fatalf("read group and membership after rejected move: %v", err)
+	}
+	if groupTeamID != alpha.ID || membershipTeamID != alpha.ID {
+		t.Fatalf("group/membership teams after rejected move = %s/%s, want %s/%s", groupTeamID, membershipTeamID, alpha.ID, alpha.ID)
+	}
+	var permVerAfter int64
+	if err := stack.database.pool.QueryRow(ctx, `SELECT perm_ver FROM users WHERE id = $1`, delegate.ID).Scan(&permVerAfter); err != nil {
+		t.Fatalf("read delegate permission version after group move: %v", err)
+	}
+	if permVerAfter != permVerBefore {
+		t.Fatalf("permission version after rejected group move = %d, want unchanged %d", permVerAfter, permVerBefore)
+	}
+
 	status, body = stack.jsonRequest(t, http.MethodGet, "/users", nil, delegateToken)
 	if status != http.StatusForbidden {
 		t.Fatalf("team-scoped GET users status = %d, want %d: %s", status, http.StatusForbidden, body)

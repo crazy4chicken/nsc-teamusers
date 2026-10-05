@@ -54,6 +54,43 @@ to `POST /me/password` with the current and new passwords; only that endpoint
 accepts this token. A successful change clears the requirement and revokes all
 refresh sessions, so the user must sign in again.
 
+## Service authorization and permission snapshots
+
+`POST /authz/check` and `GET /authz/permissions/{userID}` require a service
+bearer. A requested `:team` permission without `context.resource.team_id`
+fails closed. Team-scoped grants—including grants from user, group, and team
+baseline bindings—apply only to a matching resource in an active team; a
+team-bound `:any` key is not platform access. Platform bindings with
+`team_id: null` remain independent. Team baselines are inherited by a user with
+any unexpired membership in a group in that team. Disabled teams suppress
+scoped grants. A false condition excludes only its grant; an error in an
+applicable condition returns `allow: false` with reason `condition_error`.
+Explicit deny wins matching allows, without numeric role or grant-source
+priority.
+
+`GET /me/permissions` keeps its flat `permissions` list and omits each grant's
+team context (`team_id`) and any target-resource context. It is for
+informational/UI display only, not authorization evidence or a final allow/deny
+result. For enforcement, use `POST /authz/check` with the actual resource
+context or evaluate v2 grants against the resource, including `team_id`. Resolve
+all applicable platform and matching team grants: a member's team deny
+overrides a platform allow, while an outsider does not inherit the baseline
+deny and retains independent platform grants.
+
+The permissions endpoint accepts only
+`GET /authz/permissions/{userID}?version=2`; missing, legacy, or unknown request
+versions receive HTTP 400 (`Unsupported Permission Snapshot Version`) instead
+of a flattened response. Its v2 body contains `version`, `user_id`, `perm_ver`,
+`grants` (`key`, optional `condition`, optional `team_id`), and optional RFC
+3339 `valid_until`, the earliest future membership or binding expiry affecting
+the grants. Platform grants omit `team_id`; scoped grants carry a non-empty
+team ID. Clients must require version `2` and all required v2 fields and
+strictly validate every defined field's types and shapes while ignoring unknown
+additive fields at the snapshot or grant level. Unknown fields add no security
+semantics; any future security-semantic change requires an explicit version.
+Clients never downgrade. Coordinate the server cutover with the v2-aware SDK
+code update.
+
 ## MFA-only step-up
 
 Use this flow only after a guarded operation returns the definite

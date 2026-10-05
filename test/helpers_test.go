@@ -82,14 +82,21 @@ type jwksResponse struct {
 }
 
 type permissionsResponse struct {
-	Grants []struct {
-		Key string `json:"key"`
+	Version    int        `json:"version"`
+	UserID     string     `json:"user_id"`
+	PermVer    int64      `json:"perm_ver"`
+	ValidUntil *time.Time `json:"valid_until,omitempty"`
+	Grants     []struct {
+		Key       string  `json:"key"`
+		Condition *string `json:"condition,omitempty"`
+		TeamID    *string `json:"team_id,omitempty"`
 	} `json:"grants"`
 }
 
 type checkResponse struct {
-	Allow  bool   `json:"allow"`
-	Reason string `json:"reason"`
+	Allow   bool     `json:"allow"`
+	Matched []string `json:"matched"`
+	Reason  string   `json:"reason"`
 }
 
 type auditResponse struct {

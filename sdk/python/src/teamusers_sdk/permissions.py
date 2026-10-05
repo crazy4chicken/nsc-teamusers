@@ -4,19 +4,21 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, NamedTuple
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request as URLRequest
 from urllib.request import urlopen
 
 from .types import (
     CompiledCondition,
+    ConditionCompileError,
     Context,
     Permission,
     Request,
@@ -31,6 +33,10 @@ from .verifier import Claims, SDKError
 DEFAULT_PERMISSION_TTL_SECONDS = 2 * 60
 PermissionFetcher = Callable[..., Mapping[str, Any]]
 TokenSource = Callable[[], str]
+
+_RFC3339_PATTERN = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})"
+)
 
 
 class PermissionsError(SDKError):
@@ -51,6 +57,10 @@ class PermissionFetchError(PermissionsError):
     code = "PERMISSIONS_FETCH_FAILED"
 
 
+class PermissionSnapshotError(PermissionFetchError):
+    """A v2 permission snapshot is malformed, unsupported, or expired."""
+
+
 class AuthorizationCheckError(PermissionsError):
     """The remote authorization check failed."""
 
@@ -62,18 +72,34 @@ class Grant:
     """One effective permission and its optional ABAC condition."""
 
     key: str
-    condition: CompiledCondition | None = None
+    condition: CompiledCondition | str | None = None
+    team_id: str | None = None
     _permission: Permission = field(init=False, repr=False, compare=False)
+    _condition_error: ConditionCompileError | None = field(init=False, repr=False, compare=False)
+    _condition_source: str | None = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         permission = parse_permission(self.key)
         condition = self.condition
+        condition_error = None
+        condition_source = None
         if isinstance(condition, str):
-            condition = compile_condition(condition)
-        if condition is not None and not isinstance(condition, CompiledCondition):
+            condition_source = condition
+            try:
+                condition = compile_condition(condition)
+            except ConditionCompileError as error:
+                condition_error = error
+                condition = None
+        elif condition is not None and not isinstance(condition, CompiledCondition):
             raise TypeError("grant condition must be a CompiledCondition or string")
+        elif isinstance(condition, CompiledCondition):
+            condition_source = condition.source
+        if self.team_id is not None and (not isinstance(self.team_id, str) or not self.team_id):
+            raise TypeError("grant team_id must be a nonempty string or None")
         object.__setattr__(self, "_permission", permission)
         object.__setattr__(self, "condition", condition)
+        object.__setattr__(self, "_condition_error", condition_error)
+        object.__setattr__(self, "_condition_source", condition_source)
 
     @property
     def Key(self) -> str:
@@ -93,8 +119,11 @@ class Grant:
 
     def to_dict(self) -> dict[str, Any]:
         value: dict[str, Any] = {"key": self.key}
-        if self.condition is not None and self.condition.source.strip():
-            value["condition"] = self.condition.source
+        condition_source = self.condition.source if self.condition is not None else self._condition_source
+        if condition_source is not None and condition_source.strip():
+            value["condition"] = condition_source
+        if self.team_id is not None:
+            value["team_id"] = self.team_id
         return value
 
     def MarshalJSON(self) -> dict[str, Any]:
@@ -108,6 +137,7 @@ class PermissionEntry:
     user_id: str
     perm_ver: int
     grants: tuple[Grant, ...] = ()
+    valid_until: str | None = None
 
     @property
     def UserID(self) -> str:
@@ -122,11 +152,14 @@ class PermissionEntry:
         return self.grants
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "user_id": self.user_id,
             "perm_ver": self.perm_ver,
             "grants": [grant.to_dict() for grant in self.grants],
         }
+        if self.valid_until is not None:
+            value["valid_until"] = self.valid_until
+        return value
 
 
 Permissions = PermissionEntry
@@ -180,6 +213,8 @@ class _Inflight:
     done: threading.Event = field(default_factory=threading.Event)
     entry: PermissionEntry | None = None
     error: BaseException | None = None
+    clear_epoch: int = 0
+    user_epoch: int = 0
 
 
 @dataclass(slots=True)
@@ -220,6 +255,8 @@ class PermissionsClient:
         self._lock = threading.RLock()
         self._entries: dict[str, _CachedEntry] = {}
         self._inflight: dict[str, _Inflight] = {}
+        self._clear_epoch = 0
+        self._user_epochs: dict[str, int] = {}
 
     @property
     def base(self) -> str:
@@ -263,39 +300,79 @@ class PermissionsClient:
                 cached is not None
                 and cached.expires_at > time.monotonic()
                 and cached.entry.perm_ver == token_perm_ver
+                and not _snapshot_expired(cached.entry)
             ):
                 return _clone_entry(cached.entry)
             call = self._inflight.get(user_id)
             owner = call is None
             if owner:
-                call = _Inflight()
+                call = _Inflight(
+                    clear_epoch=self._clear_epoch,
+                    user_epoch=self._user_epochs.get(user_id, 0),
+                )
                 self._inflight[user_id] = call
-
         assert call is not None
+
         if not owner:
             call.done.wait()
-            if call.error is not None:
-                raise call.error
-            if call.entry is None:
-                raise PermissionFetchError("permission fetch returned no entry")
-            return _clone_entry(call.entry)
+            with self._lock:
+                if self._inflight_invalidated(user_id, call):
+                    raise PermissionSnapshotError("permission cache invalidated during fetch")
+                if call.error is not None:
+                    raise call.error
+                if call.entry is None:
+                    raise PermissionFetchError("permission fetch returned no entry")
+                entry = call.entry
+            if _snapshot_expired(entry):
+                raise PermissionSnapshotError("permission snapshot valid_until is expired")
+            return _clone_entry(entry)
 
         try:
             entry = self._fetch_permissions(user_id)
+            monotonic_now = time.monotonic()
+            expires_at = monotonic_now + self.ttl
+            if entry.valid_until is not None:
+                deadline = _parse_rfc3339(entry.valid_until)
+                wall_now = datetime.now(timezone.utc)
+                if deadline is None or deadline <= wall_now:
+                    raise PermissionSnapshotError("permission snapshot valid_until is expired or invalid")
+                expires_at = min(expires_at, monotonic_now + (deadline - wall_now).total_seconds())
         except BaseException as error:
             with self._lock:
-                self._inflight.pop(user_id, None)
+                if self._inflight_invalidated(user_id, call):
+                    error = PermissionSnapshotError("permission cache invalidated during fetch")
+                if self._inflight.get(user_id) is call:
+                    self._inflight.pop(user_id)
                 call.error = error
                 call.done.set()
-            raise
+            raise error
+        invalidation_error = None
         with self._lock:
-            self._inflight.pop(user_id, None)
-            call.entry = entry
-            self._entries[user_id] = _CachedEntry(
-                entry=_clone_entry(entry), expires_at=time.monotonic() + self.ttl
-            )
+            if self._inflight_invalidated(user_id, call):
+                invalidation_error = PermissionSnapshotError("permission cache invalidated during fetch")
+                if self._inflight.get(user_id) is call:
+                    self._inflight.pop(user_id)
+                call.error = invalidation_error
+            else:
+                if self._inflight.get(user_id) is call:
+                    self._inflight.pop(user_id)
+                call.entry = entry
+                self._entries[user_id] = _CachedEntry(
+                    entry=_clone_entry(entry), expires_at=expires_at
+                )
             call.done.set()
+        if invalidation_error is not None:
+            raise invalidation_error
+        if _snapshot_expired(entry):
+            self.invalidate(user_id)
+            raise PermissionSnapshotError("permission snapshot valid_until is expired")
         return _clone_entry(entry)
+
+    def _inflight_invalidated(self, user_id: str, call: _Inflight) -> bool:
+        return (
+            self._clear_epoch != call.clear_epoch
+            or self._user_epochs.get(user_id, 0) != call.user_epoch
+        )
 
     def Get(
         self,
@@ -312,7 +389,10 @@ class PermissionsClient:
         with self._lock:
             for user_id in user_ids:
                 if isinstance(user_id, str) and user_id.strip():
-                    self._entries.pop(user_id.strip(), None)
+                    normalized = user_id.strip()
+                    self._user_epochs[normalized] = self._user_epochs.get(normalized, 0) + 1
+                    self._entries.pop(normalized, None)
+                    self._inflight.pop(normalized, None)
 
     def Invalidate(self, *user_ids: str) -> None:
         self.invalidate(*user_ids)
@@ -325,6 +405,9 @@ class PermissionsClient:
 
     def invalidate_all(self) -> None:
         with self._lock:
+            self._clear_epoch += 1
+            self._user_epochs.clear()
+            self._inflight.clear()
             self._entries.clear()
 
     def InvalidateAll(self) -> None:
@@ -340,45 +423,58 @@ class PermissionsClient:
         if not self.base_url:
             raise PermissionConfigurationError("authorization base URL is empty")
         token = self._service_bearer()
-        endpoint = f"{self.base_url}/authz/permissions/{quote(user_id, safe='')}"
+        endpoint = f"{self.base_url}/authz/permissions/{quote(user_id, safe='')}?version=2"
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         try:
-            payload = self._request_json("GET", endpoint, headers, None)
+            payload = self._request_json("GET", endpoint, headers, None, snapshot=True)
         except PermissionsError:
             raise
         except Exception as error:
             raise PermissionFetchError("fetch permissions", error) from error
         if not isinstance(payload, Mapping):
-            raise PermissionFetchError("decode permissions: object expected")
-        payload_user = payload.get("user_id", user_id)
-        if payload_user and payload_user != user_id:
-            raise PermissionFetchError(
+            raise PermissionSnapshotError("decode permissions: object expected")
+        if type(payload.get("version")) is not int or payload["version"] != 2:
+            raise PermissionSnapshotError("decode permissions: version must be 2")
+        payload_user = payload.get("user_id")
+        if not isinstance(payload_user, str) or not payload_user:
+            raise PermissionSnapshotError("decode permissions: user_id must be a nonempty string")
+        if payload_user != user_id:
+            raise PermissionSnapshotError(
                 f"permissions response user_id {payload_user!r} does not match {user_id!r}"
             )
         raw_ver = payload.get("perm_ver")
-        if isinstance(raw_ver, bool) or not isinstance(raw_ver, int) or raw_ver < 0:
-            raise PermissionFetchError("decode permissions: perm_ver must be a non-negative integer")
-        raw_grants = payload.get("grants", [])
+        if type(raw_ver) is not int or raw_ver < 0:
+            raise PermissionSnapshotError("decode permissions: perm_ver must be a non-negative integer")
+        raw_grants = payload.get("grants")
         if not isinstance(raw_grants, list):
-            raise PermissionFetchError("decode permissions: grants must be an array")
-        grants: list[Grant] = []
-        for raw_grant in raw_grants:
-            if not isinstance(raw_grant, Mapping):
-                continue
-            key = raw_grant.get("key")
-            if not isinstance(key, str):
-                continue
-            condition = raw_grant.get("condition")
-            if condition is not None and not isinstance(condition, str):
-                continue
-            try:
-                grants.append(Grant(key, condition or None))
-            except (ConditionError, TypeError, ValueError):
-                continue
-        return PermissionEntry(user_id=user_id, perm_ver=raw_ver, grants=tuple(grants))
+            raise PermissionSnapshotError("decode permissions: grants must be an array")
+        valid_until: str | None = None
+        if "valid_until" in payload:
+            raw_deadline = payload["valid_until"]
+            if not isinstance(raw_deadline, str):
+                raise PermissionSnapshotError("decode permissions: valid_until must be an RFC3339 string")
+            deadline = _parse_rfc3339(raw_deadline)
+            if deadline is None:
+                raise PermissionSnapshotError("decode permissions: valid_until must be an RFC3339 string")
+            if deadline <= datetime.now(timezone.utc):
+                raise PermissionSnapshotError("decode permissions: valid_until is expired")
+            valid_until = raw_deadline
+        grants = tuple(_parse_snapshot_grant(value) for value in raw_grants)
+        return PermissionEntry(
+            user_id=user_id,
+            perm_ver=raw_ver,
+            grants=grants,
+            valid_until=valid_until,
+        )
 
     def _request_json(
-        self, method: str, url: str, headers: Mapping[str, str], body: bytes | None
+        self,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        *,
+        snapshot: bool = False,
     ) -> Any:
         if self._requester is not None:
             return _call_requester(self._requester, method, url, headers, body)
@@ -389,11 +485,21 @@ class PermissionsClient:
             with urlopen(request, timeout=10) as response:
                 status = getattr(response, "status", 200)
                 if not 200 <= status < 300:
+                    if snapshot and status == 400:
+                        raise PermissionSnapshotError(f"HTTP {status}")
                     raise PermissionFetchError(f"HTTP {status}")
                 return json.load(response)
+        except HTTPError as error:
+            if snapshot and error.code == 400:
+                raise PermissionSnapshotError(f"HTTP {error.code}", error) from error
+            raise PermissionFetchError("HTTP request failed", error) from error
         except PermissionFetchError:
             raise
-        except (OSError, URLError, ValueError) as error:
+        except ValueError as error:
+            if snapshot:
+                raise PermissionSnapshotError("decode permission snapshot", error) from error
+            raise PermissionFetchError("HTTP request failed", error) from error
+        except (OSError, URLError) as error:
             raise PermissionFetchError("HTTP request failed", error) from error
 
     def check(self, subject: str, permission: str, resource: Resource | Mapping[str, Any] | None = None) -> CheckResult:
@@ -465,14 +571,22 @@ class PermissionsClient:
             return self._remote_allow(claims.subject, permission, resource_value)
         try:
             entry = self.get(claims.subject, claims.perm_ver)
+        except PermissionSnapshotError:
+            return AllowResult(False, "invalid permission snapshot")
         except PermissionsError:
             return self._remote_allow(claims.subject, permission, resource_value)
         if entry.perm_ver != claims.perm_ver:
             return AllowResult(False, "permission version mismatch")
+        if entry.valid_until is not None and _snapshot_expired(entry):
+            return AllowResult(False, "permission snapshot expired")
+        if requested.scope == "team" and not resource_value.team_id:
+            return AllowResult(False, "no matching grant")
         condition_rejected = False
         allowed = False
         denied = False
         for grant in entry.grants:
+            if grant.team_id is not None and grant.team_id != resource_value.team_id:
+                continue
             grant_permission = grant.permission
             candidate = grant_permission
             if grant_permission.deny:
@@ -484,15 +598,21 @@ class PermissionsClient:
                 )
             if not match(candidate, requested):
                 continue
-            if grant.condition is not None and not grant.condition.eval(
-                Context(
+            if grant._condition_error is not None:
+                return AllowResult(False, "condition_error")
+            if grant.condition is not None:
+                context = Context(
                     subject=Subject(id=claims.subject, kind=claims.kind),
                     resource=resource_value,
                     request=Request(time=datetime.now(timezone.utc)),
                 )
-            ):
-                condition_rejected = True
-                continue
+                try:
+                    condition_matches = grant.condition.eval_strict(context)
+                except Exception:
+                    return AllowResult(False, "condition_error")
+                if not condition_matches:
+                    condition_rejected = True
+                    continue
             if grant_permission.deny:
                 denied = True
             else:
@@ -549,7 +669,57 @@ def NewPermissionsClient(base_url: str, *args: Any, **kwargs: Any) -> Permission
 
 
 def _clone_entry(entry: PermissionEntry) -> PermissionEntry:
-    return PermissionEntry(entry.user_id, entry.perm_ver, tuple(entry.grants))
+    return PermissionEntry(
+        entry.user_id,
+        entry.perm_ver,
+        tuple(entry.grants),
+        entry.valid_until,
+    )
+
+
+def _parse_rfc3339(value: str) -> datetime | None:
+    if not isinstance(value, str) or _RFC3339_PATTERN.fullmatch(value) is None:
+        return None
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _snapshot_expired(entry: PermissionEntry) -> bool:
+    if entry.valid_until is None:
+        return False
+    deadline = _parse_rfc3339(entry.valid_until)
+    return deadline is None or deadline <= datetime.now(timezone.utc)
+
+
+def _parse_snapshot_grant(value: Any) -> Grant:
+    if not isinstance(value, Mapping):
+        raise PermissionSnapshotError("decode permissions: grant object expected")
+    key = value.get("key")
+    if not isinstance(key, str) or not key.strip():
+        raise PermissionSnapshotError("decode permissions: grant key must be a nonempty string")
+    condition: str | None = None
+    if "condition" in value:
+        raw_condition = value["condition"]
+        if not isinstance(raw_condition, str) or not raw_condition.strip():
+            raise PermissionSnapshotError("decode permissions: grant condition must be a nonempty string")
+        condition = raw_condition
+    team_id: str | None = None
+    if "team_id" in value:
+        raw_team_id = value["team_id"]
+        if raw_team_id is not None:
+            if not isinstance(raw_team_id, str) or not raw_team_id:
+                raise PermissionSnapshotError("decode permissions: grant team_id must be nonempty or null")
+            team_id = raw_team_id
+    try:
+        return Grant(key, condition, team_id)
+    except (TypeError, ValueError) as error:
+        raise PermissionSnapshotError("decode permissions: invalid grant", error) from error
 
 
 def _coerce_resource(resource: Resource | Mapping[str, Any] | None) -> Resource:
@@ -630,6 +800,7 @@ __all__ = [
     "PermissionConfigurationError",
     "PermissionEntry",
     "PermissionFetchError",
+    "PermissionSnapshotError",
     "Permissions",
     "PermissionsClient",
     "PermissionsError",
