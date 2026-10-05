@@ -115,6 +115,13 @@ func GetCredential(ctx context.Context, q Q, userID, kind string) (Credential, e
 		ORDER BY created_at DESC, hash LIMIT 1`, userID, kind))
 }
 
+// GetCredentialForUpdate locks one enrolled factor while a proof is checked.
+func GetCredentialForUpdate(ctx context.Context, q Q, userID, kind string) (Credential, error) {
+	return scanCredential(q.QueryRow(ctx, `
+		SELECT user_id, kind, hash, must_change, created_at, rotated_at
+		FROM credentials WHERE user_id = $1 AND kind = $2 FOR UPDATE`, userID, kind))
+}
+
 func ListCredentials(ctx context.Context, q Q, userID, cursor string, limit int) ([]Credential, string, error) {
 	limit = pageLimit(limit)
 	var rows pgx.Rows

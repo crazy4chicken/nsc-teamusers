@@ -21,6 +21,7 @@ from teamusers_sdk import (
     PermissionsClient,
     Request,
     RequireFresh,
+    require_fresh,
     RejectImpersonated,
     Resource,
     Subject,
@@ -300,7 +301,7 @@ def test_user_deleted_lifecycle_events_do_not_require_changed_fields():
     ]
     subscription.Close()
 
-def test_require_fresh_checks_authentication_time():
+def test_require_fresh_accepts_auth_time_or_step_up_time():
     request = {"headers": {}, "method": "POST"}
     guard = RequireFresh(60)
     now = int(time.time())
@@ -311,13 +312,42 @@ def test_require_fresh_checks_authentication_time():
     with pytest.raises(UnauthorizedError):
         guard(request)
 
+    fresh_step_up = replace(claims, auth_time=0, step_up_time=now)
+    assert guard(request, fresh_step_up) == fresh_step_up
+    future_step_up = replace(claims, auth_time=0, step_up_time=now + 30)
+    assert require_fresh(60)(request, future_step_up) == future_step_up
+    fresh_auth_with_expired_step_up = replace(claims, step_up_time=now - 120)
+    assert guard(request, fresh_auth_with_expired_step_up) == fresh_auth_with_expired_step_up
+
     for auth_time in (0, now - 120, now + 31):
         with pytest.raises(ForbiddenError, match="step_up_required"):
             guard(request, replace(claims, auth_time=auth_time))
+    for step_up_time in (now - 120, now + 31):
+        with pytest.raises(ForbiddenError, match="step_up_required"):
+            guard(request, replace(claims, auth_time=0, step_up_time=step_up_time))
+
+    impersonated = replace(
+        claims,
+        auth_time=0,
+        step_up_time=now,
+        actor="admin_1",
+        impersonated=True,
+    )
+    with pytest.raises(ForbiddenError, match="step_up_required"):
+        guard(request, impersonated)
+
+    actor_only_step_up = replace(
+        claims,
+        auth_time=0,
+        step_up_time=now,
+        actor="admin_1",
+        impersonated=False,
+    )
+    with pytest.raises(ForbiddenError, match="step_up_required"):
+        guard(request, actor_only_step_up)
 
     with pytest.raises(ForbiddenError, match="step_up_required"):
         RequireFresh(0)(request, claims)
-
 
 def test_reject_impersonated_claims():
     request = {"headers": {}, "method": "GET"}

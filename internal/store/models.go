@@ -96,6 +96,18 @@ type Session struct {
 	RevokeReason   *string         `json:"revoke_reason,omitempty"`
 }
 
+// StepUpChallenge mirrors a persisted, single-use MFA step-up challenge.
+type StepUpChallenge struct {
+	ID              string          `json:"id"`
+	UserID          string          `json:"user_id"`
+	SessionID       string          `json:"session_id"`
+	Purpose         string          `json:"purpose"`
+	Methods         []string        `json:"methods"`
+	WebauthnSession json.RawMessage `json:"webauthn_session,omitempty"`
+	ExpiresAt       time.Time       `json:"expires_at"`
+	CreatedAt       time.Time       `json:"created_at"`
+}
+
 // SessionPolicy mirrors the session_policies table.
 type SessionPolicy struct {
 	ID                    string    `json:"id"`

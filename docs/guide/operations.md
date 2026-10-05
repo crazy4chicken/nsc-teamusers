@@ -704,11 +704,15 @@ SCIM error response. Provisioning and error responses use
 `iam:impersonate:any` is the platform-scoped permission for the admin
 `POST /impersonations` endpoint and is included in the bootstrap administrator
 permission set.
-Assign it only to operators approved to act as other users. The endpoint also
-requires fresh authentication within the previous ten minutes. Each successful
-issuance records the administrator, target, reason, TTL, token `jti`, and exact
-`expires_at` in the append-only audit log. Tokens have a default TTL of 300
-seconds and a maximum TTL of 900 seconds.
+Assign it only to operators approved to act as other users. The endpoint
+requires a user bearer with positive `auth_time` or `step_up_time` no more than
+ten minutes old; timestamps up to 30 seconds in the future are accepted. An
+eligible administrator can complete MFA-only step-up through
+`POST /auth/step-up/begin` and `POST /auth/step-up/complete` using the current
+session refresh token before impersonating. Service and impersonation tokens
+cannot use that flow. Each successful issuance records the administrator,
+target, reason, TTL, token `jti`, and exact `expires_at` in the append-only audit
+log. Tokens have a default TTL of 300 seconds and a maximum TTL of 900 seconds.
 
 An impersonated token is read-only at the `/me` boundary. It may call only
 `GET /me`, `GET /me/password-policy`, `GET /me/sessions`, `GET /me/activity`,

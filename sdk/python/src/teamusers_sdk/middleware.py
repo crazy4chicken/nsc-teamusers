@@ -13,8 +13,21 @@ from .verifier import Claims, SDKError, TokenVerificationError, Verifier
 from .types import Resource
 
 
-# Keep aligned with the shared 30-second auth_time future-skew across clients.
+# Keep aligned with the shared 30-second authentication timestamp future-skew across clients.
 AUTH_TIME_FUTURE_SKEW_SECONDS = 30.0
+
+
+def _is_fresh_timestamp(timestamp: Any, max_age_seconds: float, now: float) -> bool:
+    if (
+        isinstance(timestamp, bool)
+        or not isinstance(timestamp, (int, float))
+        or not math.isfinite(timestamp)
+        or timestamp <= 0
+    ):
+        return False
+    age_seconds = now - timestamp
+    return age_seconds >= -AUTH_TIME_FUTURE_SKEW_SECONDS and age_seconds <= max_age_seconds
+
 
 class UnauthorizedError(SDKError):
     """The request is not authenticated (HTTP 401)."""
@@ -170,20 +183,22 @@ def RequireFresh(max_age_seconds: float):
     def handler(_request: Any, claims: Claims | None = None) -> Claims:
         if claims is None:
             raise UnauthorizedError("authentication is required")
-        auth_time = claims.auth_time
         if (
             isinstance(max_age_seconds, bool)
             or not isinstance(max_age_seconds, (int, float))
             or not math.isfinite(max_age_seconds)
             or max_age_seconds <= 0
-            or isinstance(auth_time, bool)
-            or not isinstance(auth_time, (int, float))
-            or not math.isfinite(auth_time)
-            or auth_time <= 0
         ):
             raise ForbiddenError("step_up_required")
-        age_seconds = time.time() - auth_time
-        if age_seconds < -AUTH_TIME_FUTURE_SKEW_SECONDS or age_seconds > max_age_seconds:
+        now = time.time()
+        if not (
+            _is_fresh_timestamp(claims.auth_time, max_age_seconds, now)
+            or (
+                not claims.impersonated
+                and not claims.actor
+                and _is_fresh_timestamp(claims.step_up_time, max_age_seconds, now)
+            )
+        ):
             raise ForbiddenError("step_up_required")
         return claims
 

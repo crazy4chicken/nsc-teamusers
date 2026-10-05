@@ -471,6 +471,9 @@ func (s *Service) deleteTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = store.WithAdminTx(r.Context(), s.q, func(ctx context.Context, tx store.Tx) error {
+		if err := store.LockSessionPolicyUser(ctx, tx, user.ID); err != nil {
+			return err
+		}
 		if !validTOTP {
 			consumed, err := store.ConsumeBackupCredential(ctx, tx, user.ID, backupDigest)
 			if err != nil {

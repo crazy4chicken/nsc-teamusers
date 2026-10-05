@@ -31,11 +31,21 @@ type WebauthnChallenge struct {
 // GetPasskeys loads all WebAuthn credentials owned by a user. The empty set is
 // returned when the user has not enrolled a passkey.
 func GetPasskeys(ctx context.Context, q Q, userID string) ([]webauthn.Credential, error) {
+	return getPasskeys(ctx, q, userID, false)
+}
+
+// GetPasskeysForUpdate locks a user's passkey set during assertion verification.
+func GetPasskeysForUpdate(ctx context.Context, q Q, userID string) ([]webauthn.Credential, error) {
+	return getPasskeys(ctx, q, userID, true)
+}
+
+func getPasskeys(ctx context.Context, q Q, userID string, forUpdate bool) ([]webauthn.Credential, error) {
+	query := `SELECT hash FROM credentials WHERE user_id = $1 AND kind = $2`
+	if forUpdate {
+		query = `SELECT hash FROM credentials WHERE user_id = $1 AND kind = $2 FOR UPDATE`
+	}
 	var encoded string
-	err := q.QueryRow(ctx, `
-		SELECT hash
-		FROM credentials
-		WHERE user_id = $1 AND kind = $2`, userID, PasskeyCredentialKind).Scan(&encoded)
+	err := q.QueryRow(ctx, query, userID, PasskeyCredentialKind).Scan(&encoded)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return []webauthn.Credential{}, nil
 	}

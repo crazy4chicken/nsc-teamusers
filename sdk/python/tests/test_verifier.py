@@ -69,11 +69,13 @@ def test_verifies_token_and_caches_jwks() -> None:
 
     verifier = Verifier("https://issuer.example/", fetcher=fetcher)
     auth_time = int(time.time()) - 12
+    step_up_time = int(time.time()) - 5
     claims = verifier.verify(
         _token(
             private_key,
             team="platform",
             auth_time=auth_time,
+            step_up_time=step_up_time,
             amr=["pwd", "otp"],
             act={"sub": "sdk-admin"},
             imp=True,
@@ -90,6 +92,8 @@ def test_verifies_token_and_caches_jwks() -> None:
     assert claims.audience == "teamusers"
     assert claims.auth_time == auth_time
     assert claims.authTime == auth_time
+    assert claims.step_up_time == step_up_time
+    assert claims.stepUpTime == step_up_time
     assert claims.amr == ("pwd", "otp")
     assert claims.actor == "sdk-admin"
     assert claims.impersonated is True
@@ -98,9 +102,15 @@ def test_verifies_token_and_caches_jwks() -> None:
     legacy = verifier.verify(_token(private_key))
     assert legacy.subject == "sdk-user"
     assert legacy.auth_time == 0
+    assert legacy.step_up_time == 0
+    assert legacy.stepUpTime == 0
     assert legacy.amr == ()
     assert legacy.actor is None
     assert legacy.impersonated is False
+
+    auth_time_only = verifier.verify(_token(private_key, auth_time=auth_time))
+    assert auth_time_only.auth_time == auth_time
+    assert auth_time_only.step_up_time == 0
 
 
 def test_expected_audience_and_claim_validation() -> None:
@@ -122,6 +132,11 @@ def test_expected_audience_and_claim_validation() -> None:
     for invalid_claims in (
         {"auth_time": -1},
         {"auth_time": True},
+        {"step_up_time": -1},
+        {"step_up_time": True},
+        {"step_up_time": "123"},
+        {"step_up_time": 123.5},
+        {"step_up_time": 10**400},
         {"amr": "pwd"},
         {"amr": ["pwd", 1]},
         {"act": "sdk-admin"},

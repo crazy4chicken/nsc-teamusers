@@ -28,6 +28,14 @@ must be at least the configured refresh-token TTL
 after that cap, so a user must log in again. Ordinary refresh rows also expire
 after the configured refresh-token TTL and are removed by the hourly reaper.
 
+`auth_time` records primary password, passkey, or federated authentication.
+Successful MFA-only step-up adds optional `step_up_time` without changing
+`auth_time` or the primary-auth `amr`; tokens issued before this claim may omit
+it. `/auth/refresh` preserves `auth_time`, `step_up_time`, and `amr` while
+rotating within the existing family and its original absolute cap. Refresh
+never makes either authentication timestamp newer.
+
+
 Session policies are stored in `session_policies` and target the platform
 default (`subject_kind = 'default'`, empty `subject_id`), a team, a group, or a
 role. Each non-null field resolves independently from the highest-priority
@@ -52,12 +60,14 @@ validation while retaining operational refresh-token status.
 
 The service records resolved password, passkey, OIDC, and MFA authentication
 outcomes in `login_activity`, including timestamp, client IP, user agent,
-method, and result; passwords and tokens are never stored. Writes are
-best-effort and logged without blocking authentication. `GET /me/activity`
-returns cursor pages ordered by descending activity ID and filters strictly to
-the caller's `user_id`. When a failed attempt cannot be tied to a user, its
-attempted username is stored with a null `user_id` and is not exposed through
-the self-service endpoint.
+method, and result. MFA-only step-up verification is also recorded with the
+`step_up` method; see `POST /auth/step-up/begin` and
+`POST /auth/step-up/complete` for that flow. Passwords and tokens are never
+stored. Writes are best-effort and logged without blocking authentication.
+`GET /me/activity` returns cursor pages ordered by descending activity ID and
+filters strictly to the caller's `user_id`. When a failed attempt cannot be
+tied to a user, its attempted username is stored with a null `user_id` and is
+not exposed through the self-service endpoint.
 
 ## Inbound OpenID Connect federation
 
@@ -67,7 +77,7 @@ The begin endpoint sets a `__Host-oidc_state` cookie containing the state digest
 
 The callback verifies the ID-token signature against cached issuer JWKS while enforcing the header-algorithm allowlist. It checks `iss`, `aud`, `exp`, the nonce, requires `iat` to be no more than ten minutes old and no more than 30 seconds in the future, and rejects `nbf` values more than 30 seconds in the future. An unknown `kid` triggers a JWKS refresh. Unverified email claims are never used to associate an account: an existing `(issuer, sub)` identity can sign in directly, while linking by email and just-in-time user creation require `email_verified: true`. An email match can link only when the local `email_verified_at` is set and the local status is neither `pending` nor `invited`; erased users are not linkable. Refused links return `403 oidc_link_refused` without changing local credentials. Closed registration rejects unknown users; approval mode creates a pending user; open mode creates an active user. Newly provisioned OIDC users emit the `user.created` lifecycle event.
 
-The callback returns JSON, not a frontend redirect, and never persists the provider's ID token. OIDC primary authentication sets `auth_time` to the callback time and contributes `amr: ["ext"]`; a local TOTP step-up retains that evidence and adds `otp` to the final token pair. The callback can return a JSON TOTP or enrollment challenge. Upstream `amr`/`acr` claims satisfy MFA only when `TEAMUSERS_OIDC_TRUST_UPSTREAM_MFA=true` (default `false`); otherwise local MFA remains required when policy demands it. When trust is enabled, configured `TEAMUSERS_OIDC_MFA_ACR_VALUES` are exact `acr` matches; the service does not split or infer values from delimiters. Login activity records the `oidc` method for both successful and failed callbacks and uses the existing per-IP limiter.
+The callback returns JSON, not a frontend redirect, and never persists the provider's ID token. OIDC primary authentication sets `auth_time` to the callback time and contributes `amr: ["ext"]`; when local MFA is required, the callback returns an initial MFA or enrollment challenge. Completing that login challenge retains primary-auth `auth_time` and updates `amr`; it is distinct from MFA-only step-up. Upstream `amr`/`acr` claims satisfy MFA only when `TEAMUSERS_OIDC_TRUST_UPSTREAM_MFA=true` (default `false`); otherwise local MFA remains required when policy demands it. When trust is enabled, configured `TEAMUSERS_OIDC_MFA_ACR_VALUES` are exact `acr` matches; the service does not split or infer values from delimiters. Login activity records the `oidc` method for both successful and failed callbacks and uses the existing per-IP limiter.
 
 ## Admin-plane dogfooding
 
@@ -95,9 +105,11 @@ An admin can remove their own last `iam:*:any` grant; rerun
 
 ## Fresh authentication for administrative mutations
 
-Sensitive administrative operations require a user access token whose
-`auth_time` is no more than ten minutes old. A stale timestamp returns
-`403 step_up_required`. This guard applies to:
+Sensitive administrative operations require a user access token with either a
+positive `auth_time` or positive `step_up_time` no more than ten minutes old;
+timestamps up to 30 seconds in the future are accepted. Tokens without
+`step_up_time` can still pass using a recent `auth_time`. A stale or invalid
+timestamp returns `403 step_up_required`. This guard applies to:
 
 - `DELETE /users/{id}`, `POST /users/{id}/disable`,
   `POST /users/{id}/approve`, `POST /users/{id}/credentials`,
@@ -123,20 +135,63 @@ their normal administrative permissions but do not require fresh
 authentication. Other admin operations continue to use their existing
 permission checks.
 
+### MFA-only step-up recovery
+
+Only the exact `403 step_up_required` detail from a guarded operation indicates
+that this flow can satisfy freshness; other `401` or `403` responses are not
+step-up signals. Use an authenticated USER bearer with its current refresh
+token at `POST /auth/step-up/begin`, then submit the same current refresh token
+and returned `step_up_token` to `POST /auth/step-up/complete`. Neither route is
+freshness-guarded. The persisted, purpose-specific challenge is bound to the
+same user and session, is single-use, and expires after five minutes.
+
+`methods` lists only enrolled factors: `otp` for TOTP, `backup_code` for an
+unused backup code, and `webauthn` for a passkey. A passkey response uses the
+user-bound `public_key` assertion options with `userVerification: "required"`.
+Completion accepts exactly one `code` or `credential`. Step-up never enrolls a
+factor. Service and impersonation tokens receive `403 step_up_forbidden`; a
+user with no eligible enrolled factor receives `403 step_up_not_available` and
+must perform full primary login and any required enrollment.
+
+Cancel by abandoning the challenge; it expires after five minutes. A failed
+factor proof does not consume the challenge, so another proof may be submitted
+while it remains valid, subject to rate limiting and account lockout. If the
+failed request used `Idempotency-Key`, the same key and body replay that
+failure; use a new key or omit it for a different proof.
+
+Successful completion returns the normal rotated access/refresh pair in the
+same session family without extending `family_not_after`. It preserves primary
+`auth_time` and `amr`, sets `step_up_time` at factor verification, and refresh
+preserves those values. Replace both client-side tokens together before use,
+then retry the original guarded request once after a definite step-up rejection.
+Do not automatically retry step-up or the original mutation after an ambiguous
+network failure. Idempotency is scoped to the raw `Authorization` header, so a
+new bearer does not deduplicate against the prior token pair.
+
+`password_change_required` continues through `POST /me/password`; an initial
+login `mfa_required` response continues through `POST /auth/login/mfa` or its
+required enrollment flow. Other permission denials need their normal
+authorization recovery.
+
+
 ## Administrative impersonation
 
 `POST /impersonations` is a high-risk support operation guarded by
-`iam:impersonate:any` and the same ten-minute fresh-authentication step-up as
-other sensitive administrative mutations. Each request requires a reason of at
-least three characters. Successful issuance records an append-only
+`iam:impersonate:any`. It requires a user bearer with positive `auth_time` or
+`step_up_time` no more than ten minutes old; timestamps up to 30 seconds in the
+future are accepted. An administrator with an eligible enrolled factor can
+complete MFA-only step-up before impersonating; step-up itself rejects service
+and impersonation tokens. Each request requires a reason of at least three
+characters. Successful issuance records an append-only
 `impersonation.started` audit row containing the administrator, target, reason,
 TTL, token `jti`, and exact `expires_at`.
 
 The access token represents the target user (`kind=user`) and carries
 `act: {"sub": "<administrator-id>"}` and `imp: true`. It sets `auth_time` to
-zero, so it never satisfies step-up. The TTL defaults to five minutes and is
-capped at fifteen minutes. No refresh token or session row is created; the
-token cannot be renewed.
+zero and has no usable `step_up_time`, so it cannot satisfy freshness guards or
+use MFA-only step-up. The TTL defaults to five minutes and is capped at fifteen
+minutes. No refresh token or session row is created; the token cannot be
+renewed.
 Trusted service introspection also returns the `act` and `imp` values for an
 active impersonation access token.
 

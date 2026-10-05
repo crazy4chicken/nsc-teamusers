@@ -554,7 +554,7 @@ func writeFreshAuthenticationError(w http.ResponseWriter, r *http.Request) bool 
 		WriteProblem(w, r, http.StatusUnauthorized, "Unauthorized", "an authenticated subject is required")
 		return true
 	}
-	if !freshAuthTime(subject.AuthTime, 10*time.Minute, time.Now()) {
+	if subject.Impersonated || subject.ActorID != "" || !freshAuthEvidence(subject.AuthTime, subject.StepUpTime, 10*time.Minute, time.Now()) {
 		WriteProblem(w, r, http.StatusForbidden, "Step-up Required", "step_up_required")
 		return true
 	}
@@ -579,6 +579,10 @@ func freshAuthTime(authTime int64, maxAge time.Duration, now time.Time) bool {
 	}
 	age := now.Sub(time.Unix(authTime, 0))
 	return age >= -adminAuthTimeFutureSkew && age <= maxAge
+}
+
+func freshAuthEvidence(authTime, stepUpTime int64, maxAge time.Duration, now time.Time) bool {
+	return freshAuthTime(authTime, maxAge, now) || freshAuthTime(stepUpTime, maxAge, now)
 }
 
 func (h *adminHandler) withTx(ctx context.Context, fn func(context.Context, store.Tx) error) error {

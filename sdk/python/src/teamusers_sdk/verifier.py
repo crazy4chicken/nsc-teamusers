@@ -81,6 +81,7 @@ class Claims:
     amr: tuple[str, ...] = ()
     actor: str | None = None
     impersonated: bool = False
+    step_up_time: int = 0
 
     @property
     def sub(self) -> str:
@@ -99,6 +100,12 @@ class Claims:
         """Camel-case spelling of ``auth_time`` for cross-SDK callers."""
 
         return self.auth_time
+
+    @property
+    def stepUpTime(self) -> int:
+        """Camel-case spelling of ``step_up_time`` for cross-SDK callers."""
+
+        return self.step_up_time
 
     @property
     def exp(self) -> float:
@@ -420,6 +427,23 @@ def _claims_from_payload(
     else:
         auth_time = 0
 
+    if "step_up_time" in payload:
+        step_up_time_raw = payload["step_up_time"]
+        if isinstance(step_up_time_raw, bool) or not isinstance(step_up_time_raw, (int, float)):
+            raise TokenClaimsError("invalid access token step_up_time")
+        try:
+            step_up_time_number = float(step_up_time_raw)
+        except OverflowError:
+            raise TokenClaimsError("invalid access token step_up_time") from None
+        if (
+            not math.isfinite(step_up_time_number)
+            or int(step_up_time_raw) != step_up_time_raw
+            or step_up_time_raw < 0
+        ):
+            raise TokenClaimsError("invalid access token step_up_time")
+        step_up_time = int(step_up_time_raw)
+    else:
+        step_up_time = 0
     if "amr" in payload:
         amr_raw = payload["amr"]
         if not isinstance(amr_raw, list) or any(not isinstance(value, str) for value in amr_raw):
@@ -461,6 +485,7 @@ def _claims_from_payload(
         expiry=expiry,
         audience=audience,
         auth_time=auth_time,
+        step_up_time=step_up_time,
         amr=amr,
         actor=actor,
         impersonated=impersonated,

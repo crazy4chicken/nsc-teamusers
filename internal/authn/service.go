@@ -50,6 +50,8 @@ type Deps struct {
 	Pool    *pgxpool.Pool
 	Audit   *auditlog.Writer
 	Context context.Context
+	// Now optionally supplies the current time; nil uses time.Now.
+	Now     func() time.Time
 }
 
 // Dependencies is an explicit alias for callers that prefer the longer name.
@@ -102,6 +104,10 @@ func New(deps Deps) (*Service, error) {
 	if deps.Audit == nil {
 		deps.Audit = auditlog.NewWriter()
 	}
+	now := deps.Now
+	if now == nil {
+		now = time.Now
+	}
 	service := &Service{
 		cfg:       deps.Config,
 		q:         q,
@@ -112,7 +118,7 @@ func New(deps Deps) (*Service, error) {
 		dummyHash: newDummyPasswordHash(),
 		audit:     deps.Audit,
 		webAuthn:  webAuthn,
-		now:       time.Now,
+		now:       now,
 	}
 	if pool != nil {
 		ctx := deps.Context
@@ -137,6 +143,8 @@ func (s *Service) Routes() chi.Router {
 	router.Post("/auth/password-reset/confirm", s.confirmPasswordReset)
 	router.Post("/auth/client-credentials", s.clientCredentials)
 	router.Post("/auth/login/mfa", s.loginMFA)
+	router.With(s.Middleware()).Post("/auth/step-up/begin", s.beginStepUp)
+	router.With(s.Middleware()).Post("/auth/step-up/complete", s.completeStepUp)
 	router.Post("/auth/login/mfa/enroll/begin", s.beginMFATOTPEnrollment)
 	router.Post("/auth/login/mfa/enroll/complete", s.completeMFATOTPEnrollment)
 	router.Post("/auth/passkey/login/begin", s.beginPasskeyLogin)
@@ -175,6 +183,7 @@ func (s *Service) Middleware() func(http.Handler) http.Handler {
 			subject := httpapi.Subject{
 				UserID: claims.Subject, TeamID: claims.Team, Kind: claims.Kind, PermVer: claims.PermVer,
 				AuthTime: claims.AuthTime, AMR: append([]string(nil), claims.AMR...),
+				StepUpTime: claims.StepUpTime,
 				Impersonated: claims.Impersonated, ActorID: claims.ActorID,
 			}
 			next.ServeHTTP(w, r.WithContext(httpapi.ContextWithSubject(r.Context(), subject)))
@@ -685,6 +694,7 @@ type tokenClaims struct {
 	PermVer      int64
 	Expiry       time.Time
 	AuthTime     int64
+	StepUpTime   int64
 	AMR          []string
 	ActorID      string
 	Impersonated bool
@@ -706,6 +716,7 @@ type sessionMetadata struct {
 	IP              string   `json:"ip,omitempty"`
 	UserAgent       string   `json:"user_agent,omitempty"`
 	AuthTime        int64    `json:"auth_time,omitempty"`
+	StepUpTime      int64    `json:"step_up_time,omitempty"`
 	AMR             []string `json:"amr,omitempty"`
 	authTimeMissing bool     `json:"-"`
 }
@@ -1148,6 +1159,9 @@ func (s *Service) issuePairWithPolicy(ctx context.Context, q store.Q, user store
 			return tokenResponse{}, errors.New("user authentication time is required")
 		}
 	}
+	if metadata.StepUpTime < 0 {
+		return tokenResponse{}, errors.New("invalid step-up authentication time")
+	}
 	if len(metadata.AMR) == 0 {
 		metadata.AMR = []string{"pwd"}
 	}
@@ -1155,7 +1169,7 @@ func (s *Service) issuePairWithPolicy(ctx context.Context, q store.Q, user store
 	if err != nil {
 		return tokenResponse{}, err
 	}
-	access, err := s.signAccessToken(user, team, kind, metadata.AuthTime, metadata.AMR)
+	access, err := s.signAccessTokenWithStepUpTime(user, team, kind, metadata.AuthTime, metadata.AMR, metadata.StepUpTime)
 	if err != nil {
 		return tokenResponse{}, err
 	}
@@ -1296,6 +1310,7 @@ func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Req
 		storedMetadata := sessionMetadataFrom(session)
 		metadata := sessionMetadataFor(r, kind)
 		metadata.AuthTime = storedMetadata.AuthTime
+		metadata.StepUpTime = storedMetadata.StepUpTime
 		metadata.authTimeMissing = metadata.AuthTime == 0
 		metadata.AMR = append([]string(nil), storedMetadata.AMR...)
 		if len(metadata.AMR) == 0 {
@@ -1335,6 +1350,15 @@ func (s *Service) rotateRefresh(ctx context.Context, refresh string, r *http.Req
 func (s *Service) signAccessToken(user store.User, team, kind string, authTime int64, amr []string) (string, error) {
 	now := s.now()
 	return s.signAccessTokenAt(user, team, kind, authTime, amr, now, now.Add(s.cfg.AccessTokenTTL), nil)
+}
+
+func (s *Service) signAccessTokenWithStepUpTime(user store.User, team, kind string, authTime int64, amr []string, stepUpTime int64) (string, error) {
+	now := s.now()
+	var additionalClaims map[string]interface{}
+	if stepUpTime > 0 {
+		additionalClaims = map[string]interface{}{"step_up_time": stepUpTime}
+	}
+	return s.signAccessTokenAt(user, team, kind, authTime, amr, now, now.Add(s.cfg.AccessTokenTTL), additionalClaims)
 }
 
 func (s *Service) signAccessTokenAt(user store.User, team, kind string, authTime int64, amr []string, issuedAt, expiresAt time.Time, additionalClaims map[string]interface{}) (string, error) {
@@ -1416,6 +1440,13 @@ func (s *Service) parseAccessToken(raw string) (tokenClaims, error) {
 			return tokenClaims{}, errors.New("invalid auth_time claim")
 		}
 	}
+	stepUpTime := int64(0)
+	if _, present := token.Get("step_up_time"); present {
+		stepUpTime, ok = int64Claim(token, "step_up_time")
+		if !ok || stepUpTime < 0 {
+			return tokenClaims{}, errors.New("invalid step_up_time claim")
+		}
+	}
 	amr := []string(nil)
 	if _, present := token.Get("amr"); present {
 		amr, ok = stringSliceClaim(token, "amr")
@@ -1449,7 +1480,7 @@ func (s *Service) parseAccessToken(raw string) (tokenClaims, error) {
 	}
 	return tokenClaims{
 		Subject: token.Subject(), Team: team, Kind: kind, PermVer: permVer,
-		Expiry: token.Expiration(), AuthTime: authTime, AMR: amr,
+		Expiry: token.Expiration(), AuthTime: authTime, StepUpTime: stepUpTime, AMR: amr,
 		ActorID: actorID, Impersonated: impersonated,
 	}, nil
 }

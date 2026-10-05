@@ -20,6 +20,7 @@ type Claims struct {
 	Audience     string
 	Expiry       time.Time
 	AuthTime     int64
+	StepUpTime   int64
 	AMR          []string
 	Actor        string
 	Impersonated bool

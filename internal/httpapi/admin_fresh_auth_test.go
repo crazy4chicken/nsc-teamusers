@@ -38,6 +38,59 @@ func TestFreshAuthTimeBoundaries(t *testing.T) {
 	}
 }
 
+func TestFreshAuthEvidenceBoundaries(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0)
+	for _, testCase := range []struct {
+		name       string
+		authTime   int64
+		stepUpTime int64
+		want       bool
+	}{
+		{name: "recent primary authentication", authTime: now.Add(-time.Minute).Unix(), stepUpTime: now.Add(-20 * time.Minute).Unix(), want: true},
+		{name: "recent step-up with stale primary authentication", authTime: now.Add(-20 * time.Minute).Unix(), stepUpTime: now.Add(-time.Minute).Unix(), want: true},
+		{name: "both timestamps stale", authTime: now.Add(-20 * time.Minute).Unix(), stepUpTime: now.Add(-20 * time.Minute).Unix()},
+		{name: "both timestamps missing", authTime: 0, stepUpTime: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := freshAuthEvidence(testCase.authTime, testCase.stepUpTime, 10*time.Minute, now); got != testCase.want {
+				t.Fatalf("freshAuthEvidence(%d, %d) = %t, want %t", testCase.authTime, testCase.stepUpTime, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestFreshStepUpEvidenceDoesNotAuthorizeImpersonation(t *testing.T) {
+	now := time.Now()
+	request := httptest.NewRequest(http.MethodDelete, "/users/user_test", nil)
+	request = request.WithContext(ContextWithSubject(request.Context(), Subject{
+		UserID: "admin_test", Kind: "user", AuthTime: now.Add(-20 * time.Minute).Unix(),
+		StepUpTime: now.Add(-time.Minute).Unix(),
+	}))
+	if writeFreshAuthenticationError(httptest.NewRecorder(), request) {
+		t.Fatal("recent step-up evidence did not satisfy fresh authentication")
+	}
+
+	impersonatedRequest := httptest.NewRequest(http.MethodDelete, "/users/user_test", nil)
+	impersonatedRequest = impersonatedRequest.WithContext(ContextWithSubject(impersonatedRequest.Context(), Subject{
+		UserID: "target_test", Kind: "user", AuthTime: now.Unix(), StepUpTime: now.Unix(),
+		Impersonated: true, ActorID: "admin_test",
+	}))
+	recorder := httptest.NewRecorder()
+	if !writeFreshAuthenticationError(recorder, impersonatedRequest) || recorder.Code != http.StatusForbidden ||
+		!strings.Contains(recorder.Body.String(), "step_up_required") {
+		t.Fatalf("impersonated fresh step-up response = %d %s, want step_up_required 403", recorder.Code, recorder.Body.String())
+	}
+	actorRequest := httptest.NewRequest(http.MethodDelete, "/users/user_test", nil)
+	actorRequest = actorRequest.WithContext(ContextWithSubject(actorRequest.Context(), Subject{
+		UserID: "target_test", Kind: "user", AuthTime: now.Add(-20 * time.Minute).Unix(),
+		StepUpTime: now.Add(-time.Minute).Unix(), ActorID: "admin_test",
+	}))
+	actorRecorder := httptest.NewRecorder()
+	if !writeFreshAuthenticationError(actorRecorder, actorRequest) || actorRecorder.Code != http.StatusForbidden {
+		t.Fatalf("actor-only fresh step-up response = %d %s, want 403", actorRecorder.Code, actorRecorder.Body.String())
+	}
+}
+
 func TestSensitiveAdminMutationsRequireFreshAuthentication(t *testing.T) {
 	staleAuthTime := time.Now().Add(-11 * time.Minute).Unix()
 	authMW := func(next http.Handler) http.Handler {

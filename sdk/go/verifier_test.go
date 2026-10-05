@@ -50,9 +50,10 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 	defer verifier.Close()
 
 	now := time.Now().UTC()
+	stepUpTime := now.Add(-10 * time.Second).Unix()
 	valid := signSDKTestToken(t, privateKey, map[string]any{
 		"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
-		"auth_time": now.Add(-time.Minute).Unix(), "amr": []string{"pwd", "otp"},
+		"auth_time": now.Add(-time.Minute).Unix(), "step_up_time": stepUpTime, "amr": []string{"pwd", "otp"},
 		"act": map[string]any{"sub": "sdk-admin"}, "imp": true,
 		"iat": now, "exp": now.Add(5 * time.Minute),
 	})
@@ -61,7 +62,7 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 		t.Fatalf("verify valid SDK token: %v", err)
 	}
 	if claims.Subject != "sdk-user" || claims.Kind != "user" || claims.PermVer != 2 || claims.Audience != "teamusers" ||
-		claims.AuthTime != now.Add(-time.Minute).Unix() || len(claims.AMR) != 2 || claims.AMR[0] != "pwd" || claims.AMR[1] != "otp" ||
+		claims.AuthTime != now.Add(-time.Minute).Unix() || claims.StepUpTime != stepUpTime || len(claims.AMR) != 2 || claims.AMR[0] != "pwd" || claims.AMR[1] != "otp" ||
 		claims.Actor != "sdk-admin" || !claims.Impersonated {
 		t.Fatalf("verified SDK claims = %+v", claims)
 	}
@@ -74,8 +75,19 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify legacy SDK token: %v", err)
 	}
-	if legacyClaims.AuthTime != 0 || len(legacyClaims.AMR) != 0 || legacyClaims.Actor != "" || legacyClaims.Impersonated {
+	if legacyClaims.AuthTime != 0 || legacyClaims.StepUpTime != 0 || len(legacyClaims.AMR) != 0 || legacyClaims.Actor != "" || legacyClaims.Impersonated {
 		t.Fatalf("legacy SDK claims = %+v, want absent authentication and impersonation evidence", legacyClaims)
+	}
+	authTimeOnly := signSDKTestToken(t, privateKey, map[string]any{
+		"iss": "teamusers", "aud": "teamusers", "sub": "legacy-user", "kind": "user", "perm_ver": int64(2),
+		"auth_time": now.Add(-time.Minute).Unix(), "iat": now, "exp": now.Add(5 * time.Minute),
+	})
+	authTimeOnlyClaims, err := verifier.Verify(t.Context(), authTimeOnly)
+	if err != nil {
+		t.Fatalf("verify auth_time-only SDK token: %v", err)
+	}
+	if authTimeOnlyClaims.AuthTime != now.Add(-time.Minute).Unix() || authTimeOnlyClaims.StepUpTime != 0 {
+		t.Fatalf("auth_time-only SDK claims = %+v, want primary auth_time and absent step_up_time", authTimeOnlyClaims)
 	}
 
 	cases := []struct {
@@ -131,6 +143,34 @@ func TestVerifierValidatesAccessTokenClaims(t *testing.T) {
 			token: signSDKTestToken(t, privateKey, map[string]any{
 				"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
 				"auth_time": int64(-1), "iat": now, "exp": now.Add(5 * time.Minute),
+			}),
+		},
+		{
+			name: "negative step_up_time",
+		token: signSDKTestToken(t, privateKey, map[string]any{
+				"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+				"step_up_time": int64(-1), "iat": now, "exp": now.Add(5 * time.Minute),
+			}),
+		},
+		{
+			name: "boolean step_up_time",
+		token: signSDKTestToken(t, privateKey, map[string]any{
+				"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+				"step_up_time": true, "iat": now, "exp": now.Add(5 * time.Minute),
+			}),
+		},
+		{
+			name: "fractional step_up_time",
+		token: signSDKTestToken(t, privateKey, map[string]any{
+				"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+				"step_up_time": 123.5, "iat": now, "exp": now.Add(5 * time.Minute),
+			}),
+		},
+		{
+			name: "string step_up_time",
+		token: signSDKTestToken(t, privateKey, map[string]any{
+				"iss": "teamusers", "aud": "teamusers", "sub": "sdk-user", "kind": "user", "perm_ver": int64(2),
+				"step_up_time": "123", "iat": now, "exp": now.Add(5 * time.Minute),
 			}),
 		},
 		{

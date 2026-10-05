@@ -131,6 +131,71 @@ func TestMFAAndAccessTokenPurposesDoNotCrossAuthenticate(t *testing.T) {
 	}
 }
 
+func TestStepUpTokenPurposeAndAccessClaims(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	service := newJWTTestService(t, now)
+	stepUpToken, err := service.signStepUpToken("purpose-user", "challenge-1", "session-1", now.Add(mfaTokenTTL))
+	if err != nil {
+		t.Fatalf("sign step-up token: %v", err)
+	}
+	claims, err := service.parseStepUpToken(stepUpToken)
+	if err != nil {
+		t.Fatalf("parse step-up token: %v", err)
+	}
+	if claims.UserID != "purpose-user" || claims.ChallengeID != "challenge-1" || claims.SessionID != "session-1" {
+		t.Fatalf("step-up claims = %+v", claims)
+	}
+	if _, err := service.parseAccessToken(stepUpToken); err == nil {
+		t.Fatal("step-up token was accepted as an access token")
+	}
+	mfaToken, err := service.signMFAToken("purpose-user", now.Unix(), []string{"pwd"})
+	if err != nil {
+		t.Fatalf("sign MFA token: %v", err)
+	}
+	if _, err := service.parseStepUpToken(mfaToken); err == nil {
+		t.Fatal("MFA login token was accepted as a step-up token")
+	}
+
+	authTime := now.Add(-time.Hour).Unix()
+	stepUpTime := now.Unix()
+	accessToken, err := service.signAccessTokenWithStepUpTime(
+		store.User{ID: "purpose-user", PermVer: 3}, "", "user", authTime, []string{"pwd", "mfa"}, stepUpTime,
+	)
+	if err != nil {
+		t.Fatalf("sign access token with step-up time: %v", err)
+	}
+	accessClaims, err := service.parseAccessToken(accessToken)
+	if err != nil {
+		t.Fatalf("parse access token with step-up time: %v", err)
+	}
+	if accessClaims.AuthTime != authTime || accessClaims.StepUpTime != stepUpTime || len(accessClaims.AMR) != 2 {
+		t.Fatalf("access claims = %+v, want unchanged auth_time and added step_up_time", accessClaims)
+	}
+	if _, err := service.parseStepUpToken(accessToken); err == nil {
+		t.Fatal("access token was accepted as a step-up token")
+	}
+
+	oldAccessToken, err := service.signAccessToken(store.User{ID: "purpose-user", PermVer: 3}, "", "user", authTime, []string{"pwd"})
+	if err != nil {
+		t.Fatalf("sign access token without step-up time: %v", err)
+	}
+	oldClaims, err := service.parseAccessToken(oldAccessToken)
+	if err != nil {
+		t.Fatalf("parse access token without step-up time: %v", err)
+	}
+	if oldClaims.StepUpTime != 0 {
+		t.Fatalf("old-token step_up_time = %d, want absent", oldClaims.StepUpTime)
+	}
+
+	negativeStepUpTime := signJWTClaims(t, service, map[string]any{
+		"iss": issuer, "aud": issuer, "sub": "purpose-user", "kind": "user", "perm_ver": int64(3),
+		"iat": now, "exp": now.Add(time.Minute), "auth_time": authTime, "amr": []string{"pwd"}, "step_up_time": int64(-1),
+	})
+	if _, err := service.parseAccessToken(negativeStepUpTime); err == nil {
+		t.Fatal("access token with negative step_up_time was accepted")
+	}
+}
+
 func TestParseMFATokenAudience(t *testing.T) {
 	now := time.Now().UTC()
 	service := newJWTTestService(t, now)

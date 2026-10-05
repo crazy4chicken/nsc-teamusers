@@ -301,6 +301,14 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 			return Claims{}, errors.New("invalid access token auth_time")
 		}
 	}
+	stepUpTime := int64(0)
+	if _, present := token.Get("step_up_time"); present {
+		var stepUpTimeOK bool
+		stepUpTime, stepUpTimeOK = int64Claim(token, "step_up_time")
+		if !stepUpTimeOK || stepUpTime < 0 {
+			return Claims{}, errors.New("invalid access token step_up_time")
+		}
+	}
 	amr := []string(nil)
 	if _, present := token.Get("amr"); present {
 		var amrOK bool
@@ -336,7 +344,7 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 	}
 	return Claims{
 		Subject: subject, Team: team, Kind: kind, PermVer: permVer,
-		Audience: audiences[0], Expiry: expiry, AuthTime: authTime, AMR: amr,
+		Audience: audiences[0], Expiry: expiry, AuthTime: authTime, StepUpTime: stepUpTime, AMR: amr,
 		Actor: actor, Impersonated: impersonated,
 	}, nil
 }

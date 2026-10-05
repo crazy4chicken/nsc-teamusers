@@ -107,6 +107,10 @@ func newIntegrationStackWithMode(t *testing.T, registrationMode string) *integra
 }
 
 func newIntegrationStackWithModeAndConfig(t *testing.T, registrationMode string, configure func(*config.Config)) *integrationStack {
+	return newIntegrationStackWithModeAndConfigAndNow(t, registrationMode, configure, nil)
+}
+
+func newIntegrationStackWithModeAndConfigAndNow(t *testing.T, registrationMode string, configure func(*config.Config), now func() time.Time) *integrationStack {
 	t.Helper()
 	database := newIntegrationDatabase(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -135,6 +139,7 @@ func newIntegrationStackWithModeAndConfig(t *testing.T, registrationMode string,
 		Pool:    database.pool,
 		Audit:   auditWriter,
 		Context: ctx,
+		Now:     now,
 	})
 	if err != nil {
 		cancel()

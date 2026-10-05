@@ -27,3 +27,11 @@ func TestSessionMetadataFromTreatsMalformedDataAsMissing(t *testing.T) {
 		t.Fatalf("sessionMetadataFrom() = %+v, want empty metadata", metadata)
 	}
 }
+
+func TestSessionMetadataFromPreservesStepUpEvidence(t *testing.T) {
+	metadata := sessionMetadataFrom(store.Session{ClientMeta: []byte(`{"kind":"user","auth_time":123,"step_up_time":456,"amr":["pwd","mfa"]}`)})
+	if metadata.Kind != "user" || metadata.AuthTime != 123 || metadata.StepUpTime != 456 ||
+		len(metadata.AMR) != 2 || metadata.AMR[0] != "pwd" || metadata.AMR[1] != "mfa" {
+		t.Fatalf("sessionMetadataFrom() = %+v, want primary and step-up evidence", metadata)
+	}
+}

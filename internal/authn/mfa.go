@@ -264,6 +264,9 @@ func (s *Service) completeMFALogin(ctx context.Context, user store.User, metadat
 func (s *Service) consumeBackupAndComplete(ctx context.Context, user store.User, digest string, metadata sessionMetadata) (tokenResponse, error) {
 	var response tokenResponse
 	issue := func(txctx context.Context, q store.Q) error {
+		if err := store.LockSessionPolicyUser(txctx, q, user.ID); err != nil {
+			return err
+		}
 		consumed, err := store.ConsumeBackupCredential(txctx, q, user.ID, digest)
 		if err != nil {
 			return err

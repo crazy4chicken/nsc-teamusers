@@ -135,15 +135,24 @@ export function requireFresh(
     if (providedClaims === undefined) {
       throw new UnauthorizedError("authentication is required");
     }
-    const authTimeMs = providedClaims.authTime * 1000;
-    const ageMs = Date.now() - authTimeMs;
+    const nowMs = Date.now();
+    const isFresh = (timestamp: number): boolean => {
+      const timestampMs = timestamp * 1000;
+      const ageMs = nowMs - timestampMs;
+      return (
+        Number.isFinite(timestampMs) &&
+        timestampMs > 0 &&
+        ageMs >= -AUTH_TIME_FUTURE_SKEW_MS &&
+        ageMs <= maxAgeMs
+      );
+    };
     if (
       !Number.isFinite(maxAgeMs) ||
       maxAgeMs <= 0 ||
-      !Number.isFinite(authTimeMs) ||
-      authTimeMs <= 0 ||
-      ageMs < -AUTH_TIME_FUTURE_SKEW_MS ||
-      ageMs > maxAgeMs
+      (!isFresh(providedClaims.authTime) &&
+        (providedClaims.impersonated ||
+          (providedClaims.actor !== undefined && providedClaims.actor !== "") ||
+          !isFresh(providedClaims.stepUpTime)))
     ) {
       throw new ForbiddenError("step_up_required");
     }

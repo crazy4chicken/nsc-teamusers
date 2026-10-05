@@ -9,7 +9,8 @@ var DocImpersonationOperations = []apidocs.Operation{
 		Path:        "/impersonations",
 		Tag:         "Impersonation",
 		Summary:     "Start an audited user impersonation",
-		Description: "Use for time-bounded administrative support as an active user. Requires iam:impersonate:any and authentication within the previous ten minutes. The target must be active, must not be a service account or the caller, and must not hold effective IAM permissions. The required reason is recorded with the actor, target, TTL, token jti, and exact expires_at in the append-only audit log. The returned user-kind access token has no refresh token or session, carries act and imp claims, sets auth_time to zero, and expires within 15 minutes; there is no per-jti revocation list. ttl_seconds defaults to 300 and is limited to 1 through 900. Accepts Idempotency-Key for safe retries.",
+		Description: "Use for time-bounded administrative support as an active user. Requires iam:impersonate:any and a user bearer with positive auth_time or step_up_time no older than ten minutes; timestamps up to 30 seconds in the future are accepted. The target must be active, must not be a service account or the caller, and must not hold effective IAM permissions. The required reason is recorded with the actor, target, TTL, token jti, and exact expires_at in the append-only audit log. The returned user-kind access token has no refresh token or session, carries act and imp claims, sets auth_time to zero, and cannot use MFA-only step-up or satisfy freshness guards.",
+		PermissionNote: "Requires a user bearer with positive `auth_time` or `step_up_time` no older than ten minutes; timestamps up to 30 seconds in the future are accepted. Otherwise returns 403 `step_up_required`.",
 		Security:    "admin",
 		Request:     impersonationRequest{},
 		RequestExample: map[string]any{

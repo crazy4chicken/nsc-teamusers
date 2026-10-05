@@ -11,6 +11,7 @@ import {
   PermissionsClient,
   Require,
   RequireFresh,
+  requireFresh,
   RejectImpersonated,
   subscribeKeyRotations,
   subscribeUserDeleted,
@@ -42,11 +43,13 @@ test("verifies an Ed25519 access token and caches the JWKS", async () => {
     },
   });
   const authTime = Math.floor(Date.now() / 1000) - 12;
+  const stepUpTime = Math.floor(Date.now() / 1000) - 5;
   const token = await new SignJWT({
     kind: "user",
     team: "platform",
     perm_ver: 2,
     auth_time: authTime,
+    step_up_time: stepUpTime,
     amr: ["pwd", "otp"],
     act: { sub: "sdk-admin" },
     imp: true,
@@ -70,6 +73,8 @@ test("verifies an Ed25519 access token and caches the JWKS", async () => {
   assert.equal(claims.audience, "teamusers");
   assert.equal(claims.authTime, authTime);
   assert.equal(claims.auth_time, authTime);
+  assert.equal(claims.stepUpTime, stepUpTime);
+  assert.equal(claims.step_up_time, stepUpTime);
   assert.deepEqual(claims.amr, ["pwd", "otp"]);
   assert.equal(claims.actor, "sdk-admin");
   assert.equal(claims.impersonated, true);
@@ -111,10 +116,23 @@ test("supports an expected audience and rejects invalid application claims", asy
   assert.equal(claims.kind, "service");
   assert.equal(claims.permVer, 0);
   assert.equal(claims.authTime, 0);
+  assert.equal(claims.stepUpTime, 0);
   assert.deepEqual(claims.amr, []);
   assert.equal(claims.actor, undefined);
   assert.equal(claims.impersonated, false);
 
+
+  const legacyAuthTime = Math.floor(Date.now() / 1000) - 12;
+  const authTimeOnlyToken = await new SignJWT({ kind: "service", perm_ver: 0, auth_time: legacyAuthTime })
+    .setProtectedHeader({ alg: "EdDSA", kid: "audience-key" })
+    .setIssuer("teamusers")
+    .setAudience("api")
+    .setSubject("svc")
+    .setExpirationTime("5m")
+    .sign(privateKey);
+  const authTimeOnlyClaims = await verifier.verify(authTimeOnlyToken);
+  assert.equal(authTimeOnlyClaims.authTime, legacyAuthTime);
+  assert.equal(authTimeOnlyClaims.stepUpTime, 0);
   const missingKind = await new SignJWT({ perm_ver: 0 })
     .setProtectedHeader({ alg: "EdDSA", kid: "audience-key" })
     .setIssuer("teamusers")
@@ -131,6 +149,17 @@ test("supports an expected audience and rejects invalid application claims", asy
     .setExpirationTime("5m")
     .sign(privateKey);
   await assert.rejects(verifier.verify(invalidAuthTime), TokenClaimsError);
+
+  for (const value of [-1, true, "123", 123.5]) {
+    const invalidStepUpTime = await new SignJWT({ kind: "service", perm_ver: 0, step_up_time: value })
+      .setProtectedHeader({ alg: "EdDSA", kid: "audience-key" })
+      .setIssuer("teamusers")
+      .setAudience("api")
+      .setSubject("svc")
+      .setExpirationTime("5m")
+      .sign(privateKey);
+    await assert.rejects(verifier.verify(invalidStepUpTime), TokenClaimsError);
+  }
 
   const invalidAMR = await new SignJWT({ kind: "service", perm_ver: 0, amr: "pwd" })
     .setProtectedHeader({ alg: "EdDSA", kid: "audience-key" })
@@ -287,7 +316,7 @@ test("middleware returns claims and raises typed 401/403 errors", async () => {
   await assert.rejects(guard({ headers: {}, method: "GET" }, claims), ForbiddenError);
 });
 
-test("RequireFresh accepts recent auth_time and the shared future skew", async () => {
+test("RequireFresh accepts recent auth_time or step_up_time and the shared future skew", async () => {
   const now = Math.floor(Date.now() / 1000);
   const claims = new Claims({
     subject: "usr_1",
@@ -304,7 +333,7 @@ test("RequireFresh accepts recent auth_time and the shared future skew", async (
   assert.equal(await guard(request, claims), claims);
   await assert.rejects(guard(request), UnauthorizedError);
 
-  const withAuthTime = (authTime: number) => new Claims({
+  const withTimes = (authTime: number, stepUpTime = 0, impersonated = false) => new Claims({
     subject: claims.subject,
     team: claims.team,
     kind: claims.kind,
@@ -312,15 +341,57 @@ test("RequireFresh accepts recent auth_time and the shared future skew", async (
     expiry: claims.expiry,
     audience: claims.audience,
     authTime,
+    stepUpTime,
+    impersonated,
   });
-  const withinSkew = withAuthTime(now + 30);
-  assert.equal(await guard(request, withinSkew), withinSkew);
-  for (const authTime of [now - 120, now + 31]) {
+  const freshStepUp = withTimes(0, now);
+  assert.equal(await guard(request, freshStepUp), freshStepUp);
+  const oldToken = withTimes(0);
+  await assert.rejects(
+    guard(request, oldToken),
+    (error: unknown) => error instanceof ForbiddenError && error.message === "step_up_required",
+  );
+  const withinAuthSkew = withTimes(now + 30);
+  assert.equal(await guard(request, withinAuthSkew), withinAuthSkew);
+  const withinStepUpSkew = withTimes(0, now + 30);
+  assert.equal(await requireFresh(60_000)(request, withinStepUpSkew), withinStepUpSkew);
+
+  const freshAuthWithExpiredStepUp = withTimes(now, now - 120);
+  assert.equal(await guard(request, freshAuthWithExpiredStepUp), freshAuthWithExpiredStepUp);
+  for (const [authTime, stepUpTime] of [
+    [now - 120, 0],
+    [now + 31, 0],
+    [0, now - 120],
+    [0, now + 31],
+  ]) {
     await assert.rejects(
-      guard(request, withAuthTime(authTime)),
+      guard(request, withTimes(authTime, stepUpTime)),
       (error: unknown) => error instanceof ForbiddenError && error.message === "step_up_required",
     );
   }
+  await assert.rejects(
+    guard(request, withTimes(0, now, true)),
+    (error: unknown) => error instanceof ForbiddenError && error.message === "step_up_required",
+  );
+  const actorOnlyStepUp = new Claims({
+    subject: claims.subject,
+    team: claims.team,
+    kind: claims.kind,
+    permVer: claims.permVer,
+    expiry: claims.expiry,
+    audience: claims.audience,
+    authTime: 0,
+    stepUpTime: now,
+    actor: "admin_1",
+  });
+  await assert.rejects(
+    guard(request, actorOnlyStepUp),
+    (error: unknown) => error instanceof ForbiddenError && error.message === "step_up_required",
+  );
+  await assert.rejects(
+    RequireFresh(0)(request, claims),
+    (error: unknown) => error instanceof ForbiddenError && error.message === "step_up_required",
+  );
 });
 
 test("RejectImpersonated rejects only impersonated claims", async () => {

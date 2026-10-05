@@ -50,6 +50,7 @@ export class Claims {
   public readonly expiry: Date;
   public readonly audience: Audience;
   public readonly authTime: number;
+  public readonly stepUpTime: number;
   public readonly amr: readonly string[];
   public readonly actor: string | undefined;
   public readonly impersonated: boolean;
@@ -62,6 +63,7 @@ export class Claims {
     readonly expiry: Date;
     readonly audience: Audience;
     readonly authTime?: number;
+    readonly stepUpTime?: number;
     readonly amr?: readonly string[];
     readonly actor?: string;
     readonly impersonated?: boolean;
@@ -73,6 +75,7 @@ export class Claims {
     this.expiry = values.expiry;
     this.audience = values.audience;
     this.authTime = values.authTime ?? 0;
+    this.stepUpTime = values.stepUpTime ?? 0;
     this.amr = [...(values.amr ?? [])];
     this.actor = values.actor;
     this.impersonated = values.impersonated ?? false;
@@ -91,6 +94,11 @@ export class Claims {
   /** JWT `auth_time` spelling; Unix timestamp in seconds. */
   public get auth_time(): number {
     return this.authTime;
+  }
+
+  /** JWT `step_up_time` spelling; Unix timestamp in seconds. */
+  public get step_up_time(): number {
+    return this.stepUpTime;
   }
 
   /** JWT expiration as a Unix timestamp in seconds. */
@@ -408,6 +416,14 @@ function claimsFromPayload(
     throw new TokenClaimsError("invalid access token auth_time");
   }
 
+  const stepUpTime = payload.step_up_time;
+  if (
+    stepUpTime !== undefined &&
+    (typeof stepUpTime !== "number" || !Number.isSafeInteger(stepUpTime) || stepUpTime < 0)
+  ) {
+    throw new TokenClaimsError("invalid access token step_up_time");
+  }
+
   const amrValue = payload.amr;
   let amr: string[] = [];
   if (amrValue !== undefined) {
@@ -449,6 +465,7 @@ function claimsFromPayload(
     expiry: new Date(expiry * 1000),
     audience: Array.isArray(audience) ? [...audienceValues] : audienceValues[0],
     authTime: authTime ?? 0,
+    stepUpTime: stepUpTime ?? 0,
     amr,
     actor,
     impersonated,

@@ -146,7 +146,9 @@ func (c *Client) RequireFresh(maxAge time.Duration) func(http.Handler) http.Hand
 				writeUnauthorized(w, "authentication is required")
 				return
 			}
-			if !authTimeIsFresh(claims.AuthTime, maxAge, time.Now()) {
+			now := time.Now()
+			if !authTimeIsFresh(claims.AuthTime, maxAge, now) &&
+				(claims.Impersonated || claims.Actor != "" || !authTimeIsFresh(claims.StepUpTime, maxAge, now)) {
 				writeDecision(w, http.StatusForbidden, "step_up_required")
 				return
 			}

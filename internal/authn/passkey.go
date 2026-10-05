@@ -475,6 +475,9 @@ func (s *Service) recordPasskeyFailure(ctx context.Context, user store.User) (bo
 func (s *Service) completePasskeyLogin(ctx context.Context, user store.User, credential webauthnlib.Credential, metadata sessionMetadata) (tokenResponse, error) {
 	var response tokenResponse
 	issue := func(txctx context.Context, q store.Q) error {
+		if err := store.LockSessionPolicyUser(txctx, q, user.ID); err != nil {
+			return err
+		}
 		if err := store.UpdatePasskey(txctx, q, user.ID, credential); err != nil {
 			return err
 		}

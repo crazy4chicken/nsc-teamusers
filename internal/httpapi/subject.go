@@ -9,6 +9,7 @@ type Subject struct {
 	Kind          string
 	PermVer       int64
 	AuthTime      int64
+	StepUpTime    int64
 	AMR           []string
 	Impersonated  bool
 	ActorID       string

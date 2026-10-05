@@ -197,14 +197,19 @@ end users verbatim.
 
 Two additional guards plug into the same middleware chain:
 
-- **`RequireFresh(maxAge)`** rejects tokens whose `auth_time` is older than
-  `maxAge` with `step_up_required` — put it in front of payout, credential, or
-  admin-adjacent handlers so a stolen long-lived token cannot perform them.
+- **`RequireFresh(maxAge)`** accepts a token with a positive `auth_time` or
+  `step_up_time` within `maxAge`; timestamps up to 30 seconds in the future are
+  accepted. Older tokens without `step_up_time` can still pass using a recent
+  `auth_time`; otherwise the guard returns `step_up_required`.
 - **`RejectImpersonated()`** rejects tokens minted by
   `POST /impersonations` (`imp=true`) — put it in front of anything a support
   admin must never do as the user (billing changes, data export to third
   parties). The service already blocks impersonated tokens from every `/me`
   mutation; this guard extends the same posture to your own endpoints.
+
+Impersonation tokens cannot use MFA-only step-up or bypass `RequireFresh` with
+`step_up_time`; keep `RejectImpersonated()` for handlers that must reject them.
+
 
 :::tabs key:sdk-lang variant:code
 
@@ -353,3 +358,10 @@ off for high-throughput read paths.
 The TypeScript and Python error types carry a stable `code` field; match on
 the code, never on the message text. The Go SDK returns plain errors — treat
 any `Verify` failure as unauthenticated and rely on middleware status codes.
+
+Treat only the exact `403 step_up_required` detail as a freshness denial. Other
+`401` or `403` responses, `password_change_required`, and the initial login
+`mfa_required` challenge require their own authentication or authorization
+flows. SDK guards check token claims locally; they do not perform step-up or
+rotate a caller's access/refresh pair. See the [security guide](/guide/security)
+for the authenticated step-up flow and safe token-pair replacement.
