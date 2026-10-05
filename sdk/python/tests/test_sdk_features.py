@@ -289,7 +289,8 @@ def test_permission_grammar_and_condition_fail_closed():
         with pytest.raises(ValueError):
             Parse(key)
     assert MatchKeys("!orders:read:team", "!orders:read:team")
-    condition = CompileCondition('subject.kind in ["user", "service"] && !(resource.owner_id == "blocked") && 2 < 3')
+    condition_source = 'subject.kind in ["user", "service"] && !(resource.owner_id == "blocked") && 2 < 3'
+    condition = CompileCondition(condition_source)
     assert condition.Eval(Context(subject=Subject(kind="user")))
     assert not condition.Eval(Context(subject=Subject(kind="unknown")))
     assert not CompileCondition('resource.attrs["missing"] > 1').Eval(Context())
@@ -301,12 +302,25 @@ def test_permission_grammar_and_condition_fail_closed():
             "user_id": "usr_1",
             "perm_ver": 1,
             "grants": [
-                {"key": "orders:read:team"},
-                {"key": "!orders:read:team"},
+                {"key": "orders:read:team", "team_id": "team-a"},
+                {"key": "!orders:read:team", "team_id": "team-a", "condition": condition_source},
             ],
         },
     )
-    assert tuple(client.Allow(_claims(), "orders:read:team")) == (False, "permission denied")
+    allowed_when_deny_matches = client.Allow(
+        _claims(),
+        "orders:read:team",
+        {"team_id": "team-a", "owner_id": "eligible"},
+    ).allow
+    allowed_when_deny_skips = client.Allow(
+        _claims(),
+        "orders:read:team",
+        {"team_id": "team-a", "owner_id": "blocked"},
+    ).allow
+    allowed_without_team_context = client.Allow(_claims(), "orders:read:team").allow
+    assert allowed_when_deny_matches is False
+    assert allowed_when_deny_skips is True
+    assert allowed_without_team_context is False
 
 
 def test_v2_permission_snapshots_fail_closed_without_remote_fallback():
