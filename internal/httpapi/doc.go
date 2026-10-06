@@ -41,6 +41,11 @@ type docMePermissionsResponse struct {
 	Permissions []string `json:"permissions"`
 }
 
+type docRolePermissionsPage struct {
+	Items      []string `json:"items"`
+	NextCursor string   `json:"next_cursor"`
+}
+
 type docProfilePatchRequest struct {
 	Username    string `json:"username,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
@@ -788,6 +793,21 @@ var DocOperations = []apidocs.Operation{
 		Security:    "admin",
 		Errors:      []apidocs.ErrorDoc{docUnauthorized, docForbidden, docNotFound, docInternal},
 	},
+	{
+		Method:      "GET",
+		Path:        "/roles/{id}/permissions",
+		Tag:         "Roles",
+		Summary:     "List permissions on a role",
+		Description: "Lists the role's assigned permission keys in ascending order. Accepts cursor (a prior next_cursor) and limit (a positive integer, default 100, capped at 1000). Full pages return their final key as next_cursor; short pages return an empty cursor. Empty roles return items: [] and next_cursor: \"\". Requires iam:roles:any or an applicable iam:roles:team grant for the role's team; reads do not require step-up authentication.",
+		Security:    "admin",
+		Response:    docRolePermissionsPage{},
+		ResponseExample: map[string]any{
+			"items":       []string{"orders:read:team", "orders:write:team"},
+			"next_cursor": "orders:write:team",
+		},
+		Errors: []apidocs.ErrorDoc{docInvalidPage, docUnauthorized, docForbidden, docNotFound, docInternal},
+	},
+
 	{
 		Method:          "PUT",
 		Path:            "/roles/{id}/permissions",

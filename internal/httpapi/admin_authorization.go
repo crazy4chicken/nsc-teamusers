@@ -81,6 +81,24 @@ func (h *adminHandler) getRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, role)
 }
 
+func (h *adminHandler) listRolePermissions(w http.ResponseWriter, r *http.Request) {
+	cursor, limit, ok := parsePage(w, r)
+	if !ok {
+		return
+	}
+	roleID := chi.URLParam(r, "id")
+	if _, err := store.GetRole(r.Context(), h.q, roleID); err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	permissions, next, err := store.ListRolePermissions(r.Context(), h.q, roleID, cursor, limit)
+	if err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	writeItems(w, permissions, next)
+}
+
 func (h *adminHandler) createRole(w http.ResponseWriter, r *http.Request) {
 	var request roleCreateRequest
 	if !decodeJSON(w, r, &request) {

@@ -547,6 +547,7 @@ func NewAdminRouter(q store.Q, audit *auditlog.Writer, authMW func(http.Handler)
 		r.Get("/{id}", h.getRole)
 		r.Patch("/{id}", h.patchRole)
 		r.Delete("/{id}", h.deleteRole)
+		r.Get("/{id}/permissions", h.listRolePermissions)
 		r.With(freshAuthMiddleware).Put("/{id}/permissions", h.setRolePermissions)
 	})
 	router.Route("/permissions", func(r chi.Router) {

@@ -191,6 +191,14 @@ The write restriction above does not broaden the resulting grant: if a platform
 administrator assigns a `:any` permission to a team-owned role, a team-scoped
 binding still limits that grant to its matching active team resource.
 
+`GET /roles/{id}/permissions` lists the assigned permission keys in ascending
+order. Pass `limit` (positive, default 100, capped at 1000) and the previous
+`next_cursor` as `cursor`. A full page returns its last key as `next_cursor`;
+short pages return an empty cursor, and an empty role returns
+`{"items":[],"next_cursor":""}`. Authorization uses `iam:roles:any` or an
+applicable `iam:roles:team` grant for the role's team; reads do not require
+step-up authentication.
+
 
 Target teams are resolved as follows:
 
