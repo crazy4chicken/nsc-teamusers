@@ -26,6 +26,28 @@ type invitationRequest struct {
 	Username    string `json:"username"`
 	DisplayName string `json:"display_name,omitempty"`
 }
+// InvitationResponse exposes the persisted user status and latest invitation timestamps.
+type InvitationResponse struct {
+	UserStatus string     `json:"user_status"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	UsedAt     *time.Time `json:"used_at,omitempty"`
+}
+
+func (h *adminHandler) getUserInvitation(w http.ResponseWriter, r *http.Request) {
+	invitation, err := store.GetLatestInvitationObservation(r.Context(), h.q, chi.URLParam(r, "id"))
+	if err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, InvitationResponse{
+		UserStatus: invitation.UserStatus,
+		CreatedAt:  invitation.CreatedAt,
+		ExpiresAt:  invitation.ExpiresAt,
+		UsedAt:     invitation.UsedAt,
+	})
+}
+
 
 func (h *adminHandler) createInvitation(w http.ResponseWriter, r *http.Request) {
 	var request invitationRequest

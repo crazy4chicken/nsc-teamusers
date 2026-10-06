@@ -81,7 +81,6 @@ func TestAdminRouteErrorMatrix(t *testing.T) {
 		{name: "wrong user password policy method", method: http.MethodPost, path: "/users/" + admin.ID + "/password-policy", body: map[string]string{}, bearer: adminToken, want: http.StatusMethodNotAllowed},
 		{name: "wrong users method", method: http.MethodPost, path: "/users/" + admin.ID, body: map[string]string{}, bearer: adminToken, want: http.StatusMethodNotAllowed},
 		{name: "wrong teams method", method: http.MethodPost, path: "/teams/" + team.ID, body: map[string]string{}, bearer: adminToken, want: http.StatusMethodNotAllowed},
-		{name: "wrong groups method", method: http.MethodGet, path: "/groups/" + group.ID + "/members", bearer: adminToken, want: http.StatusMethodNotAllowed},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {

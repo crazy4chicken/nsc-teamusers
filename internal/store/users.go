@@ -122,6 +122,50 @@ func GetCredentialForUpdate(ctx context.Context, q Q, userID, kind string) (Cred
 		FROM credentials WHERE user_id = $1 AND kind = $2 FOR UPDATE`, userID, kind))
 }
 
+// CredentialMetadata contains only fields that are safe to expose in an
+// administrative observation response.
+type CredentialMetadata struct {
+	Kind       string
+	CreatedAt  time.Time
+	RotatedAt  *time.Time
+	MustChange bool
+}
+
+// ListCredentialMetadata returns all credential kinds without selecting their
+// hashes. Credential kind is unique per user and is the stable pagination key.
+func ListCredentialMetadata(ctx context.Context, q Q, userID, cursor string, limit int) ([]CredentialMetadata, string, error) {
+	limit = pageLimit(limit)
+	var rows pgx.Rows
+	var err error
+	if cursor == "" {
+		rows, err = q.Query(ctx, `
+			SELECT kind, created_at, rotated_at, must_change
+			FROM credentials WHERE user_id = $1 ORDER BY kind LIMIT $2`, userID, limit)
+	} else {
+		rows, err = q.Query(ctx, `
+			SELECT kind, created_at, rotated_at, must_change
+			FROM credentials WHERE user_id = $1 AND kind > $2 ORDER BY kind LIMIT $3`, userID, cursor, limit)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	credentials := make([]CredentialMetadata, 0, limit)
+	for rows.Next() {
+		var credential CredentialMetadata
+		var rotatedAt pgtype.Timestamptz
+		if err := rows.Scan(&credential.Kind, &credential.CreatedAt, &rotatedAt, &credential.MustChange); err != nil {
+			return nil, "", err
+		}
+		credential.RotatedAt = timePointer(rotatedAt)
+		credentials = append(credentials, credential)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	return credentials, nextCursor(len(credentials), limit, func(i int) string { return credentials[i].Kind }), nil
+}
+
 func ListCredentials(ctx context.Context, q Q, userID, cursor string, limit int) ([]Credential, string, error) {
 	limit = pageLimit(limit)
 	var rows pgx.Rows

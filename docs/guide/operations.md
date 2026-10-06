@@ -182,6 +182,12 @@ curl --fail-with-body -sS -X POST "$IAM_BASE_URL/users" \
 The response is the created user and never includes a password hash. The admin
 API does not return credentials from `GET /users/{id}`.
 
+Administrators with `iam:users:any` can use `GET /users/{id}/credentials` to
+review every credential type's metadata: `kind`, `created_at`, optional
+`rotated_at`, and `must_change`. The paged response never includes credential
+hashes, secrets, tokens, or credential payloads. See [REST collection
+pagination](./pagination.md) for the shared page contract.
+
 Create a separate active user for each service account (omit a password here;
 the credential endpoint below creates the service secret):
 
@@ -309,6 +315,12 @@ ID. See [REST collection pagination](./pagination.md) for the shared page
 contract.
 Session IDs are opaque SHA-256 refresh-token digests and never reveal the
 plaintext token.
+
+Administrators with `iam:sessions:any` can inspect an individual session with
+`GET /users/{id}/sessions/{sid}`. Unknown sessions and sessions belonging to a
+different path user return the same generic `404`; retained expired or revoked
+sessions remain readable. The response contains only the session ID, timestamps,
+and optional revocation metadata, never refresh tokens or client metadata.
 
 Session policies are rows in `session_policies`, with nullable
 `max_concurrent_sessions` and `idle_timeout_minutes` resolved independently by
@@ -462,6 +474,12 @@ previous unused invitation token used before creating a replacement, so only
 the newest token can be accepted. Use `DELETE /invitations/{userID}` to cancel
 an invitation; deletion cascades to its token and any other user records. Both
 operations are audited as `invitation.resent` or `invitation.cancelled`.
+
+Administrators with `iam:users:any` can use `GET /users/{userID}/invitation` to
+read the latest persisted invitation row's `created_at`, `expires_at`, and
+optional `used_at`, plus the actual stored user status in `user_status`. No
+invitation record returns a generic `404`. This is not a delivery receipt and
+does not synthesize an accepted or delivery status.
 
 The recipient submits the token and a policy-compliant password to
 `POST /auth/invite/accept`. Success activates the account and treats the

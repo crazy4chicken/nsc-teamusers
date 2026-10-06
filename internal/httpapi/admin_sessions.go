@@ -4,11 +4,22 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"teamusers/internal/store"
 )
+
+// SessionDetailResponse is the public detail view of one user's refresh session.
+type SessionDetailResponse struct {
+	ID           string     `json:"id"`
+	CreatedAt    time.Time  `json:"created_at"`
+	LastActiveAt time.Time  `json:"last_active_at"`
+	ExpiresAt    time.Time  `json:"expires_at"`
+	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
+	RevokeReason *string    `json:"revoke_reason,omitempty"`
+}
 
 func (h *adminHandler) listUserSessions(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
@@ -34,6 +45,24 @@ func (h *adminHandler) listUserSessions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	WriteItems(w, sessionResponses(sessions), next)
+}
+
+func (h *adminHandler) getUserSession(w http.ResponseWriter, r *http.Request) {
+	session, err := store.GetSessionObservation(
+		r.Context(), h.q, chi.URLParam(r, "id"), chi.URLParam(r, "sid"),
+	)
+	if err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, SessionDetailResponse{
+		ID:           session.ID,
+		CreatedAt:    session.CreatedAt,
+		LastActiveAt: session.LastActiveAt,
+		ExpiresAt:    session.ExpiresAt,
+		RevokedAt:    session.RevokedAt,
+		RevokeReason: session.RevokeReason,
+	})
 }
 
 func (h *adminHandler) deleteUserSession(w http.ResponseWriter, r *http.Request) {

@@ -318,6 +318,16 @@ func (h *adminHandler) listPermissions(w http.ResponseWriter, r *http.Request) {
 	WriteItems(w, permissions, next)
 }
 
+func (h *adminHandler) getPermission(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	permission, err := store.GetPermission(r.Context(), h.q, key)
+	if err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, permission)
+}
+
 func (h *adminHandler) registerPermission(w http.ResponseWriter, r *http.Request) {
 	var request permissionRequest
 	if !decodeJSON(w, r, &request) {
@@ -386,6 +396,15 @@ func (h *adminHandler) listBindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteItems(w, bindings, next)
+}
+
+func (h *adminHandler) getBinding(w http.ResponseWriter, r *http.Request) {
+	binding, err := store.GetRoleBinding(r.Context(), h.q, chi.URLParam(r, "id"))
+	if err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, binding)
 }
 
 func (h *adminHandler) createBinding(w http.ResponseWriter, r *http.Request) {

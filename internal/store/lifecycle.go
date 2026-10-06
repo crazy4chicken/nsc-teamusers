@@ -26,6 +26,40 @@ type VerificationToken struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
+// InvitationObservation exposes the user's persisted status and safe
+// timestamps from the latest invitation token, without token or payload data.
+type InvitationObservation struct {
+	UserStatus string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	UsedAt     *time.Time
+}
+
+// GetLatestInvitationObservation returns the newest invite row for an existing
+// user. Creation time and ID provide a deterministic latest-row ordering.
+func GetLatestInvitationObservation(ctx context.Context, q Q, userID string) (InvitationObservation, error) {
+	var observation InvitationObservation
+	var usedAt pgtype.Timestamptz
+	err := q.QueryRow(ctx, `
+		SELECT users.status, latest_invitation.created_at, latest_invitation.expires_at, latest_invitation.used_at
+		FROM users
+		CROSS JOIN LATERAL (
+			SELECT created_at, expires_at, used_at
+			FROM verification_tokens
+			WHERE verification_tokens.user_id = users.id AND verification_tokens.kind = 'invite'
+			ORDER BY created_at DESC, id DESC
+			LIMIT 1
+		) AS latest_invitation
+		WHERE users.id = $1`, userID).Scan(
+		&observation.UserStatus, &observation.CreatedAt, &observation.ExpiresAt, &usedAt,
+	)
+	if err != nil {
+		return InvitationObservation{}, err
+	}
+	observation.UsedAt = timePointer(usedAt)
+	return observation, nil
+}
+
 // CreateVerificationToken stores a one-time verification token. The token ID
 // is always an application-generated ULID when the caller does not supply one.
 func CreateVerificationToken(ctx context.Context, q Q, token VerificationToken) (VerificationToken, error) {

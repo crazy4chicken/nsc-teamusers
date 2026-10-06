@@ -31,6 +31,14 @@ type patchUserRequest struct {
 	Status      *string `json:"status,omitempty"`
 }
 
+// CredentialMetadataResponse is the safe public view of one stored credential.
+type CredentialMetadataResponse struct {
+	Kind       string     `json:"kind"`
+	CreatedAt  time.Time  `json:"created_at"`
+	RotatedAt  *time.Time `json:"rotated_at,omitempty"`
+	MustChange bool       `json:"must_change"`
+}
+
 func (h *adminHandler) listUsers(w http.ResponseWriter, r *http.Request) {
 	cursor, limit, ok := ParsePage(w, r)
 	if !ok {
@@ -42,6 +50,33 @@ func (h *adminHandler) listUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteItems(w, users, next)
+}
+
+func (h *adminHandler) listUserCredentials(w http.ResponseWriter, r *http.Request) {
+	userID := chi.URLParam(r, "id")
+	if _, err := store.GetUser(r.Context(), h.q, userID); err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	cursor, limit, ok := ParsePage(w, r)
+	if !ok {
+		return
+	}
+	credentials, next, err := store.ListCredentialMetadata(r.Context(), h.q, userID, cursor, limit)
+	if err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	responses := make([]CredentialMetadataResponse, 0, len(credentials))
+	for _, credential := range credentials {
+		responses = append(responses, CredentialMetadataResponse{
+			Kind:       credential.Kind,
+			CreatedAt:  credential.CreatedAt,
+			RotatedAt:  credential.RotatedAt,
+			MustChange: credential.MustChange,
+		})
+	}
+	WriteItems(w, responses, next)
 }
 
 func (h *adminHandler) getUser(w http.ResponseWriter, r *http.Request) {

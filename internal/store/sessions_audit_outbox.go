@@ -43,6 +43,36 @@ func GetSession(ctx context.Context, q Q, id string) (Session, error) {
 		FROM sessions WHERE id = $1`, id))
 }
 
+// SessionObservation contains the public timestamps and revocation state for a
+// single owner-scoped session, without loading client metadata or family data.
+type SessionObservation struct {
+	ID           string
+	CreatedAt    time.Time
+	LastActiveAt time.Time
+	ExpiresAt    time.Time
+	RevokedAt    *time.Time
+	RevokeReason *string
+}
+
+// GetSessionObservation returns one session only when it belongs to userID.
+func GetSessionObservation(ctx context.Context, q Q, userID, sessionID string) (SessionObservation, error) {
+	var observation SessionObservation
+	var revokedAt pgtype.Timestamptz
+	var revokeReason pgtype.Text
+	err := q.QueryRow(ctx, `
+		SELECT id, created_at, last_active_at, expires_at, revoked_at, revoke_reason
+		FROM sessions WHERE user_id = $1 AND id = $2`, userID, sessionID).Scan(
+		&observation.ID, &observation.CreatedAt, &observation.LastActiveAt, &observation.ExpiresAt,
+		&revokedAt, &revokeReason,
+	)
+	if err != nil {
+		return SessionObservation{}, err
+	}
+	observation.RevokedAt = timePointer(revokedAt)
+	observation.RevokeReason = textPointer(revokeReason)
+	return observation, nil
+}
+
 // ListSessionsByUser returns active, unexpired refresh-token sessions for a user.
 func ListSessionsByUser(ctx context.Context, q Q, userID string) ([]Session, error) {
 	rows, err := q.Query(ctx, `

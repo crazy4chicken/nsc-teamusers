@@ -48,8 +48,10 @@ session, and other endpoint filters continue to determine scope.
 | Collection | Keyset order and route scope |
 | --- | --- |
 | `GET /users/` | User ID ascending. |
+| `GET /users/{id}/credentials` | Credential `kind` ascending within the path user; `kind` is unique per user and is the cursor key. |
 | `GET /teams/` | Team ID ascending. |
 | `GET /groups/` | Group ID ascending within the required `team_id`. |
+| `GET /groups/{id}/members` | User ID ascending within the path group. |
 | `GET /policies/password` | Password-policy ID ascending. |
 | `GET /policies/mfa` | MFA-policy ID ascending. |
 | `GET /roles/` | Role ID ascending; optional `team_id` filter. |

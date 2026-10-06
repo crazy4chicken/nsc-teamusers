@@ -203,8 +203,10 @@ Target teams are resolved as follows:
 - `/teams/{id}` uses the path ID. `/teams` collections and `POST /teams` have
   no target and require `:any`.
 - `/groups/{id}` and `/groups/{id}/members/...` use the group's `team_id`.
-  `POST /groups` uses the request body's `team_id`; a collection query with
-  `team_id` uses that team.
+  Membership-list and membership-detail reads require `iam:groups:any` or an
+  applicable `iam:groups:team` grant for that active owning team. `POST /groups`
+  uses the request body's `team_id`; a collection query with `team_id` uses that
+  team.
 - `/roles/{id}` and `/roles/{id}/permissions` use the role's `team_id`.
   `POST /roles` uses the request body's `team_id`; platform roles require
   `:any`.
@@ -215,9 +217,11 @@ Target teams are resolved as follows:
   requires `team_id` to match if supplied. Existing user/group binding creation
   continues to resolve the role's team. Team-scoped admins need an active target
   team; platform `iam:bindings:any` can manage disabled teams.
-- `PATCH /bindings/{id}` and `DELETE /bindings/{id}` use the existing binding's
-  team. `iam:bindings:team` is limited to that active team; independent platform
-  `iam:bindings:any` can maintain a disabled team.
+- `GET /bindings/{id}`, `PATCH /bindings/{id}`, and `DELETE /bindings/{id}` use
+  the existing binding's team. `iam:bindings:team` is limited to that active
+  team; a platform binding (`team_id: null`) requires `iam:bindings:any`.
+  Independent platform `iam:bindings:any` can maintain bindings for disabled
+  teams.
 
 
 An unknown target is returned as `404` before a team grant is evaluated. A

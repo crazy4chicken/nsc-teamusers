@@ -251,6 +251,33 @@ func (h *adminHandler) getGroup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, group)
 }
 
+func (h *adminHandler) listGroupMembers(w http.ResponseWriter, r *http.Request) {
+	groupID := chi.URLParam(r, "id")
+	if _, err := store.GetGroup(r.Context(), h.q, groupID); err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	cursor, limit, ok := ParsePage(w, r)
+	if !ok {
+		return
+	}
+	memberships, next, err := store.ListMembershipsByGroup(r.Context(), h.q, groupID, cursor, limit)
+	if err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	WriteItems(w, memberships, next)
+}
+
+func (h *adminHandler) getGroupMember(w http.ResponseWriter, r *http.Request) {
+	membership, err := store.GetMembership(r.Context(), h.q, chi.URLParam(r, "id"), chi.URLParam(r, "userID"))
+	if err != nil {
+		WriteStoreProblem(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, membership)
+}
+
 func (h *adminHandler) createGroup(w http.ResponseWriter, r *http.Request) {
 	var request groupCreateRequest
 	if !decodeJSON(w, r, &request) {
