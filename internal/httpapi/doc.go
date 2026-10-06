@@ -46,6 +46,11 @@ type docRolePermissionsPage struct {
 	NextCursor string   `json:"next_cursor"`
 }
 
+type docCollectionPage[T any] struct {
+	Items      []T      `json:"items"`
+	NextCursor string   `json:"next_cursor"`
+}
+
 type docProfilePatchRequest struct {
 	Username    string `json:"username,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
@@ -127,7 +132,7 @@ type docLoginActivity struct {
 
 type docLoginActivityPage struct {
 	Items      []docLoginActivity `json:"items"`
-	NextCursor int64              `json:"next_cursor"`
+	NextCursor string             `json:"next_cursor"`
 }
 
 type docWebAuthnCredential struct {
@@ -140,6 +145,21 @@ type docWebAuthnCredential struct {
 type docPasskeyResponse struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type docAuditPage struct {
+	Items      []store.AuditEntry `json:"items"`
+	NextCursor string             `json:"next_cursor"`
+}
+
+type docSessionPage struct {
+	Items      []SessionResponse `json:"items"`
+	NextCursor string            `json:"next_cursor"`
+}
+
+type docPasskeyPage struct {
+	Items      []docPasskeyResponse `json:"items"`
+	NextCursor string               `json:"next_cursor"`
 }
 
 var (
@@ -277,9 +297,9 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/users/",
 		Tag:             "Users",
 		Summary:         "List users",
-		Description:     "Use from an administrator console to page through all users. The cursor is an opaque ULID returned by the previous page.",
+		Description:     "Use from an administrator console to list all users, ordered by ascending user ID. Cursors are user ULIDs. See [REST pagination](/guide/pagination) for the shared collection contract.",
 		Security:        "admin",
-		Response:        map[string]any{},
+		Response:        docCollectionPage[store.User]{},
 		ResponseExample: map[string]any{"items": []any{docUserExample}, "next_cursor": ""},
 		Errors:          []apidocs.ErrorDoc{docInvalidPage, docUnauthorized, docForbidden, docInternal},
 	},
@@ -425,11 +445,11 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/users/{id}/sessions",
 		Tag:             "Sessions",
 		Summary:         "List a user's sessions",
-		Description:     "Use for administrative security review. Returns active session IDs with created_at, last_active_at, and expires_at timestamps; client metadata and refresh tokens are never returned.",
+		Description:     "Lists active, unexpired refresh sessions for the path user, ordered by `created_at` ascending and session ID ascending. Rows include `created_at`, `last_active_at`, and `expires_at`; client metadata and refresh tokens are never returned. The cursor is an opaque composite of the full ordering key. See [REST pagination](/guide/pagination) for the shared collection contract.",
 		Security:        "admin",
-		Response:        []SessionResponse{},
-		ResponseExample: []map[string]any{{"id": "8d7e5b3a0f6f4e1d...", "created_at": "2026-01-01T00:00:00Z", "last_active_at": "2026-01-02T12:00:00Z", "expires_at": "2026-01-31T00:00:00Z"}},
-		Errors:          []apidocs.ErrorDoc{docUnauthorized, docForbidden, docNotFound, docInternal},
+		Response:        docSessionPage{},
+		ResponseExample: map[string]any{"items": []map[string]any{{"id": "8d7e5b3a0f6f4e1d...", "created_at": "2026-01-01T00:00:00Z", "last_active_at": "2026-01-02T12:00:00Z", "expires_at": "2026-01-31T00:00:00Z"}}, "next_cursor": ""},
+		Errors:          []apidocs.ErrorDoc{docInvalidPage, docError(400, "cursor is not a valid session cursor", "Invalid Request"), docUnauthorized, docForbidden, docNotFound, docInternal},
 	},
 	{
 		Method:      "DELETE",
@@ -457,9 +477,9 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/teams/",
 		Tag:             "Teams",
 		Summary:         "List teams",
-		Description:     "Use from an administrator console to page through teams.",
+		Description:     "Use from an administrator console to list teams, ordered by ascending team ID. See [REST pagination](/guide/pagination) for the shared collection contract.",
 		Security:        "admin",
-		Response:        map[string]any{},
+		Response:        docCollectionPage[store.Team]{},
 		ResponseExample: map[string]any{"items": []any{docTeamExample}, "next_cursor": ""},
 		Errors:          []apidocs.ErrorDoc{docInvalidPage, docUnauthorized, docForbidden, docInternal},
 	},
@@ -515,9 +535,9 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/groups/",
 		Tag:             "Groups",
 		Summary:         "List groups in a team",
-		Description:     "Use to page through groups for one team. team_id is required because groups are team-scoped.",
+		Description:     "Lists groups for one required `team_id`, ordered by ascending group ID. See [REST pagination](/guide/pagination) for the shared collection contract.",
 		Security:        "admin",
-		Response:        map[string]any{},
+		Response:        docCollectionPage[store.Group]{},
 		ResponseExample: map[string]any{"items": []any{docGroupExample}, "next_cursor": ""},
 		Errors:          []apidocs.ErrorDoc{docInvalidPage, docUnauthorized, docForbidden, docNotFound, docInternal},
 	},
@@ -572,9 +592,9 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/policies/password",
 		Tag:             "Policies",
 		Summary:         "List password policies",
-		Description:     "Use to page through password policies targeting users, teams, groups, or roles.",
+		Description:     "Lists password policies targeting users, teams, groups, or roles, ordered by policy ID. See [REST pagination](/guide/pagination) for the shared collection contract.",
 		Security:        "admin",
-		Response:        map[string]any{},
+		Response:        docCollectionPage[store.PasswordPolicy]{},
 		ResponseExample: map[string]any{"items": []any{map[string]any{"id": "01J8Z3POLICY00000000000001", "name": "team baseline", "priority": 100, "subject_kind": "team", "subject_id": "01J8Z3TEAM000000000000001", "min_length": 12, "history_count": 5, "breach_check": true}}, "next_cursor": ""},
 		Errors:          []apidocs.ErrorDoc{docInvalidPage, docUnauthorized, docForbidden, docInternal},
 	},
@@ -632,9 +652,9 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/policies/mfa",
 		Tag:             "Policies",
 		Summary:         "List MFA policies",
-		Description:     "Use to page through policies that require or allow MFA for users, teams, groups, roles, or all users. Changes are audited and apply at the next login without revoking existing sessions.",
+		Description:     "Lists policies that require or allow MFA for users, teams, groups, roles, or all users, ordered by policy ID. Changes are audited and apply at the next login without revoking existing sessions. See [REST pagination](/guide/pagination) for the shared collection contract.",
 		Security:        "admin",
-		Response:        map[string]any{},
+		Response:        docCollectionPage[store.MFAPolicy]{},
 		ResponseExample: map[string]any{"items": []any{map[string]any{"id": "01J8Z3MFAPOLICY0000000000001", "name": "team MFA", "priority": 100, "subject_kind": "team", "subject_id": "01J8Z3TEAM000000000000001", "required": true, "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"}}, "next_cursor": ""},
 		Errors:          []apidocs.ErrorDoc{docInvalidPage, docUnauthorized, docForbidden, docInternal},
 	},
@@ -741,9 +761,9 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/roles/",
 		Tag:             "Roles",
 		Summary:         "List roles",
-		Description:     "Use to page through platform or team roles. team_id optionally filters by team; omitted or null-scoped roles are platform roles.",
+		Description:     "Lists platform or team roles ordered by role ID. `team_id` optionally filters by team; omitted or null-scoped roles are platform roles. See [REST pagination](/guide/pagination) for the shared collection contract.",
 		Security:        "admin",
-		Response:        map[string]any{},
+		Response:        docCollectionPage[store.Role]{},
 		ResponseExample: map[string]any{"items": []any{docRoleExample}, "next_cursor": ""},
 		Errors:          []apidocs.ErrorDoc{docInvalidPage, docUnauthorized, docForbidden, docInternal},
 	},
@@ -798,7 +818,7 @@ var DocOperations = []apidocs.Operation{
 		Path:        "/roles/{id}/permissions",
 		Tag:         "Roles",
 		Summary:     "List permissions on a role",
-		Description: "Lists the role's assigned permission keys in ascending order. Accepts cursor (a prior next_cursor) and limit (a positive integer, default 100, capped at 1000). Full pages return their final key as next_cursor; short pages return an empty cursor. Empty roles return items: [] and next_cursor: \"\". Requires iam:roles:any or an applicable iam:roles:team grant for the role's team; reads do not require step-up authentication.",
+		Description: "Lists the role's assigned permission keys in ascending order. Requires `iam:roles:any` or an applicable `iam:roles:team` grant for the role's team; reads do not require step-up authentication. See [REST pagination](/guide/pagination) for the shared cursor and response contract.",
 		Security:    "admin",
 		Response:    docRolePermissionsPage{},
 		ResponseExample: map[string]any{
@@ -828,9 +848,9 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/permissions/",
 		Tag:             "Permissions",
 		Summary:         "List registered permissions",
-		Description:     "Use to populate policy editors and validate role changes. Returns cursor pages.",
+		Description:     "Use to populate policy editors and validate role changes; lists registered permission keys in ascending order. See [REST pagination](/guide/pagination) for the shared collection contract.",
 		Security:        "admin",
-		Response:        map[string]any{},
+		Response:        docCollectionPage[store.Permission]{},
 		ResponseExample: map[string]any{"items": []any{docPermissionExample}, "next_cursor": ""},
 		Errors:          []apidocs.ErrorDoc{docInvalidPage, docUnauthorized, docForbidden, docInternal},
 	},
@@ -854,9 +874,9 @@ var DocOperations = []apidocs.Operation{
 		SuccessStatus:   200,
 		Tag:             "Bindings",
 		Summary:         "List role bindings for a subject",
-		Description:     "Use to inspect a user's or group's role assignments or a team's singleton baseline. Both subject_kind and subject_id are required; for subject_kind=team, subject_id is the team ID. Cursor pages are scoped to that subject. iam:bindings:team authorizes group/team queries for an active target team; user-wide queries require platform iam:bindings:any.",
+		Description:     "Lists a user's or group's role assignments or a team's singleton baseline for the required `subject_kind` and `subject_id`, ordered by ascending binding ID. `iam:bindings:team` authorizes group/team queries for an active target team; user-wide queries require platform `iam:bindings:any`. See [REST pagination](/guide/pagination) for the shared collection contract.",
 		Security:        "admin",
-		Response:        map[string]any{},
+		Response:        docCollectionPage[store.RoleBinding]{},
 		ResponseExample: map[string]any{"items": []any{docTeamBaselineExample}, "next_cursor": ""},
 		Errors:          []apidocs.ErrorDoc{docError(400, "subject_kind and subject_id are required", "Invalid Request"), docUnauthorized, docForbidden, docNotFound, docInternal},
 	},
@@ -907,11 +927,11 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/audit/",
 		Tag:             "Audit",
 		Summary:         "List audit entries",
-		Description:     "Use for compliance review and incident investigation. Audit rows are append-only while retained; retention defaults to keep forever and supports optional team filtering and a numeric cursor. Cursor 0 means the beginning and next_cursor 0 means no next page.",
+		Description:     "Use for compliance review and incident investigation. Audit rows are append-only while retained; retention defaults to keep forever and an optional `team_id` filter is supported. Results are ordered by ascending numeric audit ID. The `cursor` is a non-negative decimal string ID (omit, leave empty, or use `0` for the first page); IDs remain numeric in `items`. See [REST pagination](/guide/pagination) for the shared limit, envelope, and terminal-cursor contract.",
 		Security:        "admin",
-		Response:        map[string]any{},
-		ResponseExample: map[string]any{"items": []any{map[string]any{"id": int64(1), "team_id": "01J8Z3TEAM000000000000001", "actor_id": "01J8Z3ADMIN000000000000001", "action": "user.created", "target": "01J8Z3USER000000000000001", "diff": map[string]any{"status": "active"}, "request_id": "req-01J8Z3", "at": "2026-01-01T00:00:00Z"}}, "next_cursor": int64(0)},
-		Errors:          []apidocs.ErrorDoc{docError(400, "cursor must be a non-negative integer", "Invalid Request"), docUnauthorized, docForbidden, docInternal},
+		Response:        docAuditPage{},
+		ResponseExample: map[string]any{"items": []any{map[string]any{"id": int64(1), "team_id": "01J8Z3TEAM000000000000001", "actor_id": "01J8Z3ADMIN000000000000001", "action": "user.created", "target": "01J8Z3USER000000000000001", "diff": map[string]any{"status": "active"}, "request_id": "req-01J8Z3", "at": "2026-01-01T00:00:00Z"}}, "next_cursor": ""},
+		Errors:          []apidocs.ErrorDoc{docError(400, "cursor must be a non-negative integer", "Invalid Request"), docInvalidPage, docUnauthorized, docForbidden, docInternal},
 	},
 	{
 		Method:      "GET",
@@ -1073,23 +1093,23 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/me/sessions",
 		Tag:             "Sessions",
 		Summary:         "List the current user's sessions",
-		Description:     "Use in account security settings to show active refresh sessions. Returned IDs are opaque token digests and each row contains created_at, last_active_at, and expires_at.",
+		Description:     "Lists active, unexpired refresh sessions belonging to the bearer user, ordered by `created_at` ascending and session ID ascending. Returned IDs are opaque token digests and each row contains `created_at`, `last_active_at`, and `expires_at`. The cursor is an opaque composite of the full ordering key. See [REST pagination](/guide/pagination) for the shared collection contract.",
 		Security:        "user",
-		Response:        []SessionResponse{},
-		ResponseExample: []map[string]any{{"id": "8d7e5b3a0f6f4e1d...", "created_at": "2026-01-01T00:00:00Z", "last_active_at": "2026-01-02T12:00:00Z", "expires_at": "2026-01-31T00:00:00Z"}},
-		Errors:          []apidocs.ErrorDoc{docUnauthorized, docInternal},
+		Response:        docSessionPage{},
+		ResponseExample: map[string]any{"items": []map[string]any{{"id": "8d7e5b3a0f6f4e1d...", "created_at": "2026-01-01T00:00:00Z", "last_active_at": "2026-01-02T12:00:00Z", "expires_at": "2026-01-31T00:00:00Z"}}, "next_cursor": ""},
+		Errors:          []apidocs.ErrorDoc{docInvalidPage, docError(400, "cursor is not a valid session cursor", "Invalid Request"), docUnauthorized, docInternal},
 	},
 	{
 		Method:      "GET",
 		Path:        "/me/activity",
 		Tag:         "Sessions",
 		Summary:     "List the current user's login activity",
-		Description: "Use in account security settings to review this user's resolved password, passkey, MFA, and OIDC login attempts. The method values are password, passkey, mfa, and oidc respectively; step_up records MFA-only step-up verification (see POST /auth/step-up/begin and POST /auth/step-up/complete). Results contain only rows whose user_id matches the bearer subject and are ordered by descending ID. The numeric cursor is non-negative (omit or use 0 for the newest page); limit must be positive (default 100, capped at 1000). A full page returns its final row's ID as next_cursor; a shorter page returns 0.",
+		Description: "Use in account security settings to review this user's resolved password, passkey, MFA, and OIDC login attempts. The method values are `password`, `passkey`, `mfa`, and `oidc` respectively; `step_up` records MFA-only step-up verification (see POST /auth/step-up/begin and POST /auth/step-up/complete). Results contain only rows whose `user_id` matches the bearer subject and are ordered by descending numeric activity ID. The `cursor` is a non-negative decimal string ID (omit, leave empty, or use `0` for the newest page); IDs remain numeric in `items`. See [REST pagination](/guide/pagination) for the shared limit, envelope, and terminal-cursor contract.",
 		Security:    "user",
 		Response:    docLoginActivityPage{},
 		ResponseExample: map[string]any{
 			"items":       []map[string]any{{"id": int64(42), "user_id": "01J8Z3USER000000000000001", "at": "2026-01-02T12:00:00Z", "ip": "203.0.113.5", "user_agent": "ExampleBrowser/1.0", "method": "password", "result": "success"}},
-			"next_cursor": int64(0),
+			"next_cursor": "",
 		},
 		Errors: []apidocs.ErrorDoc{docError(400, "cursor must be a non-negative integer", "Invalid Request"), docInvalidPage, docUnauthorized, docInternal},
 	},
@@ -1182,11 +1202,11 @@ var DocOperations = []apidocs.Operation{
 		Path:            "/me/passkeys",
 		Tag:             "Self-service",
 		Summary:         "List own passkeys",
-		Description:     "Use in account security settings to show registered passkey identifiers. Public keys and attestation data are never returned.",
+		Description:     "Lists the current user's registered passkey identifiers in lexicographic order by canonical unpadded base64url credential ID. The exposed `id` is also the cursor key; malformed or noncanonical cursors return HTTP 400. Public keys and attestation data are never returned. See [REST pagination](/guide/pagination) for the shared collection contract.",
 		Security:        "user",
-		Response:        []docPasskeyResponse{},
-		ResponseExample: []map[string]any{{"id": "base64url-credential-id", "created_at": "2026-01-01T00:00:00Z"}},
-		Errors:          []apidocs.ErrorDoc{docUnauthorized, docInternal},
+		Response:        docPasskeyPage{},
+		ResponseExample: map[string]any{"items": []map[string]any{{"id": "Y3JlZGVudGlhbC1pZA", "created_at": "2026-01-01T00:00:00Z"}}, "next_cursor": ""},
+		Errors:          []apidocs.ErrorDoc{docInvalidPage, docError(400, "cursor must be a canonical unpadded base64url credential ID", "Invalid Request"), docUnauthorized, docInternal},
 	},
 	{
 		Method:      "DELETE",

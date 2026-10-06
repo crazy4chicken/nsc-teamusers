@@ -41,7 +41,7 @@ type membershipRequest struct {
 }
 
 func (h *adminHandler) listTeams(w http.ResponseWriter, r *http.Request) {
-	cursor, limit, ok := parsePage(w, r)
+	cursor, limit, ok := ParsePage(w, r)
 	if !ok {
 		return
 	}
@@ -50,7 +50,7 @@ func (h *adminHandler) listTeams(w http.ResponseWriter, r *http.Request) {
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	writeItems(w, teams, next)
+	WriteItems(w, teams, next)
 }
 
 func (h *adminHandler) getTeam(w http.ResponseWriter, r *http.Request) {
@@ -230,7 +230,7 @@ func (h *adminHandler) listGroups(w http.ResponseWriter, r *http.Request) {
 		WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "team_id is required")
 		return
 	}
-	cursor, limit, ok := parsePage(w, r)
+	cursor, limit, ok := ParsePage(w, r)
 	if !ok {
 		return
 	}
@@ -239,7 +239,7 @@ func (h *adminHandler) listGroups(w http.ResponseWriter, r *http.Request) {
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	writeItems(w, groups, next)
+	WriteItems(w, groups, next)
 }
 
 func (h *adminHandler) getGroup(w http.ResponseWriter, r *http.Request) {

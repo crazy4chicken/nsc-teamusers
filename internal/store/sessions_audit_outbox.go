@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -63,6 +66,76 @@ func ListSessionsByUser(ctx context.Context, q Q, userID string) ([]Session, err
 		return nil, err
 	}
 	return sessions, nil
+}
+
+// ErrInvalidSessionCursor is returned when a session page cursor is malformed.
+var ErrInvalidSessionCursor = errors.New("invalid session cursor")
+
+// ListSessionsPageByUser returns active, unexpired refresh-token sessions after cursor.
+func ListSessionsPageByUser(ctx context.Context, q Q, userID, cursor string, limit int) ([]Session, string, error) {
+	limit = pageLimit(limit)
+	var rows pgx.Rows
+	var err error
+	if cursor == "" {
+		rows, err = q.Query(ctx, `
+			SELECT id, user_id, family_id, client_meta, created_at, last_active_at, expires_at, family_not_after, revoked_at, revoke_reason
+			FROM sessions
+			WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()
+			ORDER BY created_at, id LIMIT $2`, userID, limit)
+	} else {
+		createdAt, sessionID, decodeErr := decodeSessionCursor(cursor)
+		if decodeErr != nil {
+			return nil, "", decodeErr
+		}
+		rows, err = q.Query(ctx, `
+			SELECT id, user_id, family_id, client_meta, created_at, last_active_at, expires_at, family_not_after, revoked_at, revoke_reason
+			FROM sessions
+			WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()
+			  AND (created_at, id) > ($2, $3)
+			ORDER BY created_at, id LIMIT $4`, userID, createdAt, sessionID, limit)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	sessions := make([]Session, 0, limit)
+	for rows.Next() {
+		session, err := scanSession(rows)
+		if err != nil {
+			return nil, "", err
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if len(sessions) == limit {
+		next = encodeSessionCursor(sessions[len(sessions)-1])
+	}
+	return sessions, next, nil
+}
+
+func encodeSessionCursor(session Session) string {
+	// PostgreSQL text IDs cannot contain NUL, so it safely separates the cursor fields.
+	value := session.CreatedAt.UTC().Format(time.RFC3339Nano) + "\x00" + session.ID
+	return base64.RawURLEncoding.EncodeToString([]byte(value))
+}
+
+func decodeSessionCursor(cursor string) (time.Time, string, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, "", ErrInvalidSessionCursor
+	}
+	timestamp, sessionID, ok := strings.Cut(string(decoded), "\x00")
+	if !ok || timestamp == "" || sessionID == "" || strings.Contains(sessionID, "\x00") {
+		return time.Time{}, "", ErrInvalidSessionCursor
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, timestamp)
+	if err != nil {
+		return time.Time{}, "", ErrInvalidSessionCursor
+	}
+	return createdAt, sessionID, nil
 }
 
 // DeleteSessionForUser revokes one unrevoked session only when it belongs to

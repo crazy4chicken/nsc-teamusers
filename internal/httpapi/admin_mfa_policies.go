@@ -35,7 +35,7 @@ type mfaPolicyPatchRequest struct {
 }
 
 func (h *adminHandler) listMFAPolicies(w http.ResponseWriter, r *http.Request) {
-	cursor, limit, ok := parsePage(w, r)
+	cursor, limit, ok := ParsePage(w, r)
 	if !ok {
 		return
 	}
@@ -44,7 +44,7 @@ func (h *adminHandler) listMFAPolicies(w http.ResponseWriter, r *http.Request) {
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	writeItems(w, policies, next)
+	WriteItems(w, policies, next)
 }
 
 func (h *adminHandler) getMFAPolicy(w http.ResponseWriter, r *http.Request) {

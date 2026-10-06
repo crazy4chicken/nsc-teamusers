@@ -32,6 +32,7 @@ export default defineConfig({
             { text: 'Subject targeting', link: '/guide/subjects' },
             { text: 'Authentication Security', link: '/guide/security' },
             { text: 'Operations Runbook', link: '/guide/operations' },
+            { text: 'REST pagination', link: '/guide/pagination' },
             { text: 'Administrative Permissions', link: '/guide/permissions' },
             { text: 'Nekostick Deployment', link: '/guide/nekostick' }
           ]

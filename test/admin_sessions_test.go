@@ -18,11 +18,9 @@ func TestAdminSessionEndpoints(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("list target sessions status = %d, want %d: %s", status, http.StatusOK, body)
 	}
-	var sessions []struct {
-		ID           string `json:"id"`
-		LastActiveAt string `json:"last_active_at"`
-	}
-	decodeResponse(t, body, &sessions)
+	var page sessionPageTestResponse
+	decodeResponse(t, body, &page)
+	sessions := page.Items
 	if len(sessions) != 2 {
 		t.Fatalf("target sessions = %d, want 2: %s", len(sessions), body)
 	}
@@ -82,7 +80,8 @@ func TestAdminSessionEndpoints(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("list target sessions after one revoke status = %d, want %d: %s", status, http.StatusOK, body)
 	}
-	decodeResponse(t, body, &sessions)
+	decodeResponse(t, body, &page)
+	sessions = page.Items
 	if len(sessions) != 1 || sessions[0].ID != refreshSessionID(replacement.RefreshToken) {
 		t.Fatalf("target sessions after one revoke = %+v, want replacement session only", sessions)
 	}

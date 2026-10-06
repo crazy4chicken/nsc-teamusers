@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -392,6 +393,7 @@ func (s *Service) finishPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w, r)
 		return
 	}
+	userVerified := parsed.Response.AuthenticatorData.Flags.UserVerified()
 	if resolvedUser.LockedUntil != nil && resolvedUser.LockedUntil.After(s.now()) {
 		s.recordLoginActivityFromRequest(r.Context(), s.q, r, resolvedUser, "", "passkey", "failure")
 		s.auditAuth(r.Context(), s.q, "auth.passkey.login.locked", resolvedUser, resolvedUser.Username)
@@ -410,9 +412,9 @@ func (s *Service) finishPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	metadata := sessionMetadataFor(r, "user")
 	metadata.AuthTime = s.now().Unix()
-	metadata.AMR = passkeyAMR(credential.Flags.UserVerified)
+	metadata.AMR = passkeyAMR(userVerified)
 	requiredMFA := policy.ID != "" && policy.Required
-	if !credential.Flags.UserVerified {
+	if !userVerified {
 		_, totpErr := store.GetCredential(r.Context(), s.q, resolvedUser.ID, "totp")
 		if totpErr != nil && !errors.Is(totpErr, pgx.ErrNoRows) {
 			writeInternal(w, r)
@@ -539,6 +541,25 @@ func (s *Service) listPasskeys(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w, r)
 		return
 	}
+	rawCursor := r.URL.Query().Get("cursor")
+	cursor, limit, ok := httpapi.ParsePage(w, r)
+	if !ok {
+		return
+	}
+	if rawCursor != cursor {
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "cursor must be a canonical unpadded base64url credential ID")
+		return
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	if cursor != "" {
+		decoded, err := base64.RawURLEncoding.DecodeString(cursor)
+		if err != nil || len(decoded) == 0 || base64.RawURLEncoding.EncodeToString(decoded) != cursor {
+			httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "cursor must be a canonical unpadded base64url credential ID")
+			return
+		}
+	}
 	credentials, err := store.GetPasskeys(r.Context(), s.q, subject.UserID)
 	if err != nil {
 		httpapi.WriteStoreProblem(w, r, err)
@@ -553,14 +574,32 @@ func (s *Service) listPasskeys(w http.ResponseWriter, r *http.Request) {
 		}
 		createdAt = row.CreatedAt
 	}
-	response := make([]passkeyResponse, 0, len(credentials))
-	for _, credential := range credentials {
-		response = append(response, passkeyResponse{
+	response := make([]passkeyResponse, len(credentials))
+	for index, credential := range credentials {
+		response[index] = passkeyResponse{
 			ID:        base64.RawURLEncoding.EncodeToString(credential.ID),
 			CreatedAt: createdAt,
+		}
+	}
+	sort.Slice(response, func(i, j int) bool {
+		return response[i].ID < response[j].ID
+	})
+	start := 0
+	if cursor != "" {
+		start = sort.Search(len(response), func(i int) bool {
+			return response[i].ID > cursor
 		})
 	}
-	writeJSON(w, http.StatusOK, response)
+	end := start + limit
+	if end > len(response) {
+		end = len(response)
+	}
+	items := response[start:end]
+	next := ""
+	if len(items) == limit {
+		next = items[len(items)-1].ID
+	}
+	httpapi.WriteItems(w, items, next)
 }
 
 func (s *Service) deletePasskey(w http.ResponseWriter, r *http.Request) {

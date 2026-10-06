@@ -463,6 +463,11 @@ func TestSCIMPopulationAndProtectedTargets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create SCIM protected role: %v", err)
 	}
+	if _, err := store.CreatePermission(ctx, stack.database.pool, store.Permission{
+		Key: "iam:keys:any", Description: "SCIM protected target integration", RegisteredBy: "integration",
+	}); err != nil {
+		t.Fatalf("create SCIM protected permission: %v", err)
+	}
 	if err := store.SetRolePermissions(ctx, stack.database.pool, role.ID, []string{"iam:keys:any"}); err != nil {
 		t.Fatalf("grant SCIM protected role permission: %v", err)
 	}

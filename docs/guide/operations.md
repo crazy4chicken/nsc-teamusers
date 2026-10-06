@@ -271,9 +271,12 @@ Registration, invitation acceptance, and password-reset completion do not set
 the flag, revokes all refresh sessions, and requires a fresh login. An
 already-issued access JWT remains subject to the configured access-token TTL
 (10 minutes by default; `TEAMUSERS_ACCESS_TOKEN_TTL`) and active-user checks.
-Users can inspect active sessions with `GET /me/sessions` and revoke one with
-`DELETE /me/sessions/{id}`. Administrators can list or revoke sessions through
-the corresponding `/users/{id}/sessions` endpoints.
+Users inspect and revoke sessions with `GET /me/sessions` and
+`DELETE /me/sessions/{id}`; administrators use the corresponding
+`/users/{id}/sessions` endpoints. Both list routes contain only active,
+unexpired sessions for the target user and order by `created_at`, then session
+ID. See [REST collection pagination](./pagination.md) for the shared page
+contract.
 Session IDs are opaque SHA-256 refresh-token digests and never reveal the
 plaintext token.
 
@@ -289,13 +292,18 @@ successful refresh; idle timeout is enforced at refresh, which rejects and
 revokes an idle session with `session_idle_expired`. The session-policy table
 has no HTTP management endpoint in this release.
 
-Users can inspect their own resolved login activity with
-`GET /me/activity?limit=50`. Results are ordered by descending ID and contain
-only rows tied to the bearer user; unknown-user attempts are retained with a
-null `user_id` and are not visible through this endpoint. Continue with the
-numeric `next_cursor` returned by each page (omit `cursor` or use `0` for the
-first page). Activity includes timestamp, IP, user agent, method, and result,
-never passwords or tokens; write failures are logged and do not block login.
+For the shared contract and complete inventory of keyset-paginated REST
+collections, see [REST collection pagination](./pagination.md). SCIM uses its
+separate `startIndex`/`count` protocol; permission snapshots and full
+account/audit exports retain their existing response shapes.
+
+Users can inspect their own resolved login activity with `GET /me/activity`.
+Results are ordered by descending numeric ID and contain only rows tied to the
+bearer user; unknown-user attempts are retained with a null `user_id` and are
+not visible through this endpoint. See [REST collection pagination](./pagination.md)
+for the shared cursor contract. Activity includes timestamp, IP, user agent,
+method, and result, never passwords or tokens; write failures are logged and do
+not block login.
 
 ```sh
 curl --fail-with-body -sS -G "$IAM_BASE_URL/me/activity" \
@@ -536,8 +544,9 @@ enabled.
 
 `GET /audit/export` streams the full matching audit history as JSON Lines by
 default (`?format=jsonl`) or CSV (`?format=csv`). It accepts the same optional
-`team_id` filter as `GET /audit`; it deliberately ignores cursor pagination so
-the export includes every matching retained row. JSONL has one audit-row object
+`team_id` filter as `GET /audit`; unlike that paginated list (see [REST
+collection pagination](./pagination.md)), the export ignores collection cursors
+so it includes every matching retained row. JSONL has one audit-row object
 per line, while CSV has a header and one row per audit record. The response is
 an attachment with a UTC-dated `audit-YYYY-MM-DD.jsonl` or `.csv` filename.
 This admin-plane endpoint requires `iam:audit:any`.
@@ -668,12 +677,13 @@ identifier; the service-issued SCIM `id` is separate. The primary email maps to
 the service's email field. If `active` is omitted it defaults to true; `active:
 false` creates a disabled user.
 
-`GET /Users` uses SCIM's one-based `startIndex` and `count` pagination, and only
+`GET /Users` uses SCIM's one-based `startIndex` and `count` pagination and only
 returns eligible users in the externally identified population. `count`
 defaults to 100, may be zero, and is capped at 1000. `totalResults` counts only
 eligible users after protected accounts are excluded. The only supported filter
 is `userName eq "value"`; other attributes and operators return
-`400 invalidFilter`. For example:
+`400 invalidFilter`. This SCIM-specific contract is separate from REST keyset
+pagination; see [REST collection pagination](./pagination.md) for that API.
 
 ```sh
 curl --fail-with-body -sS -G "$SCIM_BASE_URL/Users" \

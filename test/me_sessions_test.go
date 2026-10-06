@@ -46,14 +46,14 @@ func listMeTestSessions(t *testing.T, stack *integrationStack, path, bearer stri
 	if status != http.StatusOK {
 		t.Fatalf("list sessions %s status = %d, want %d: %s", path, status, http.StatusOK, body)
 	}
-	var sessions []meSessionTestResponse
-	decodeResponse(t, body, &sessions)
-	for _, session := range sessions {
+	var page sessionPageTestResponse
+	decodeResponse(t, body, &page)
+	for _, session := range page.Items {
 		if strings.TrimSpace(session.LastActiveAt) == "" {
 			t.Fatalf("session %q has no last_active_at", session.ID)
 		}
 	}
-	return sessions
+	return page.Items
 }
 
 func TestMeProfilePasswordAndSessions(t *testing.T) {

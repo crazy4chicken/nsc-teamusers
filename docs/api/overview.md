@@ -164,16 +164,14 @@ new bearer after token rotation is a different scope, so a key does not
 deduplicate across token pairs. Reuse the same key and body only to replay the
 same result; use a new key for a different factor proof.
 
-## Cursor pagination
+## REST collection pagination
 
-Collection endpoints accept `limit` and (except audit) an opaque `cursor`:
-
-```sh
-curl -sS -H "Authorization: Bearer $ADMIN_TOKEN" \
-  'http://localhost:8080/users?limit=25&cursor='
-```
-
-The default limit is 100. Supplied limits must be positive; the backing store caps effective pages at 1000. Responses are shaped as `{ "items": [...], "next_cursor": "..." }`; an empty string means there is no next page. Pass the returned cursor unchanged to request the next page. Audit uses an integer cursor and returns `next_cursor: 0` when complete.
+All REST collection lists use the shared keyset contract. See the
+[REST pagination guide](../guide/pagination.md) for the route inventory,
+cursor/limit contract, ordering, and response migration details. SCIM lists keep
+their protocol-specific `startIndex`/`count` behavior. Versioned permission
+snapshots and complete audit/account exports keep their existing response
+shapes.
 
 ## Rate limiting and retries
 

@@ -13,16 +13,29 @@ import (
 )
 
 func (h *adminHandler) listAudit(w http.ResponseWriter, r *http.Request) {
-	cursor, limit, ok := parseAuditPage(w, r)
+	cursor, limit, ok := ParsePage(w, r)
 	if !ok {
 		return
 	}
-	entries, next, err := store.ListAuditLog(r.Context(), h.q, auditTeamFilter(r), cursor, limit)
+	pageCursor := int64(0)
+	if cursor != "" {
+		value, err := strconv.ParseInt(cursor, 10, 64)
+		if err != nil || value < 0 {
+			WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "cursor must be a non-negative integer")
+			return
+		}
+		pageCursor = value
+	}
+	entries, next, err := store.ListAuditLog(r.Context(), h.q, auditTeamFilter(r), pageCursor, limit)
 	if err != nil {
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	writeAuditItems(w, entries, next)
+	nextCursor := ""
+	if next > 0 {
+		nextCursor = strconv.FormatInt(next, 10)
+	}
+	WriteItems(w, entries, nextCursor)
 }
 
 func (h *adminHandler) exportAudit(w http.ResponseWriter, r *http.Request) {

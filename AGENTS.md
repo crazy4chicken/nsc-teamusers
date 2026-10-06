@@ -88,19 +88,23 @@ is unset. No in-memory substitute is accepted.
    Down), embedded via `migrations/embed.go`. Migrations run at startup
    behind an advisory lock; keep them idempotent-safe.
 3. **New POST endpoints** must honor `Idempotency-Key` (24 h store) and
-   return RFC 9457 problem+json errors; lists use cursor pagination.
-4. **Permission keys** are data validated against
+   return RFC 9457 problem+json errors.
+4. **REST collection pagination** MUST follow the [canonical REST pagination
+   guide](docs/guide/pagination.md) for the request/response contract and
+   exceptions. Preserve the current authorization scope and ordering, and keep
+   internal full-list callers required by authentication and export.
+5. **Permission keys** are data validated against
    `[!]resource:action:scope` at write time; scope is `own|team|any|*`.
-5. **SDK parity:** authz semantics, claim shapes, event payloads, or
+6. **SDK parity:** authz semantics, claim shapes, event payloads, or
    endpoint behavior changes must be mirrored in `sdk/go`, `sdk/ts`,
    `sdk/python` (each has its own tests/CI publish workflow); version
    bumps follow the `## SDK versioning` rules below.
-6. **Secrets:** never log credentials/tokens/keys; extend config redaction
+7. **Secrets:** never log credentials/tokens/keys; extend config redaction
    when adding secret-bearing config. Passwords stay argon2id.
-7. **Tests:** behavior changes ship with integration coverage in `test/`
+8. **Tests:** behavior changes ship with integration coverage in `test/`
    against real Postgres; unit-test pure logic (matcher, expr sandbox,
    rotation state machine) next to the code.
-8. **Events:** new authz-affecting mutation -> new/updated outbox topic +
+9. **Events:** new authz-affecting mutation -> new/updated outbox topic +
    relay mapping + SDK handler. `notify.*` topics are notification-service
    directives, not fleet events; don't mix the two channels.
 

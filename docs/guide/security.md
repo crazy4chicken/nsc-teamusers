@@ -64,10 +64,11 @@ method, and result. MFA-only step-up verification is also recorded with the
 `step_up` method; see `POST /auth/step-up/begin` and
 `POST /auth/step-up/complete` for that flow. Passwords and tokens are never
 stored. Writes are best-effort and logged without blocking authentication.
-`GET /me/activity` returns cursor pages ordered by descending activity ID and
-filters strictly to the caller's `user_id`. When a failed attempt cannot be
-tied to a user, its attempted username is stored with a null `user_id` and is
-not exposed through the self-service endpoint.
+`GET /me/activity` returns user-scoped pages ordered by descending activity ID;
+see [REST collection pagination](./pagination.md) for the shared cursor
+contract. When a failed attempt cannot be tied to a user, its attempted username
+is stored with a null `user_id` and is not exposed through the self-service
+endpoint.
 
 ## Inbound OpenID Connect federation
 

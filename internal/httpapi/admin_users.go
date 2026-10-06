@@ -32,7 +32,7 @@ type patchUserRequest struct {
 }
 
 func (h *adminHandler) listUsers(w http.ResponseWriter, r *http.Request) {
-	cursor, limit, ok := parsePage(w, r)
+	cursor, limit, ok := ParsePage(w, r)
 	if !ok {
 		return
 	}
@@ -41,7 +41,7 @@ func (h *adminHandler) listUsers(w http.ResponseWriter, r *http.Request) {
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	writeItems(w, users, next)
+	WriteItems(w, users, next)
 }
 
 func (h *adminHandler) getUser(w http.ResponseWriter, r *http.Request) {

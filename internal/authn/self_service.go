@@ -646,12 +646,20 @@ func (s *Service) listOwnSessions(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w, r)
 		return
 	}
-	sessions, err := store.ListSessionsByUser(r.Context(), s.q, subject.UserID)
+	cursor, limit, ok := httpapi.ParsePage(w, r)
+	if !ok {
+		return
+	}
+	sessions, next, err := store.ListSessionsPageByUser(r.Context(), s.q, subject.UserID, cursor, limit)
+	if errors.Is(err, store.ErrInvalidSessionCursor) {
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "cursor is not a valid session cursor")
+		return
+	}
 	if err != nil {
 		httpapi.WriteStoreProblem(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sessionResponses(sessions))
+	httpapi.WriteItems(w, sessionResponses(sessions), next)
 }
 
 func (s *Service) listOwnActivity(w http.ResponseWriter, r *http.Request) {
@@ -660,30 +668,29 @@ func (s *Service) listOwnActivity(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w, r)
 		return
 	}
+	pageCursor, limit, ok := httpapi.ParsePage(w, r)
+	if !ok {
+		return
+	}
 	cursor := int64(0)
-	if raw := strings.TrimSpace(r.URL.Query().Get("cursor")); raw != "" {
-		value, err := strconv.ParseInt(raw, 10, 64)
+	if pageCursor != "" {
+		value, err := strconv.ParseInt(pageCursor, 10, 64)
 		if err != nil || value < 0 {
 			httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "cursor must be a non-negative integer")
 			return
 		}
 		cursor = value
 	}
-	limit := 100
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		value, err := strconv.Atoi(raw)
-		if err != nil || value < 1 {
-			httpapi.WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "limit must be a positive integer")
-			return
-		}
-		limit = value
-	}
 	entries, next, err := store.ListLoginActivity(r.Context(), s.q, subject.UserID, cursor, limit)
 	if err != nil {
 		httpapi.WriteStoreProblem(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": entries, "next_cursor": next})
+	nextCursor := ""
+	if next > 0 {
+		nextCursor = strconv.FormatInt(next, 10)
+	}
+	httpapi.WriteItems(w, entries, nextCursor)
 }
 
 func (s *Service) deleteOwnSession(w http.ResponseWriter, r *http.Request) {

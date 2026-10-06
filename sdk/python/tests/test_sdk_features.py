@@ -3,11 +3,13 @@ import threading
 import time
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+import teamusers_sdk.permissions as permissions_module
 
 from teamusers_sdk import (
     Authenticate,
@@ -138,36 +140,89 @@ def test_concurrent_kid_miss_refresh_is_single_flight():
     assert count == 2
 
 
-def test_permissions_ttl_perm_ver_and_single_flight():
+def test_permissions_ttl_perm_ver_and_single_flight(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(
+        permissions_module,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock[0]),
+    )
     responses = {"version": 2, "perm_ver": 1, "grants": [{"key": "orders:read:team"}]}
     count = 0
     urls = []
+    results = []
+    errors = []
     lock = threading.Lock()
     entered = threading.Event()
+    release = threading.Event()
+    waiters_joined = threading.Event()
+    waiter_count = 0
+    intended_waiters = 9
 
     def fetch(url, _headers):
         nonlocal count
-        urls.append(url)
         with lock:
+            urls.append(url)
             count += 1
         entered.set()
-        time.sleep(0.02)
+        assert release.wait(timeout=10)
         return {"user_id": "usr_1", **responses}
 
     client = PermissionsClient("https://iam.example.com", service_token="svc", ttl=0.05, fetcher=fetch)
-    threads = [threading.Thread(target=lambda: client.Get("usr_1", 1)) for _ in range(10)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    assert entered.is_set()
+
+    def run():
+        try:
+            result = client.Get("usr_1", 1)
+        except Exception as error:  # pragma: no cover - assertion below reports it
+            with lock:
+                errors.append(error)
+        else:
+            with lock:
+                results.append(result)
+
+    owner = threading.Thread(target=run)
+    waiters = []
+    owner.start()
+    try:
+        assert entered.wait(timeout=5), errors
+        call = client._inflight["usr_1"]
+        original_wait = call.done.wait
+
+        def wait_for_owner(timeout=None):
+            nonlocal waiter_count
+            with lock:
+                waiter_count += 1
+                if waiter_count == intended_waiters:
+                    waiters_joined.set()
+            return original_wait(timeout)
+
+        call.done.wait = wait_for_owner
+        for _ in range(intended_waiters):
+            waiter = threading.Thread(target=run)
+            waiter.start()
+            waiters.append(waiter)
+        assert waiters_joined.wait(timeout=5), errors
+    finally:
+        release.set()
+        owner.join(timeout=5)
+        for waiter in waiters:
+            waiter.join(timeout=5)
+
+    assert not owner.is_alive()
+    assert all(not waiter.is_alive() for waiter in waiters)
+    assert errors == []
+    assert len(results) == 10
+    assert all(
+        tuple(grant.key for grant in result.grants) == ("orders:read:team",)
+        for result in results
+    )
     assert count == 1
     client.Get("usr_1", 1)
     assert count == 1
     responses["perm_ver"] = 2
     client.Get("usr_1", 2)
     assert count == 2
-    time.sleep(0.06)
+    clock[0] += 0.06
     client.Get("usr_1", 2)
     assert count == 3
     assert all(url.endswith("?version=2") for url in urls)

@@ -728,7 +728,8 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-func parsePage(w http.ResponseWriter, r *http.Request) (string, int, bool) {
+// ParsePage reads the shared REST collection cursor and limit query parameters.
+func ParsePage(w http.ResponseWriter, r *http.Request) (string, int, bool) {
 	cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
 	limit := 100
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
@@ -742,33 +743,8 @@ func parsePage(w http.ResponseWriter, r *http.Request) (string, int, bool) {
 	return cursor, limit, true
 }
 
-func parseAuditPage(w http.ResponseWriter, r *http.Request) (int64, int, bool) {
-	limit := 100
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		value, err := strconv.Atoi(raw)
-		if err != nil || value < 1 {
-			WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "limit must be a positive integer")
-			return 0, 0, false
-		}
-		limit = value
-	}
-	cursor := int64(0)
-	if raw := strings.TrimSpace(r.URL.Query().Get("cursor")); raw != "" {
-		value, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || value < 0 {
-			WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "cursor must be a non-negative integer")
-			return 0, 0, false
-		}
-		cursor = value
-	}
-	return cursor, limit, true
-}
-
-func writeItems(w http.ResponseWriter, items any, next string) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
-}
-
-func writeAuditItems(w http.ResponseWriter, items any, next int64) {
+// WriteItems writes a cursor-paginated collection response.
+func WriteItems(w http.ResponseWriter, items any, next string) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
 }
 

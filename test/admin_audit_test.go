@@ -2,13 +2,17 @@ package test
 
 import (
 	"bufio"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"teamusers/internal/store"
 )
 
 func TestAdminAuditEndpoint(t *testing.T) {
@@ -162,5 +166,102 @@ func TestAdminAuditEndpoint(t *testing.T) {
 	status, _ = stack.jsonRequest(t, http.MethodGet, "/audit/export?format=xml", nil, adminToken)
 	if status != http.StatusBadRequest {
 		t.Fatalf("unsupported audit export format status = %d, want %d", status, http.StatusBadRequest)
+	}
+}
+
+func TestAdminAuditCursorPagination(t *testing.T) {
+	stack, _, adminToken := newAdminSession(t)
+	targetTeamID := createPaginationTeam(t, stack, adminToken, "audit-cursor")
+	otherTeamID := createPaginationTeam(t, stack, adminToken, "audit-cursor-other")
+	ctx := context.Background()
+	targetTeam := targetTeamID
+	for index := range 3 {
+		if _, err := store.AppendAuditLog(ctx, stack.database.pool, store.AuditEntry{
+			TeamID: &targetTeam,
+			Action: "pagination.audit." + strconv.Itoa(index),
+			Target: "target",
+		}); err != nil {
+			t.Fatalf("append target audit row %d: %v", index, err)
+		}
+	}
+	otherTeam := otherTeamID
+	if _, err := store.AppendAuditLog(ctx, stack.database.pool, store.AuditEntry{
+		TeamID: &otherTeam,
+		Action: "pagination.audit.foreign",
+		Target: "foreign",
+	}); err != nil {
+		t.Fatalf("append foreign audit row: %v", err)
+	}
+
+	for _, cursor := range []string{"not-a-number", "-1", "9223372036854775808"} {
+		status, body := stack.jsonRequest(t, http.MethodGet, "/audit?team_id="+targetTeamID+"&cursor="+cursor, nil, adminToken)
+		if status != http.StatusBadRequest {
+			t.Fatalf("audit cursor %q status = %d, want %d: %s", cursor, status, http.StatusBadRequest, body)
+		}
+	}
+	status, body := stack.jsonRequest(t, http.MethodGet, "/audit?team_id="+targetTeamID+"&limit=0", nil, adminToken)
+	if status != http.StatusBadRequest {
+		t.Fatalf("zero audit limit status = %d, want %d: %s", status, http.StatusBadRequest, body)
+	}
+
+	type auditPageItem struct {
+		ID     int64  `json:"id"`
+		TeamID string `json:"team_id"`
+		Action string `json:"action"`
+	}
+	type auditPage struct {
+		Items      []auditPageItem `json:"items"`
+		NextCursor string          `json:"next_cursor"`
+	}
+	requestPage := func(limit int, cursor string) auditPage {
+		t.Helper()
+		path := "/audit?team_id=" + targetTeamID + "&limit=" + strconv.Itoa(limit) + "&cursor=" + cursor
+		status, body := stack.jsonRequest(t, http.MethodGet, path, nil, adminToken)
+		if status != http.StatusOK {
+			t.Fatalf("audit page status = %d, want %d: %s", status, http.StatusOK, body)
+		}
+		var page auditPage
+		decodeResponse(t, body, &page)
+		return page
+	}
+
+	first := requestPage(2, "0")
+	if len(first.Items) != 2 || first.NextCursor == "" {
+		t.Fatalf("first full audit page = %+v, want two items and a cursor", first)
+	}
+	if first.NextCursor != strconv.FormatInt(first.Items[1].ID, 10) {
+		t.Fatalf("first audit next_cursor = %q, want final row ID %d as a string", first.NextCursor, first.Items[1].ID)
+	}
+	second := requestPage(2, first.NextCursor)
+	if len(second.Items) != 2 || second.NextCursor == "" {
+		t.Fatalf("second full audit page = %+v, want two items and a cursor", second)
+	}
+	if second.NextCursor != strconv.FormatInt(second.Items[1].ID, 10) {
+		t.Fatalf("second audit next_cursor = %q, want final row ID %d as a string", second.NextCursor, second.Items[1].ID)
+	}
+	allItems := append(append([]auditPageItem(nil), first.Items...), second.Items...)
+	if len(allItems) != 4 {
+		t.Fatalf("filtered audit item count = %d, want 4", len(allItems))
+	}
+	for index, item := range allItems {
+		if item.TeamID != targetTeamID {
+			t.Fatalf("filtered audit row %d has team_id %q, want %q", item.ID, item.TeamID, targetTeamID)
+		}
+		if index > 0 && item.ID <= allItems[index-1].ID {
+			t.Fatalf("audit IDs are not strictly ascending: %d then %d", allItems[index-1].ID, item.ID)
+		}
+	}
+	terminal := requestPage(2, second.NextCursor)
+	if terminal.Items == nil || len(terminal.Items) != 0 || terminal.NextCursor != "" {
+		t.Fatalf("exact-full-page follow-up = %+v, want empty items and terminal cursor", terminal)
+	}
+
+	shortFirst := requestPage(3, "0")
+	if len(shortFirst.Items) != 3 || shortFirst.NextCursor == "" {
+		t.Fatalf("short-page walk first result = %+v, want three items and a cursor", shortFirst)
+	}
+	shortFinal := requestPage(3, shortFirst.NextCursor)
+	if shortFinal.Items == nil || len(shortFinal.Items) != 1 || shortFinal.NextCursor != "" {
+		t.Fatalf("short final audit page = %+v, want one item and terminal cursor", shortFinal)
 	}
 }

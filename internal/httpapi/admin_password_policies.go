@@ -47,7 +47,7 @@ type passwordPolicyPatchRequest struct {
 }
 
 func (h *adminHandler) listPasswordPolicies(w http.ResponseWriter, r *http.Request) {
-	cursor, limit, ok := parsePage(w, r)
+	cursor, limit, ok := ParsePage(w, r)
 	if !ok {
 		return
 	}
@@ -56,7 +56,7 @@ func (h *adminHandler) listPasswordPolicies(w http.ResponseWriter, r *http.Reque
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	writeItems(w, policies, next)
+	WriteItems(w, policies, next)
 }
 
 func (h *adminHandler) getPasswordPolicy(w http.ResponseWriter, r *http.Request) {

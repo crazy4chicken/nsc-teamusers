@@ -154,13 +154,16 @@ func EnforceConcurrentSessionLimit(ctx context.Context, q Q, userID string, maxS
 			  AND id <> $4
 		), victims AS (
 			SELECT s.id
-			FROM sessions s, active_count c
+			FROM sessions s
 			WHERE s.user_id = $1
 			  AND s.revoked_at IS NULL
 			  AND s.expires_at > $2
 			  AND s.id <> $4
 			ORDER BY s.created_at ASC, s.id ASC
-			LIMIT GREATEST(c.count - $3::bigint + 1, 0)
+			LIMIT (
+				SELECT GREATEST(c.count - $3::bigint + 1, 0)
+				FROM active_count c
+			)
 		)
 		UPDATE sessions AS s
 		SET revoked_at = $2, revoke_reason = 'evicted_by_policy'

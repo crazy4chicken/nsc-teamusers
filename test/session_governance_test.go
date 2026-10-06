@@ -3,7 +3,6 @@ package test
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"testing"
 	"time"
 
@@ -12,7 +11,7 @@ import (
 
 type meActivityPageTestResponse struct {
 	Items      []store.LoginActivity `json:"items"`
-	NextCursor int64                 `json:"next_cursor"`
+	NextCursor string                `json:"next_cursor"`
 }
 
 func insertSessionTestPolicy(t *testing.T, ctx context.Context, stack *integrationStack, name, subjectKind, subjectID string, priority int, maxSessions, idleTimeoutMinutes *int) {
@@ -79,6 +78,15 @@ func TestSessionPolicyResolutionUsesSubjectPriorityAndCleanup(t *testing.T) {
 		t.Fatalf("delete role and its session policy: %v", err)
 	}
 	assertSessionPolicyFields(t, resolve(), 4, 45)
+	secondGroup, err := store.CreateGroup(ctx, stack.database.pool, store.Group{TeamID: team.ID, Name: "Session policy retained group"})
+	if err != nil {
+		t.Fatalf("create retained session policy group: %v", err)
+	}
+	if err := store.PutMembership(ctx, stack.database.pool, store.Membership{
+		TeamID: team.ID, GroupID: secondGroup.ID, UserID: user.ID,
+	}); err != nil {
+		t.Fatalf("add retained session policy membership: %v", err)
+	}
 	if err := store.DeleteGroup(ctx, stack.database.pool, group.ID); err != nil {
 		t.Fatalf("delete group and its session policy: %v", err)
 	}
@@ -142,13 +150,16 @@ func TestSessionPolicyEvictsOldestAndRejectsIdleRefresh(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("list own sessions status = %d, want %d: %s", status, http.StatusOK, body)
 	}
-	var sessions []struct {
-		ID           string    `json:"id"`
-		LastActiveAt time.Time `json:"last_active_at"`
+	var page struct {
+		Items []struct {
+			ID           string    `json:"id"`
+			LastActiveAt time.Time `json:"last_active_at"`
+		} `json:"items"`
+		NextCursor string `json:"next_cursor"`
 	}
-	decodeResponse(t, body, &sessions)
-	if len(sessions) != 1 || sessions[0].ID != secondID || sessions[0].LastActiveAt.IsZero() {
-		t.Fatalf("own sessions = %+v, want only second session with last_active_at", sessions)
+	decodeResponse(t, body, &page)
+	if len(page.Items) != 1 || page.Items[0].ID != secondID || page.Items[0].LastActiveAt.IsZero() {
+		t.Fatalf("own sessions = %+v, want only second session with last_active_at", page.Items)
 	}
 
 	lastActiveBefore := time.Now().UTC().Add(-10 * time.Minute)
@@ -236,7 +247,7 @@ func TestMeActivityIsScopedAndCursorPaginated(t *testing.T) {
 	}
 	var firstPage meActivityPageTestResponse
 	decodeResponse(t, body, &firstPage)
-	if len(firstPage.Items) != 1 || firstPage.NextCursor <= 0 {
+	if len(firstPage.Items) != 1 || firstPage.NextCursor == "" {
 		t.Fatalf("first activity page = %+v, want one row and a next cursor", firstPage)
 	}
 	first := firstPage.Items[0]
@@ -244,13 +255,13 @@ func TestMeActivityIsScopedAndCursorPaginated(t *testing.T) {
 		t.Fatalf("first own activity = %+v, want Alice's failed password attempt with request metadata", first)
 	}
 
-	status, body = stack.jsonRequest(t, http.MethodGet, "/me/activity?limit=2&cursor="+strconv.FormatInt(firstPage.NextCursor, 10), nil, alicePair.AccessToken)
+	status, body = stack.jsonRequest(t, http.MethodGet, "/me/activity?limit=2&cursor="+firstPage.NextCursor, nil, alicePair.AccessToken)
 	if status != http.StatusOK {
 		t.Fatalf("second activity page status = %d, want %d: %s", status, http.StatusOK, body)
 	}
 	var secondPage meActivityPageTestResponse
 	decodeResponse(t, body, &secondPage)
-	if len(secondPage.Items) != 1 || secondPage.NextCursor != 0 {
+	if len(secondPage.Items) != 1 || secondPage.NextCursor != "" {
 		t.Fatalf("second activity page = %+v, want one final row", secondPage)
 	}
 	second := secondPage.Items[0]

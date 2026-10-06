@@ -16,7 +16,15 @@ func (h *adminHandler) listUserSessions(w http.ResponseWriter, r *http.Request) 
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	sessions, err := store.ListSessionsByUser(r.Context(), h.q, userID)
+	cursor, limit, ok := ParsePage(w, r)
+	if !ok {
+		return
+	}
+	sessions, next, err := store.ListSessionsPageByUser(r.Context(), h.q, userID, cursor, limit)
+	if errors.Is(err, store.ErrInvalidSessionCursor) {
+		WriteProblem(w, r, http.StatusBadRequest, "Invalid Request", "cursor is not a valid session cursor")
+		return
+	}
 	if err != nil {
 		WriteStoreProblem(w, r, err)
 		return
@@ -25,7 +33,7 @@ func (h *adminHandler) listUserSessions(w http.ResponseWriter, r *http.Request) 
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, sessionResponses(sessions))
+	WriteItems(w, sessionResponses(sessions), next)
 }
 
 func (h *adminHandler) deleteUserSession(w http.ResponseWriter, r *http.Request) {

@@ -13,6 +13,7 @@ import (
 
 	"teamusers/internal/authn"
 	"teamusers/internal/config"
+	"teamusers/internal/store"
 )
 
 type totpEnrollResponse struct {
@@ -56,14 +57,22 @@ func TestTOTPEnrollmentConfirmAndMFALogin(t *testing.T) {
 	if len(backup.BackupCodes) != 10 {
 		t.Fatalf("backup code count = %d, want 10", len(backup.BackupCodes))
 	}
-	var enrollmentMethod, enrollmentResult string
+	credential, err := store.GetCredential(context.Background(), stack.database.pool, user.ID, "totp")
+	if err != nil {
+		t.Fatalf("read active TOTP factor: %v", err)
+	}
+	if credential.Kind != "totp" {
+		t.Fatalf("active TOTP credential kind = %q, want totp", credential.Kind)
+	}
+	assertBaselineAudit(t, stack, "auth.totp.confirmed", user.ID)
+	var latestMethod, latestResult string
 	if err := stack.database.pool.QueryRow(context.Background(), `
 		SELECT method, result FROM login_activity
-		WHERE user_id = $1 ORDER BY id DESC LIMIT 1`, user.ID).Scan(&enrollmentMethod, &enrollmentResult); err != nil {
-		t.Fatalf("read TOTP enrollment activity: %v", err)
+		WHERE user_id = $1 ORDER BY id DESC LIMIT 1`, user.ID).Scan(&latestMethod, &latestResult); err != nil {
+		t.Fatalf("read latest login activity after TOTP confirmation: %v", err)
 	}
-	if enrollmentMethod != "mfa" || enrollmentResult != "success" {
-		t.Fatalf("TOTP enrollment activity = %q/%q, want MFA success", enrollmentMethod, enrollmentResult)
+	if latestMethod != "password" || latestResult != "success" {
+		t.Fatalf("latest login activity after TOTP confirmation = %q/%q, want password success", latestMethod, latestResult)
 	}
 	status, body = stack.jsonRequest(t, http.MethodPost, "/me/totp/enroll", nil, accessToken)
 	if status != http.StatusConflict {

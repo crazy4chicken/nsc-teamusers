@@ -11,13 +11,25 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/fxamacker/cbor/v2"
+	webauthnlib "github.com/go-webauthn/webauthn/webauthn"
 
 	"teamusers/internal/store"
 )
+
+type passkeyListItem struct {
+	ID        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+}
+
+type passkeyListResponse struct {
+	Items      []passkeyListItem `json:"items"`
+	NextCursor string            `json:"next_cursor"`
+}
 
 func TestPasskeyHTTPPaths(t *testing.T) {
 	stack := newIntegrationStack(t)
@@ -56,12 +68,10 @@ func TestPasskeyHTTPPaths(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("empty passkey list status = %d, want %d: %s", status, http.StatusOK, body)
 	}
-	var passkeys []struct {
-		ID string `json:"id"`
-	}
-	decodeResponse(t, body, &passkeys)
-	if len(passkeys) != 0 {
-		t.Fatalf("empty passkey list = %+v", passkeys)
+	var page passkeyListResponse
+	decodeResponse(t, body, &page)
+	if page.Items == nil || len(page.Items) != 0 || page.NextCursor != "" {
+		t.Fatalf("empty passkey page = %+v, want empty items and cursor", page)
 	}
 
 	status, _ = stack.jsonRequest(t, http.MethodDelete, "/me/passkeys/AQ", nil, accessToken)
@@ -97,6 +107,141 @@ func TestPasskeyHTTPPaths(t *testing.T) {
 	}
 }
 
+func TestPasskeyListPagination(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ctx := context.Background()
+	user := seedPasswordUser(t, ctx, stack.database.pool, "passkey-pagination", "PasskeyPaginationPassword1")
+	accessToken := loginUser(t, stack, user.Username, "PasskeyPaginationPassword1")
+	otherUser := seedPasswordUser(t, ctx, stack.database.pool, "passkey-pagination-other", "OtherPasskeyPaginationPassword1")
+	otherAccessToken := loginUser(t, stack, otherUser.Username, "OtherPasskeyPaginationPassword1")
+
+	const credentialCount = 1004
+	credentials := make([]webauthnlib.Credential, credentialCount)
+	expectedIDs := make([]string, credentialCount)
+	for index := range credentials {
+		id := []byte{byte(index >> 8), byte(index)}
+		credentials[index] = webauthnlib.Credential{
+			ID:        id,
+			PublicKey: []byte("sensitive-passkey-public-key"),
+		}
+		expectedIDs[index] = base64.RawURLEncoding.EncodeToString(id)
+	}
+	sort.Strings(expectedIDs)
+	encodedCredentials, err := json.Marshal(credentials)
+	if err != nil {
+		t.Fatalf("encode passkey credentials: %v", err)
+	}
+	if _, err := store.CreateCredential(ctx, stack.database.pool, store.Credential{
+		UserID: user.ID, Kind: store.PasskeyCredentialKind, Hash: string(encodedCredentials),
+	}); err != nil {
+		t.Fatalf("create passkey credentials: %v", err)
+	}
+
+	otherCredential := webauthnlib.Credential{ID: []byte{0xfe, 0xff}}
+	encodedOtherCredential, err := json.Marshal([]webauthnlib.Credential{otherCredential})
+	if err != nil {
+		t.Fatalf("encode other user's passkey credential: %v", err)
+	}
+	if _, err := store.CreateCredential(ctx, stack.database.pool, store.Credential{
+		UserID: otherUser.ID, Kind: store.PasskeyCredentialKind, Hash: string(encodedOtherCredential),
+	}); err != nil {
+		t.Fatalf("create other user's passkey credential: %v", err)
+	}
+
+	getPage := func(path, token string) (passkeyListResponse, []byte) {
+		t.Helper()
+		status, body := stack.jsonRequest(t, http.MethodGet, path, nil, token)
+		if status != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want %d: %s", path, status, http.StatusOK, body)
+		}
+		var page passkeyListResponse
+		decodeResponse(t, body, &page)
+		if page.Items == nil {
+			t.Fatalf("GET %s returned null items: %s", path, body)
+		}
+		return page, body
+	}
+
+	defaultPage, _ := getPage("/me/passkeys", accessToken)
+	if len(defaultPage.Items) != 100 || defaultPage.NextCursor != expectedIDs[99] {
+		t.Fatalf("default passkey page = %d items, cursor %q; want 100 items, cursor %q", len(defaultPage.Items), defaultPage.NextCursor, expectedIDs[99])
+	}
+	for index, item := range defaultPage.Items {
+		if item.ID != expectedIDs[index] {
+			t.Fatalf("default passkey item %d = %q, want %q", index, item.ID, expectedIDs[index])
+		}
+	}
+
+	firstPage, firstBody := getPage("/me/passkeys?limit=2000", accessToken)
+	if len(firstPage.Items) != 1000 || firstPage.NextCursor != expectedIDs[999] {
+		t.Fatalf("clamped passkey page = %d items, cursor %q; want 1000 items, cursor %q", len(firstPage.Items), firstPage.NextCursor, expectedIDs[999])
+	}
+	encodedPublicKey := base64.StdEncoding.EncodeToString([]byte("sensitive-passkey-public-key"))
+	if bytes.Contains(firstBody, []byte(encodedPublicKey)) {
+		t.Fatal("passkey response exposed stored public-key material")
+	}
+	seen := make(map[string]struct{}, credentialCount)
+	assertPageIDs := func(page passkeyListResponse, offset int) {
+		for index, item := range page.Items {
+			if want := expectedIDs[offset+index]; item.ID != want {
+				t.Fatalf("passkey item %d after offset %d = %q, want %q", index, offset, item.ID, want)
+			}
+			if item.CreatedAt == "" {
+				t.Fatalf("passkey item %q has no created_at", item.ID)
+			}
+			if _, exists := seen[item.ID]; exists {
+				t.Fatalf("passkey page repeated credential %q", item.ID)
+			}
+			seen[item.ID] = struct{}{}
+		}
+	}
+	assertPageIDs(firstPage, 0)
+
+	secondPage, _ := getPage("/me/passkeys?limit=2000&cursor="+firstPage.NextCursor, accessToken)
+	if len(secondPage.Items) != credentialCount-1000 || secondPage.NextCursor != "" {
+		t.Fatalf("short terminal passkey page = %d items, cursor %q; want %d items and empty cursor", len(secondPage.Items), secondPage.NextCursor, credentialCount-1000)
+	}
+	assertPageIDs(secondPage, 1000)
+	if len(seen) != credentialCount {
+		t.Fatalf("keyset pages returned %d distinct passkeys, want %d", len(seen), credentialCount)
+	}
+
+	exactPage, _ := getPage("/me/passkeys?cursor="+expectedIDs[3]+"&limit=1000", accessToken)
+	if len(exactPage.Items) != 1000 || exactPage.NextCursor != expectedIDs[credentialCount-1] {
+		t.Fatalf("exact terminal-size page = %d items, cursor %q; want 1000 items and last ID cursor %q", len(exactPage.Items), exactPage.NextCursor, expectedIDs[credentialCount-1])
+	}
+	for index, item := range exactPage.Items {
+		if want := expectedIDs[index+4]; item.ID != want {
+			t.Fatalf("exact terminal-size item %d = %q, want %q", index, item.ID, want)
+		}
+	}
+	emptyPage, _ := getPage("/me/passkeys?cursor="+exactPage.NextCursor+"&limit=1000", accessToken)
+	if len(emptyPage.Items) != 0 || emptyPage.NextCursor != "" {
+		t.Fatalf("empty terminal passkey page = %+v, want empty items and cursor", emptyPage)
+	}
+
+	otherPage, _ := getPage("/me/passkeys", otherAccessToken)
+	otherID := base64.RawURLEncoding.EncodeToString(otherCredential.ID)
+	if len(otherPage.Items) != 1 || otherPage.Items[0].ID != otherID || otherPage.NextCursor != "" {
+		t.Fatalf("other user's passkey page = %+v, want only %q", otherPage, otherID)
+	}
+
+	for _, path := range []string{"/me/passkeys?cursor=not-valid", "/me/passkeys?limit=0"} {
+		status, body := stack.jsonRequest(t, http.MethodGet, path, nil, accessToken)
+		if status != http.StatusBadRequest {
+			t.Fatalf("GET %s status = %d, want %d: %s", path, status, http.StatusBadRequest, body)
+		}
+		var problem struct {
+			Title  string `json:"title"`
+			Status int    `json:"status"`
+		}
+		decodeResponse(t, body, &problem)
+		if problem.Status != http.StatusBadRequest || problem.Title != "Invalid Request" {
+			t.Fatalf("GET %s problem = %+v, want Invalid Request 400", path, problem)
+		}
+	}
+}
+
 func TestPasskeyCeremonyWithSoftAuthenticator(t *testing.T) {
 	stack := newIntegrationStack(t)
 	user := seedPasswordUser(t, context.Background(), stack.database.pool, "passkey-ceremony", "passkey-password")
@@ -114,12 +259,10 @@ func TestPasskeyCeremonyWithSoftAuthenticator(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("passkey list status = %d, want %d: %s", status, http.StatusOK, body)
 	}
-	var passkeys []struct {
-		ID string `json:"id"`
-	}
-	decodeResponse(t, body, &passkeys)
-	if len(passkeys) != 1 || passkeys[0].ID != base64.RawURLEncoding.EncodeToString(credentialID) {
-		t.Fatalf("passkey list = %+v, want credential %s", passkeys, base64.RawURLEncoding.EncodeToString(credentialID))
+	var page passkeyListResponse
+	decodeResponse(t, body, &page)
+	if len(page.Items) != 1 || page.Items[0].ID != base64.RawURLEncoding.EncodeToString(credentialID) || page.NextCursor != "" {
+		t.Fatalf("passkey page = %+v, want one credential %s and empty cursor", page, base64.RawURLEncoding.EncodeToString(credentialID))
 	}
 
 	status, body = loginWithSoftPasskey(t, stack, user.Username, user.ID, credentialID, privateKey, false)
@@ -146,31 +289,36 @@ func TestPasskeyCeremonyWithSoftAuthenticator(t *testing.T) {
 }
 
 func TestPasskeyLoginMFACombinations(t *testing.T) {
-	stack := newIntegrationStack(t)
-	ctx := context.Background()
 	cases := []struct {
-		name           string
-		username       string
-		userVerified   bool
-		hasTOTP        bool
-		requiredPolicy bool
-		optionalPolicy bool
-		denyUnenrolled bool
-		want           string
+		name                         string
+		username                     string
+		assertionUserVerified        bool
+		storedCredentialUserVerified bool
+		hasTOTP                      bool
+		requiredPolicy               bool
+		optionalPolicy               bool
+		denyUnenrolled               bool
+		want                         string
 	}{
-		{name: "UV no TOTP no policy", username: "passkey-mfa-uv-no-totp-no-policy", userVerified: true, want: "tokens"},
-		{name: "UV TOTP no policy", username: "passkey-mfa-uv-totp-no-policy", userVerified: true, hasTOTP: true, want: "tokens"},
-		{name: "UV no TOTP required policy", username: "passkey-mfa-uv-no-totp-policy", userVerified: true, requiredPolicy: true, want: "tokens"},
-		{name: "UV TOTP required policy", username: "passkey-mfa-uv-totp-policy", userVerified: true, hasTOTP: true, requiredPolicy: true, want: "tokens"},
+		{name: "UV no TOTP no policy", username: "passkey-mfa-uv-no-totp-no-policy", assertionUserVerified: true, want: "tokens"},
+		{name: "UV TOTP no policy", username: "passkey-mfa-uv-totp-no-policy", assertionUserVerified: true, storedCredentialUserVerified: false, hasTOTP: true, want: "tokens"},
+		{name: "UV no TOTP required policy", username: "passkey-mfa-uv-no-totp-policy", assertionUserVerified: true, requiredPolicy: true, want: "tokens"},
+		{name: "UV TOTP required policy", username: "passkey-mfa-uv-totp-policy", assertionUserVerified: true, hasTOTP: true, requiredPolicy: true, want: "tokens"},
 		{name: "non-UV no TOTP no policy", username: "passkey-mfa-nouv-no-totp-no-policy", want: "tokens"},
 		{name: "non-UV no TOTP optional policy", username: "passkey-mfa-nouv-no-totp-optional-policy", optionalPolicy: true, want: "tokens"},
 		{name: "non-UV TOTP no policy", username: "passkey-mfa-nouv-totp-no-policy", hasTOTP: true, want: "mfa"},
 		{name: "non-UV no TOTP required policy", username: "passkey-mfa-nouv-no-totp-policy", requiredPolicy: true, want: "enrollment"},
 		{name: "non-UV TOTP required policy", username: "passkey-mfa-nouv-totp-policy", hasTOTP: true, requiredPolicy: true, want: "mfa"},
 		{name: "non-UV denied required enrollment", username: "passkey-mfa-nouv-denied-enrollment", requiredPolicy: true, denyUnenrolled: true, want: "denied"},
+		{name: "non-UV stored UV no TOTP no policy", username: "passkey-mfa-nouv-stored-uv-no-policy", storedCredentialUserVerified: true, want: "tokens"},
+		{name: "non-UV stored UV TOTP no policy", username: "passkey-mfa-nouv-stored-uv-totp", storedCredentialUserVerified: true, hasTOTP: true, want: "mfa"},
+		{name: "non-UV stored UV required enrollment", username: "passkey-mfa-nouv-stored-uv-enrollment", storedCredentialUserVerified: true, requiredPolicy: true, want: "enrollment"},
+		{name: "non-UV stored UV denied enrollment", username: "passkey-mfa-nouv-stored-uv-denied-enrollment", storedCredentialUserVerified: true, requiredPolicy: true, denyUnenrolled: true, want: "denied"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
+			stack := newIntegrationStack(t)
+			ctx := context.Background()
 			user := seedPasswordUser(t, ctx, stack.database.pool, testCase.username, "passkey-mfa-password")
 			accessToken := loginUser(t, stack, user.Username, "passkey-mfa-password")
 			privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -182,6 +330,7 @@ func TestPasskeyLoginMFACombinations(t *testing.T) {
 				t.Fatalf("generate soft authenticator credential id: %v", err)
 			}
 			registerSoftPasskey(t, stack, accessToken, privateKey, credentialID)
+			seedPasskeyCredentialUserVerified(t, ctx, stack, user.ID, testCase.storedCredentialUserVerified)
 
 			if testCase.hasTOTP {
 				if _, err := store.CreateCredential(ctx, stack.database.pool, store.Credential{
@@ -202,47 +351,92 @@ func TestPasskeyLoginMFACombinations(t *testing.T) {
 				policyID = policy.ID
 			}
 
-			status, body := loginWithSoftPasskey(t, stack, user.Username, user.ID, credentialID, privateKey, testCase.userVerified)
+			status, body := loginWithSoftPasskey(t, stack, user.Username, user.ID, credentialID, privateKey, testCase.assertionUserVerified)
 			if policyID != "" {
 				if err := store.DeleteMFAPolicy(ctx, stack.database.pool, policyID); err != nil {
 					t.Fatalf("delete MFA policy: %v", err)
 				}
 			}
+			wantAMR := []string{"webauthn"}
+			if testCase.assertionUserVerified {
+				wantAMR = append(wantAMR, "mfa")
+			}
 			switch testCase.want {
 			case "tokens":
 				if status != http.StatusOK {
-					t.Fatalf("login finish status = %d, want %d: %s", status, http.StatusOK, body)
+					t.Fatalf("login finish status = %d, want %d", status, http.StatusOK)
 				}
 				var pair tokenPair
-				decodeResponse(t, body, &pair)
-				assertTokenPair(t, pair)
+				if err := json.Unmarshal(body, &pair); err != nil {
+					t.Fatalf("decode passkey token response: %v", err)
+				}
+				if pair.AccessToken == "" || pair.RefreshToken == "" || pair.TokenType != "Bearer" || pair.ExpiresIn <= 0 {
+					t.Fatalf("invalid passkey token pair: access_token_present=%t, refresh_token_present=%t, token_type=%q, expires_in=%d",
+						pair.AccessToken != "", pair.RefreshToken != "", pair.TokenType, pair.ExpiresIn)
+				}
+				var claims struct {
+					AMR []string `json:"amr"`
+				}
+				decodeTokenClaims(t, pair.AccessToken, &claims)
+				if strings.Join(claims.AMR, ",") != strings.Join(wantAMR, ",") {
+					t.Fatalf("passkey access-token AMR = %v, want %v from the signed assertion", claims.AMR, wantAMR)
+				}
 			case "mfa":
 				var challenge struct {
-					MFARequired bool   `json:"mfa_required"`
-					MFAToken    string `json:"mfa_token"`
+					MFARequired  bool     `json:"mfa_required"`
+					MFAToken     string   `json:"mfa_token"`
+					MFAMethods   []string `json:"mfa_methods"`
+					AccessToken  string   `json:"access_token"`
+					RefreshToken string   `json:"refresh_token"`
 				}
 				if status != http.StatusOK {
-					t.Fatalf("login finish status = %d, want %d: %s", status, http.StatusOK, body)
+					t.Fatalf("login finish status = %d, want %d", status, http.StatusOK)
 				}
-				decodeResponse(t, body, &challenge)
-				if !challenge.MFARequired || challenge.MFAToken == "" {
-					t.Fatalf("login response = %s, want TOTP challenge", body)
+				if err := json.Unmarshal(body, &challenge); err != nil {
+					t.Fatalf("decode passkey MFA response: %v", err)
+				}
+				if !challenge.MFARequired || challenge.MFAToken == "" || len(challenge.MFAMethods) != 1 || challenge.MFAMethods[0] != "otp" || challenge.AccessToken != "" || challenge.RefreshToken != "" {
+					t.Fatalf("passkey login challenge = required:%t token_present:%t methods:%v access_token_present:%t refresh_token_present:%t; want TOTP challenge without full tokens",
+						challenge.MFARequired, challenge.MFAToken != "", challenge.MFAMethods, challenge.AccessToken != "", challenge.RefreshToken != "")
+				}
+				var pending struct {
+					Purpose string   `json:"purpose"`
+					AMR     []string `json:"amr"`
+				}
+				decodeTokenClaims(t, challenge.MFAToken, &pending)
+				if pending.Purpose != "mfa" || strings.Join(pending.AMR, ",") != strings.Join(wantAMR, ",") {
+					t.Fatalf("passkey MFA token evidence = purpose:%q amr:%v, want purpose:mfa amr:%v", pending.Purpose, pending.AMR, wantAMR)
 				}
 			case "enrollment":
 				var enrollment struct {
-					Required bool   `json:"mfa_enrollment_required"`
-					MFAToken string `json:"mfa_token"`
+					Required     bool     `json:"mfa_enrollment_required"`
+					MFAToken     string   `json:"mfa_token"`
+					MFAMethods   []string `json:"mfa_methods"`
+					AccessToken  string   `json:"access_token"`
+					RefreshToken string   `json:"refresh_token"`
 				}
 				if status != http.StatusOK {
-					t.Fatalf("login finish status = %d, want %d: %s", status, http.StatusOK, body)
+					t.Fatalf("login finish status = %d, want %d", status, http.StatusOK)
 				}
-				decodeResponse(t, body, &enrollment)
-				if !enrollment.Required || enrollment.MFAToken == "" {
-					t.Fatalf("login response = %s, want restricted enrollment challenge", body)
+				if err := json.Unmarshal(body, &enrollment); err != nil {
+					t.Fatalf("decode passkey enrollment response: %v", err)
+				}
+				if !enrollment.Required || enrollment.MFAToken == "" || len(enrollment.MFAMethods) != 1 || enrollment.MFAMethods[0] != "otp" || enrollment.AccessToken != "" || enrollment.RefreshToken != "" {
+					t.Fatalf("passkey enrollment response = required:%t token_present:%t methods:%v access_token_present:%t refresh_token_present:%t; want restricted enrollment challenge without full tokens",
+						enrollment.Required, enrollment.MFAToken != "", enrollment.MFAMethods, enrollment.AccessToken != "", enrollment.RefreshToken != "")
+				}
+				var pending struct {
+					Purpose string   `json:"purpose"`
+					AMR     []string `json:"amr"`
+				}
+				decodeTokenClaims(t, enrollment.MFAToken, &pending)
+				if pending.Purpose != "mfa_enroll" || strings.Join(pending.AMR, ",") != strings.Join(wantAMR, ",") {
+					t.Fatalf("passkey enrollment token evidence = purpose:%q amr:%v, want purpose:mfa_enroll amr:%v", pending.Purpose, pending.AMR, wantAMR)
 				}
 			case "denied":
-				if status != http.StatusForbidden || !strings.Contains(string(body), "mfa_enrollment_denied") {
-					t.Fatalf("login finish = %d %s, want mfa_enrollment_denied 403", status, body)
+				denialCodePresent := strings.Contains(string(body), "mfa_enrollment_denied")
+				if status != http.StatusForbidden || !denialCodePresent {
+					t.Fatalf("login finish status = %d, denial_code_present=%t; want mfa_enrollment_denied 403", status, denialCodePresent)
 				}
 			}
 		})
@@ -286,7 +480,7 @@ func TestPasskeyMFAResetsFailedLoginsOnlyAfterCompletion(t *testing.T) {
 		t.Fatalf("generate soft authenticator credential id: %v", err)
 	}
 	registerSoftPasskey(t, stack, accessToken, privateKey, credentialID)
-	const totpSecret = "JBSWY3DPEHPK3PXP"
+	const totpSecret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
 	if _, err := store.CreateCredential(ctx, stack.database.pool, store.Credential{
 		UserID: user.ID, Kind: "totp", Hash: totpSecret,
 	}); err != nil {
@@ -314,6 +508,20 @@ func TestPasskeyMFAResetsFailedLoginsOnlyAfterCompletion(t *testing.T) {
 	}
 	if failedLogins != 1 {
 		t.Fatalf("failed login count after passkey factor = %d, want 1 until MFA completes", failedLogins)
+	}
+
+	status, body = stack.jsonRequest(t, http.MethodPost, "/auth/login/mfa", map[string]string{
+		"mfa_token": challenge.MFAToken,
+		"code":      "00000x",
+	}, "")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("passkey MFA invalid TOTP status = %d, want %d: %s", status, http.StatusUnauthorized, body)
+	}
+	if err := stack.database.pool.QueryRow(ctx, `SELECT failed_logins FROM users WHERE id = $1`, user.ID).Scan(&failedLogins); err != nil {
+		t.Fatalf("read failed login count after invalid TOTP: %v", err)
+	}
+	if failedLogins != 2 {
+		t.Fatalf("failed login count after invalid TOTP = %d, want 2 without reset", failedLogins)
 	}
 	code, err := currentTOTPCode(t, totpSecret)
 	if err != nil {
@@ -377,7 +585,22 @@ func registerSoftPasskey(t *testing.T, stack *integrationStack, accessToken stri
 	}
 }
 
-func loginWithSoftPasskey(t *testing.T, stack *integrationStack, username, userID string, credentialID []byte, privateKey *ecdsa.PrivateKey, userVerified bool) (int, []byte) {
+func seedPasskeyCredentialUserVerified(t *testing.T, ctx context.Context, stack *integrationStack, userID string, userVerified bool) {
+	t.Helper()
+	credentials, err := store.GetPasskeys(ctx, stack.database.pool, userID)
+	if err != nil {
+		t.Fatalf("load registered passkey credential: %v", err)
+	}
+	if len(credentials) != 1 {
+		t.Fatalf("registered passkey credential count = %d, want 1", len(credentials))
+	}
+	credentials[0].Flags.UserVerified = userVerified
+	if err := store.UpdatePasskey(ctx, stack.database.pool, userID, credentials[0]); err != nil {
+		t.Fatalf("seed passkey credential user-verification state: %v", err)
+	}
+}
+
+func loginWithSoftPasskey(t *testing.T, stack *integrationStack, username, userID string, credentialID []byte, privateKey *ecdsa.PrivateKey, assertionUserVerified bool) (int, []byte) {
 	t.Helper()
 	status, body := stack.jsonRequest(t, http.MethodPost, "/auth/passkey/login/begin", map[string]string{
 		"username": username,
@@ -395,7 +618,7 @@ func loginWithSoftPasskey(t *testing.T, stack *integrationStack, username, userI
 		t.Fatal("login begin returned an empty challenge")
 	}
 	loginClientData := clientDataJSON("webauthn.get", assertion.PublicKey.Challenge, "http://localhost")
-	loginAuthenticatorData := assertionAuthenticatorData("localhost", 1, userVerified)
+	loginAuthenticatorData := assertionAuthenticatorData("localhost", 1, assertionUserVerified)
 	clientDataHash := sha256.Sum256(loginClientData)
 	signedData := append(append([]byte(nil), loginAuthenticatorData...), clientDataHash[:]...)
 	assertionHash := sha256.Sum256(signedData)

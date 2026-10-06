@@ -220,9 +220,9 @@ from `internal/httpapi/doc.go`:
 - **Document POST idempotency.** If the endpoint honors `Idempotency-Key`,
   say so in the description with the retry semantics; if a mutation is
   naturally idempotent (PUT semantics), say that instead.
-- **Spell out pagination contracts.** For cursor lists, describe
-  `next_cursor` precisely: what it is, what a short page returns, and any
-  limit caps.
+- **Spell out route-specific pagination details.** Describe each list's cursor
+  key, ordering, filters, and errors; link the [REST pagination guide](/guide/pagination)
+  for shared limit, envelope, and terminal-cursor behavior instead of repeating it.
 - **Keep auth requirements structured.** Fresh-auth (step-up) and similar
   route middleware requirements go in `PermissionNote`, not in prose — the
   renderer keeps them on the **Required permission** line where readers

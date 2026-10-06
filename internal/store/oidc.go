@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,14 +18,53 @@ var (
 // LockOIDCLogin serializes resolution by issuer/subject and, when present, by
 // case-insensitive email. Call it inside the transaction that links identity.
 func LockOIDCLogin(ctx context.Context, q Q, issuer, subject, email string) error {
-	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "oidc\x00"+issuer+"\x00"+subject); err != nil {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, oidcSubjectLockKey(issuer, subject)); err != nil {
 		return err
 	}
 	if email == "" {
 		return nil
 	}
-	_, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "email\x00"+strings.ToLower(email))
+	_, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, oidcEmailLockKey(email))
 	return err
+}
+
+const (
+	oidcSubjectLockKeyPrefix       = "oidc-subject:"
+	oidcEmailLockKeyPrefix         = "email:"
+	oidcLockKeyHexDigits           = "0123456789abcdef"
+	oidcLockKeyComponentOverhead   = 21 // 19 decimal length digits plus two separators
+)
+
+func oidcSubjectLockKey(issuer, subject string) string {
+	var key strings.Builder
+	key.Grow(len(oidcSubjectLockKeyPrefix) + 2*(len(issuer)+len(subject)) + 2*oidcLockKeyComponentOverhead)
+	key.WriteString(oidcSubjectLockKeyPrefix)
+	writeOIDCLockKeyComponent(&key, issuer)
+	writeOIDCLockKeyComponent(&key, subject)
+	return key.String()
+}
+
+func oidcEmailLockKey(email string) string {
+	email = strings.ToLower(email)
+	var key strings.Builder
+	key.Grow(len(oidcEmailLockKeyPrefix) + 2*len(email) + oidcLockKeyComponentOverhead)
+	key.WriteString(oidcEmailLockKeyPrefix)
+	writeOIDCLockKeyComponent(&key, email)
+	return key.String()
+}
+
+// writeOIDCLockKeyComponent length-prefixes each byte sequence and hex-encodes
+// it so arbitrary component bytes produce unambiguous PostgreSQL text.
+func writeOIDCLockKeyComponent(key *strings.Builder, value string) {
+	var length [20]byte
+	key.Write(strconv.AppendInt(length[:0], int64(len(value)), 10))
+	key.WriteByte(':')
+	for i := range len(value) {
+		b := value[i]
+		key.WriteByte(oidcLockKeyHexDigits[b>>4])
+		key.WriteByte(oidcLockKeyHexDigits[b&0x0f])
+	}
+	key.WriteByte(':')
 }
 
 // CreateOIDCLoginState stores one-time state and nonce digests with PKCE data.

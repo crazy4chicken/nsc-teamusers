@@ -56,7 +56,7 @@ type bindingPatchRequest struct {
 }
 
 func (h *adminHandler) listRoles(w http.ResponseWriter, r *http.Request) {
-	cursor, limit, ok := parsePage(w, r)
+	cursor, limit, ok := ParsePage(w, r)
 	if !ok {
 		return
 	}
@@ -69,7 +69,7 @@ func (h *adminHandler) listRoles(w http.ResponseWriter, r *http.Request) {
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	writeItems(w, roles, next)
+	WriteItems(w, roles, next)
 }
 
 func (h *adminHandler) getRole(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +82,7 @@ func (h *adminHandler) getRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *adminHandler) listRolePermissions(w http.ResponseWriter, r *http.Request) {
-	cursor, limit, ok := parsePage(w, r)
+	cursor, limit, ok := ParsePage(w, r)
 	if !ok {
 		return
 	}
@@ -96,7 +96,7 @@ func (h *adminHandler) listRolePermissions(w http.ResponseWriter, r *http.Reques
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	writeItems(w, permissions, next)
+	WriteItems(w, permissions, next)
 }
 
 func (h *adminHandler) createRole(w http.ResponseWriter, r *http.Request) {
@@ -306,7 +306,7 @@ func (h *adminHandler) setRolePermissions(w http.ResponseWriter, r *http.Request
 }
 
 func (h *adminHandler) listPermissions(w http.ResponseWriter, r *http.Request) {
-	cursor, limit, ok := parsePage(w, r)
+	cursor, limit, ok := ParsePage(w, r)
 	if !ok {
 		return
 	}
@@ -315,7 +315,7 @@ func (h *adminHandler) listPermissions(w http.ResponseWriter, r *http.Request) {
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	writeItems(w, permissions, next)
+	WriteItems(w, permissions, next)
 }
 
 func (h *adminHandler) registerPermission(w http.ResponseWriter, r *http.Request) {
@@ -376,7 +376,7 @@ func (h *adminHandler) listBindings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	cursor, limit, ok := parsePage(w, r)
+	cursor, limit, ok := ParsePage(w, r)
 	if !ok {
 		return
 	}
@@ -385,7 +385,7 @@ func (h *adminHandler) listBindings(w http.ResponseWriter, r *http.Request) {
 		WriteStoreProblem(w, r, err)
 		return
 	}
-	writeItems(w, bindings, next)
+	WriteItems(w, bindings, next)
 }
 
 func (h *adminHandler) createBinding(w http.ResponseWriter, r *http.Request) {
