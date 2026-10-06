@@ -11,46 +11,76 @@ protected and shared by every replica.
 
 ## Configuration checklist
 
-Configuration is loaded with the precedence **CLI flag > environment variable >
-default**. The supported environment variables are:
+For ordinary settings, precedence is **CLI flag > `TEAMUSERS_*` environment
+variable > built-in default**. Listener address and port also accept supervisor
+`HOST`/`PORT` fallbacks; their full priority is below. The supported
+service-process environment variables are:
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `TEAMUSERS_CONNECTION_STRING` | empty | PostgreSQL DSN; required by `run` and `doctor`. |
-| `TEAMUSERS_DB_SCHEMA` | empty (default schema) | Optional PostgreSQL schema for all teamusers objects. When set to a valid identifier the schema is created if missing, every connection searches it first, and the goose version table lives inside it. The role needs database-level `CREATE` privilege on first use (or an administrator pre-creates the schema with `AUTHORIZATION`). |
-| `TEAMUSERS_LISTEN_ADDRESS` | `127.0.0.1` | HTTP bind address. |
-| `TEAMUSERS_LISTEN_PORT` | `0` | HTTP port; `0` asks the OS for an ephemeral port. |
-| `TEAMUSERS_TRUSTED_PROXIES` | empty | Comma-separated trusted proxy CIDRs or IPs; forwarded hops are walked right-to-left to select the rightmost non-trusted address. The trusted edge proxy must overwrite client-supplied `X-Forwarded-For` before forwarding. |
-| `TEAMUSERS_NODE_ID` | empty | Optional node label for deployment metadata. |
-| `TEAMUSERS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
-| `TEAMUSERS_KEY_DIR` | `./data/keys` | Ed25519 private/public keys and the `ACTIVE` marker. |
-| `TEAMUSERS_NATS_URL` | empty | NATS URL for the JetStream outbox relay. |
-| `TEAMUSERS_NOTIFICATION_ENDPOINTS` | empty | Comma-separated notification service endpoint URLs. |
-| `TEAMUSERS_NOTIFICATION_SECRET` | empty | HMAC-SHA256 signing secret for notification service calls. |
-| `TEAMUSERS_AUDIT_RETENTION_DAYS` | `0` | Whole-day audit retention window (`--audit-retention-days`); `0` keeps rows forever. |
-| `TEAMUSERS_LOGIN_ACTIVITY_RETENTION_DAYS` | `90` | Whole-day login-activity retention window; `0` disables deletion. |
-| `TEAMUSERS_AUDIT_FORWARD_ENDPOINTS` | empty | Comma-separated HTTP endpoints for asynchronous HMAC-signed audit-row delivery; empty disables forwarding. |
-| `TEAMUSERS_AUDIT_FORWARD_SECRET` | empty | HMAC-SHA256 signing secret; required when audit-forward endpoints are configured and redacted from status output. |
-| `TEAMUSERS_REGISTRATION_MODE` | `closed` | Public registration mode: `closed`, `approval`, or `open`. |
-| `TEAMUSERS_OIDC_ISSUER` | empty | OpenID Provider issuer URL (`--oidc-issuer`); empty disables inbound OIDC. |
-| `TEAMUSERS_OIDC_CLIENT_ID` | empty | OIDC client identifier (`--oidc-client-id`). |
-| `TEAMUSERS_OIDC_CLIENT_SECRET` | empty | Confidential OIDC client secret (`--oidc-client-secret`); redacted from diagnostic output. |
-| `TEAMUSERS_OIDC_REDIRECT_URL` | empty | Absolute OIDC callback URL (`--oidc-redirect-url`). |
-| `TEAMUSERS_OIDC_TRUST_UPSTREAM_MFA` | `false` | Opts in to satisfying local MFA policy from recognized upstream OIDC `amr` or configured exact `acr` evidence; default false always requires local MFA when policy demands it. |
-| `TEAMUSERS_OIDC_MFA_ACR_VALUES` | empty | Comma-separated exact-match `acr` values trusted only when upstream OIDC MFA trust is enabled; values are not delimiter-split. |
-| `TEAMUSERS_ACCESS_TOKEN_TTL` | `10m` | Access-token lifetime (`--access-token-ttl`); parsed by `time.ParseDuration`. |
-| `TEAMUSERS_REFRESH_TOKEN_TTL` | `720h` | Refresh-token lifetime (`--refresh-token-ttl`); parsed by `time.ParseDuration`. |
-| `TEAMUSERS_SESSION_FAMILY_TTL` | `2160h` | Absolute session-family lifetime (`--session-family-ttl`); parsed by `time.ParseDuration` and must be at least the refresh-token TTL. |
-| `TEAMUSERS_LOCKOUT_THRESHOLD` | `5` | Failed password or MFA attempts before lockout. |
-| `TEAMUSERS_LOCKOUT_DURATION` | `15m` | Duration of an account lockout; parsed by `time.ParseDuration`. |
-| `TEAMUSERS_PWNED_PASSWORDS_ENABLED` | `false` | Enables HIBP screening for password policies with `breach_check: true` (`--pwned-passwords-enabled`). |
-| `TEAMUSERS_WEBAUTHN_RP_ID` | `localhost` | WebAuthn relying-party ID. |
-| `TEAMUSERS_WEBAUTHN_ORIGIN` | `http://localhost` | WebAuthn browser origin. |
+| Variable | Default | CLI flag | Purpose |
+| --- | --- | --- | --- |
+| `TEAMUSERS_CONNECTION_STRING` | empty | `--connection-string` | PostgreSQL DSN; required by `run`, `doctor`, and `bootstrap-admin`; `status` does not require it. |
+| `TEAMUSERS_DB_SCHEMA` | empty (default schema) | — | Optional PostgreSQL schema for all teamusers objects. If set, it must match `^[a-z_][a-z0-9_]*$`; it is created if missing, every connection searches it first, and the goose version table lives inside it. The role needs database-level `CREATE` privilege on first use (or an administrator pre-creates the schema with `AUTHORIZATION`). |
+| `TEAMUSERS_LISTEN_ADDRESS` | `127.0.0.1` | `--listen-address` | HTTP bind address. |
+| `TEAMUSERS_LISTEN_PORT` | `0` | `--listen-port` | Integer port `0`–`65535`; `0` asks the OS for an ephemeral port. |
+| `TEAMUSERS_TRUSTED_PROXIES` | empty | `--trusted-proxies` | Comma-separated trusted proxy IPs or CIDRs; blank entries and invalid values are rejected. Forwarded hops are walked right-to-left to select the rightmost non-trusted address. The trusted edge proxy must overwrite client-supplied `X-Forwarded-For` before forwarding. |
+| `TEAMUSERS_NODE_ID` | empty | `--node-id` | Optional node label for deployment metadata. |
+| `TEAMUSERS_LOG_LEVEL` | `info` | `--log-level` | `debug`, `info`, `warn`, or `error`. |
+| `TEAMUSERS_KEY_DIR` | `./data/keys` | `--key-dir` | Ed25519 private/public keys and the `ACTIVE` marker. |
+| `TEAMUSERS_NATS_URL` | empty | `--nats-url` | NATS URL for the JetStream outbox relay; empty disables the relay. |
+| `TEAMUSERS_NOTIFICATION_ENDPOINTS` | empty | `--notification-endpoints` | Comma-separated notification service endpoint URLs; empty acknowledges notification rows locally without remote delivery (see [Notification service integration](#notification-service-integration)). |
+| `TEAMUSERS_NOTIFICATION_SECRET` | empty | `--notification-secret` | HMAC-SHA256 signing secret; optional to configuration even when endpoints are set (see [Notification service integration](#notification-service-integration)). |
+| `TEAMUSERS_AUDIT_RETENTION_DAYS` | `0` | `--audit-retention-days` | Non-negative whole number of days; `0` keeps rows forever. |
+| `TEAMUSERS_LOGIN_ACTIVITY_RETENTION_DAYS` | `90` | — | Non-negative whole number of days; `0` disables deletion. |
+| `TEAMUSERS_AUDIT_FORWARD_ENDPOINTS` | empty | — | Comma-separated HTTP endpoints for asynchronous HMAC-signed audit-row delivery; empty disables forwarding (see [External audit forwarding](#external-audit-forwarding)). |
+| `TEAMUSERS_AUDIT_FORWARD_SECRET` | empty | — | HMAC-SHA256 signing secret; required when the parsed forwarding endpoint list is non-empty and redacted from status output (see [External audit forwarding](#external-audit-forwarding)). |
+| `TEAMUSERS_REGISTRATION_MODE` | `closed` | `--registration-mode` | Public registration mode: `closed`, `approval`, or `open`. |
+| `TEAMUSERS_TOKEN_AUDIENCE` | `teamusers` | `--token-audience` | JWT audience; an explicit empty value is not rejected by configuration validation. |
+| `TEAMUSERS_OIDC_ISSUER` | empty | `--oidc-issuer` | OpenID Provider issuer URL; part of the all-or-none OIDC configuration below. |
+| `TEAMUSERS_OIDC_CLIENT_ID` | empty | `--oidc-client-id` | OIDC client identifier. |
+| `TEAMUSERS_OIDC_CLIENT_SECRET` | empty | `--oidc-client-secret` | Confidential OIDC client secret; redacted from diagnostic output. |
+| `TEAMUSERS_OIDC_REDIRECT_URL` | empty | `--oidc-redirect-url` | OIDC callback URL. |
+| `TEAMUSERS_OIDC_TRUST_UPSTREAM_MFA` | `false` | `--oidc-trust-upstream-mfa` | Boolean opt-in to using recognized upstream OIDC `amr` or configured exact `acr` evidence to satisfy local MFA policy; false always requires local MFA when policy demands it. |
+| `TEAMUSERS_OIDC_MFA_ACR_VALUES` | empty | `--oidc-mfa-acr-values` | Comma-separated exact-match `acr` values; empty items are rejected, and values are trusted only when upstream OIDC MFA trust is enabled. |
+| `TEAMUSERS_SCIM_BEARER_TOKEN` | empty | `--scim-bearer-token` | Static SCIM bearer credential; with an empty token the routes remain mounted but every request receives `401` (see [SCIM provisioning](#scim-provisioning)). |
+| `TEAMUSERS_ACCESS_TOKEN_TTL` | `10m` | `--access-token-ttl` | Positive Go duration (`time.ParseDuration`). |
+| `TEAMUSERS_REFRESH_TOKEN_TTL` | `720h` | `--refresh-token-ttl` | Positive Go duration (`time.ParseDuration`). |
+| `TEAMUSERS_SESSION_FAMILY_TTL` | `2160h` | `--session-family-ttl` | Positive Go duration (`time.ParseDuration`); must be at least the refresh-token TTL. |
+| `TEAMUSERS_LOCKOUT_THRESHOLD` | `5` | `--lockout-threshold` | Positive integer number of failed password or MFA attempts before lockout. |
+| `TEAMUSERS_LOCKOUT_DURATION` | `15m` | `--lockout-duration` | Positive Go duration (`time.ParseDuration`). |
+| `TEAMUSERS_PWNED_PASSWORDS_ENABLED` | `false` | `--pwned-passwords-enabled` | Boolean enabling HIBP screening for password policies with `breach_check: true`. |
+| `TEAMUSERS_WEBAUTHN_RP_ID` | `localhost` | `--webauthn-rp-id` | WebAuthn relying-party ID. |
+| `TEAMUSERS_WEBAUTHN_ORIGIN` | `http://localhost` | `--webauthn-origin` | WebAuthn browser origin. |
 
-Configure all four OIDC endpoint/client values together; the service rejects partial configuration. Use HTTPS issuer and callback URLs in production. The `__Host-` state cookie is always `Secure`, so public HTTPS must terminate at the trusted reverse proxy. Upstream MFA trust is opt-in; keep `TEAMUSERS_OIDC_TRUST_UPSTREAM_MFA=false` unless relying on upstream MFA, and list permitted full `acr` values in `TEAMUSERS_OIDC_MFA_ACR_VALUES`.
+`TEAMUSERS_*` environment lookup distinguishes unset from present-but-empty:
+an empty value is selected rather than replaced by the built-in default. It
+then follows that field's parsing, validation, runtime defaulting, and behavior;
+it may fail validation or be accepted.
 
-Do not put credentials in the repository. Use Nekostick's protected service
-configuration or another approved secret facility, and restrict read access.
+Listener resolution is `--listen-address` > `TEAMUSERS_LISTEN_ADDRESS` >
+supervisor `HOST` > built-in `127.0.0.1`, and `--listen-port` >
+`TEAMUSERS_LISTEN_PORT` > supervisor `PORT` > built-in `0`. Each supervisor
+value is used only when its matching `TEAMUSERS_LISTEN_*` variable is unset.
+Port `0` requests an ephemeral port.
+
+A dash in the CLI flag column means no corresponding CLI flag is registered.
+This inventory covers service-process configuration only, not SDK examples or
+test-harness settings.
+
+Enable inbound OIDC only by configuring `TEAMUSERS_OIDC_ISSUER`,
+`TEAMUSERS_OIDC_CLIENT_ID`, `TEAMUSERS_OIDC_CLIENT_SECRET`, and
+`TEAMUSERS_OIDC_REDIRECT_URL` all together; partial configuration is rejected.
+The issuer and redirect must be absolute HTTP(S) URLs without user information
+or fragments; the issuer must not contain a query (the redirect may). Use HTTPS
+in production. The `__Host-` state cookie is always `Secure`, so public HTTPS
+must terminate at the trusted reverse proxy. Upstream MFA trust is opt-in and
+defaults to false; configured comma-separated exact `acr` values are
+supplementary and have no effect on local MFA policy until
+`TEAMUSERS_OIDC_TRUST_UPSTREAM_MFA` is enabled.
+
+Do not put credentials in the repository. Nekostick stores service environment
+values in PostgreSQL in plaintext, so treat its configuration records and the
+database as secret material and restrict read access. Use another approved
+secret facility where appropriate.
 
 For production, set both WebAuthn variables to the public relying-party
 configuration: `TEAMUSERS_WEBAUTHN_RP_ID` must be the effective public domain and
@@ -441,15 +471,17 @@ states.
 
 ## Notification service integration
 
-Set `TEAMUSERS_NOTIFICATION_ENDPOINTS` to a comma-separated list of notification
-service endpoint URLs and `TEAMUSERS_NOTIFICATION_SECRET` to the HMAC secret
-shared with the notification service. The notifier polls the notification
-outbox every two seconds. It sends notification directives currently emitted by
-this service (`user.created`, `user.disabled`, `user.verification`,
-`user.approved`, `user.invited`, `password.reset_requested`, and
-`session.reuse_detected`) as HMAC-signed JSON `POST` requests to each configured
-endpoint. This service decides what to notify and when; the notification service
-owns actual email/SMS delivery.
+Set `TEAMUSERS_NOTIFICATION_ENDPOINTS` to a comma-separated list of
+notification service endpoint URLs. `TEAMUSERS_NOTIFICATION_SECRET` is the
+shared HMAC-SHA256 signing key; configuration does not require it even when
+endpoints are set. In production, configure a strong secret and use HTTPS for
+the endpoints. The notifier polls the notification outbox every two seconds.
+It sends notification directives currently emitted by this service
+(`user.created`, `user.disabled`, `user.verification`, `user.approved`,
+`user.invited`, `password.reset_requested`, and `session.reuse_detected`) as
+HMAC-signed JSON `POST` requests to each configured endpoint. This service
+decides what to notify and when; the notification service owns actual
+email/SMS delivery.
 
 ```json
 {
@@ -480,8 +512,8 @@ and 15 seconds. Requests time out after five seconds. A non-2xx response or
 network failure leaves the outbox row unpublished for a later poll, so delivery
 is at-least-once and the configured notification service must deduplicate by event `id`.
 With no notification service endpoints configured, notification rows are
-acknowledged locally in development mode. Do not use an empty endpoint list as a
-production delivery guarantee.
+acknowledged locally without remote delivery. Do not use an empty endpoint list
+as a production delivery guarantee.
 
 Set `TEAMUSERS_NATS_URL` to enable the relay. It publishes recognized outbox
 topics other than `notify.*` notification directives to these subjects:
@@ -571,12 +603,12 @@ curl --fail-with-body -sS -G -OJ "$IAM_BASE_URL/audit/export" \
 
 Set `TEAMUSERS_AUDIT_FORWARD_ENDPOINTS` to a comma-separated list of trusted
 HTTP endpoints and `TEAMUSERS_AUDIT_FORWARD_SECRET` to a unique random secret
-shared with the receiver. Use HTTPS in production and keep the secret in the
-deployment secret facility; `status` and `doctor` redact both the endpoint list
-and secret. Empty endpoints disable forwarding and avoid creating forwarding
-outbox rows.
-Audit entries written while forwarding is disabled are not queued and will not
-be forwarded if forwarding is enabled later.
+shared with the receiver. Configuration requires a non-whitespace secret when
+the parsed endpoint list is non-empty. Use HTTPS in production and keep the
+secret in the deployment secret facility; `status` and `doctor` redact both the
+endpoint list and secret. Empty endpoints disable forwarding and avoid creating
+forwarding outbox rows. Audit entries written while forwarding is disabled are
+not queued and will not be forwarded if forwarding is enabled later.
 
 The service queues each audit row in the existing transactional outbox and
 delivers its JSON row body asynchronously as `POST` with
@@ -637,12 +669,14 @@ terminating the healthy instance.
 
 ## SCIM provisioning
 
-SCIM 2.0 provisioning is available under `$IAM_BASE_URL/scim/v2` when
-`TEAMUSERS_SCIM_BEARER_TOKEN` is a static bearer credential. Store it in the
-deployment secret facility. To revoke access, replace the configured value and
-restart or roll out every replica; never put it in source control or request
-logs. An empty value disables SCIM, so requests to the mounted router return
-`401 application/problem+json`. Configure SCIM independently of inbound OIDC.
+SCIM 2.0 endpoints are mounted under `$IAM_BASE_URL/scim/v2` regardless of
+token configuration. Set `TEAMUSERS_SCIM_BEARER_TOKEN` to a static bearer
+credential to authorize provisioning. An empty or unset token leaves the routes
+mounted, but the router's authentication middleware rejects every request with
+`401 application/problem+json`. Store the token in the deployment secret
+facility. To revoke access, replace the configured value and restart or roll
+out every replica; never put it in source control or request logs. Configure
+SCIM independently of inbound OIDC.
 
 The bearer token can create, update, list, read, and deactivate users. It is a
 service-wide credential, so restrict it to the identity provider that owns
