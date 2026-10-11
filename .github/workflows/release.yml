@@ -19,11 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - goarch: amd64
-            arch: x64
-          - goarch: arm64
-            arch: arm64
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
     steps:
       - name: Resolve version
         run: |
@@ -40,24 +37,37 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # svchost release contract: the asset must be named
-      # teamusers_<version>_<arch>.zip and the entry binary must sit at the
-      # ZIP root with the exact service name "teamusers".
+      # svchost release contract (4-segment naming, see
+      # https://github.com/crazy4chicken/nekostick-svchost/blob/main/docs/publishing.md):
+      # the asset must be named teamusers_<version>_<platform>_<arch>.zip and
+      # the entry binary must sit at the ZIP root with the exact service name
+      # "teamusers". The version segment strips the tag's v prefix; svchost
+      # compares SemVer identity, so 1.2.3 matches ref v1.2.3.
+      # Map GOOS/GOARCH to svchost asset segments (darwin -> macos,
+      # amd64 -> x64) and the entry binary name (Windows: teamusers.exe).
+      - name: Resolve target names
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          PLATFORM=$GOOS;  [ "$GOOS" = darwin ]   && PLATFORM=macos
+          ARCH=$GOARCH;    [ "$GOARCH" = amd64 ]  && ARCH=x64
+          BIN=teamusers;   [ "$GOOS" = windows ]  && BIN=teamusers.exe
+          { echo "PLATFORM=$PLATFORM"; echo "ARCH=$ARCH"; echo "BIN=$BIN"; } >> "$GITHUB_ENV"
+
       - name: Build
         env:
-          GOOS: linux
+          GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           CGO_ENABLED=0 go build -trimpath \
             -ldflags "-s -w -X main.version=$TAG" \
-            -o dist/teamusers ./cmd/teamusers
+            -o "dist/$BIN" ./cmd/teamusers
 
       - name: Package
-        env:
-          ARCH: ${{ matrix.arch }}
         run: |
           cd dist
-          zip "teamusers_${TAG#v}_${ARCH}.zip" teamusers
+          zip "teamusers_${TAG#v}_${PLATFORM}_${ARCH}.zip" "$BIN"
 
       # archive: false uploads the ZIP as-is; the artifact name becomes the
       # file name, which the publish job matches by pattern.

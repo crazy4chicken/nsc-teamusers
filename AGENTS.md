@@ -178,3 +178,16 @@ no Dockerfile/systemd: Nekostick owns the process lifecycle, injects
 `HOST`/`PORT`, supervises `GET /healthz`; `/readyz` gates on DB writability;
 SIGTERM drains in 10 s. Nekostick service `Environment` is plaintext in its
 PG config — treat Host Config API read access as high-sensitivity.
+
+Release assets are consumed by svchost's `release` source and MUST follow
+the [svchost publishing
+contract](https://github.com/crazy4chicken/nekostick-svchost/blob/main/docs/publishing.md):
+4-segment ZIP names `teamusers_<version>_<platform>_<arch>.zip` (e.g.
+`teamusers_1.2.3_linux_x64.zip`; the version segment strips the tag's `v`
+prefix — svchost compares SemVer identity, platform is
+`linux`/`windows`/`macos`/`freebsd`, arch is `x64`/`arm64`/`arm`/`x86`),
+with the entry binary named `teamusers`
+at the ZIP root. `.github/workflows/release.yml` enforces this; update it
+when the contract changes.
+`.github/workflows/release.yml` builds linux/windows/macos × x64/arm64
+(Windows entry is `teamusers.exe`); freebsd is not built.
